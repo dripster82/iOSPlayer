@@ -384,7 +384,7 @@ const TMDB_RESULTS=[{title:'Null Island',year:2024,ov:'A cartographer discovers 
 const S={
   device:'phone', route:'home', stack:[], tab:'home', appLight:false,
   favs:new Set(['s2','f4']), hidden:new Set(),
-  filmSort:'title', filmFilter:'all', tvFilter:'all',
+  filmSort:'title', filmFilter:'all', tvFilter:'all', filmGenre:null, filmYear:null, tvGenre:null, tvYear:null,
   sheet:null, menu:null, toast:null,
   review:[...REVIEW], fixTarget:null,
   addSrc:{step:'type',proto:'SMB',host:'',share:'',user:'',pass:'',save:true,testing:false,result:null},
@@ -439,6 +439,15 @@ function back(){closeOverlays();S.route=S.stack.pop()||S.tab||'home';render()}
 function closeOverlays(){S.sheet=null;S.menu=null}
 function toast(msg){S.toast=msg;clearTimeout(toastTimer);render();toastTimer=setTimeout(()=>{S.toast=null;render()},1800)}
 function toggleFav(id){S.favs.has(id)?S.favs.delete(id):S.favs.add(id);toast(S.favs.has(id)?'Added to Favourites':'Removed from Favourites')}
+function decade(y){return Math.floor(y/10)*10+'s'}
+function genresOf(list){return [...new Set(list.flatMap(x=>x.genres))].sort()}
+function decadesOf(list){return [...new Set(list.map(x=>decade(x.year)))].sort().reverse()}
+function filterChips(attr,cur,extra,genre,year,prefix){
+  const base=[['all','All'],['unwatched','Unwatched'],['fav','Favourites'],...extra].map(([k,l])=>`<button class="chip" data-${attr}="${k}" aria-pressed="${cur===k}">${l}</button>`).join('');
+  const g=`<button class="chip" data-sheet="${prefix}genre" aria-pressed="${!!genre}">${genre?esc(genre):'Genre'} ▾</button>`;
+  const y=`<button class="chip" data-sheet="${prefix}year" aria-pressed="${!!year}">${year?esc(year):'Year'} ▾</button>`;
+  return `<div class="chips">${base}${g}${y}</div>`;
+}
 function show(id){return SHOWS.find(s=>s.id===id)}
 function film(id){return FILMS.find(f=>f.id===id)}
 function posterHTML(title,opts={}){const cls='poster'+(opts.still?' still':'');return `<div class="${cls}" style="${art(title)}">${esc(title[0])}${opts.badge?`<span class="badge ${opts.badgeCls||''}">${esc(opts.badge)}</span>`:''}${opts.tick?`<span class="tick">${I.check}</span>`:''}${opts.fav?`<span class="fav">${I.heart}</span>`:''}${opts.progress?`<div class="prog"><i style="width:${opts.progress*100}%"></i></div>`:''}</div>`}
@@ -469,10 +478,10 @@ function screenHome(){
   +`<div class="row-h"><h3>Unwatched Films</h3><button data-go="films">${FILMS.filter(f=>!f.watched).length} films</button></div><div class="hrow">${FILMS.filter(f=>!f.watched&&!f.progress).map(f=>cardHTML(f,'film')).join('')}</div>`;
 }
 function screenTV(){
-  const f=S.tvFilter;let list=SHOWS.filter(s=>!S.hidden.has(s.id));if(f==='unwatched')list=list.filter(s=>s.unwatched);if(f==='fav')list=list.filter(s=>S.favs.has(s.id));
+  const f=S.tvFilter;let list=SHOWS.filter(s=>!S.hidden.has(s.id));if(f==='unwatched')list=list.filter(s=>s.unwatched);if(f==='fav')list=list.filter(s=>S.favs.has(s.id));if(S.tvGenre)list=list.filter(s=>s.genres.includes(S.tvGenre));if(S.tvYear)list=list.filter(s=>decade(s.year)===S.tvYear);
   return navH('TV Shows',{right:`<button class="iconbtn" data-sheet="sort">${I.list}</button>`})
-  +`<div class="chips">${[['all','All'],['unwatched','Unwatched'],['fav','Favourites'],['drama','Drama'],['scifi','Sci-Fi'],['comedy','Comedy']].map(([k,l])=>`<button class="chip" data-tvf="${k}" aria-pressed="${f===k}">${l}</button>`).join('')}</div>`
-  +`<div class="grid">${list.map(s=>cardHTML(s,'show',`${s.seasons} season${s.seasons>1?'s':''}`)).join('')}</div>`;
+  +filterChips('tvf',f,[],S.tvGenre,S.tvYear,'tv')
+  +(list.length?`<div class="grid">${list.map(s=>cardHTML(s,'show',`${s.seasons} season${s.seasons>1?'s':''}`)).join('')}</div>`:`<div class="empty">No shows match these filters.<br><br><button class="btn sm sec" data-clearf="tv">Clear filters</button></div>`);
 }
 function screenShow(id){
   const s=show(id);const sel=S.seasonSel?.[id]||s.next?.s||1;const eps=episodes(s,sel);
@@ -485,11 +494,11 @@ function screenShow(id){
   +`<div>${eps.map(e=>`<button class="ep" data-play="ep:${id}:${sel}:${e.e}" data-ctx="ep:${e.key}">${posterHTML(e.title+e.e,{still:true,tick:e.watched,progress:e.progress})}<div class="m"><b>${e.e}. ${esc(e.title)}</b><span>${e.runtime} min${e.progress?` · ${Math.round((1-e.progress)*e.runtime)} min left`:''}</span><p>${esc(e.overview)}</p></div></button>`).join('')}</div>`;
 }
 function screenFilms(){
-  let list=FILMS.filter(f=>!S.hidden.has(f.id));const ff=S.filmFilter;if(ff==='unwatched')list=list.filter(f=>!f.watched);if(ff==='fav')list=list.filter(f=>S.favs.has(f.id));if(ff==='4k')list=list.filter(f=>f.versions.some(v=>v.res==='2160p'));
+  let list=FILMS.filter(f=>!S.hidden.has(f.id));const ff=S.filmFilter;if(ff==='unwatched')list=list.filter(f=>!f.watched);if(ff==='fav')list=list.filter(f=>S.favs.has(f.id));if(ff==='4k')list=list.filter(f=>f.versions.some(v=>v.res==='2160p'));if(S.filmGenre)list=list.filter(f=>f.genres.includes(S.filmGenre));if(S.filmYear)list=list.filter(f=>decade(f.year)===S.filmYear);
   const sorters={title:(a,b)=>a.title.localeCompare(b.title),year:(a,b)=>b.year-a.year,rating:(a,b)=>b.rating-a.rating,runtime:(a,b)=>a.runtime-b.runtime};list=[...list].sort(sorters[S.filmSort]);
   return navH('Films',{right:`<button class="iconbtn" data-sheet="sort">${I.list}</button>`})
-  +`<div class="chips">${[['all','All'],['unwatched','Unwatched'],['fav','Favourites'],['4k','4K'],['genre','Genre ▾'],['year','Year ▾']].map(([k,l])=>`<button class="chip" data-ff="${k}" aria-pressed="${ff===k}">${l}</button>`).join('')}</div>`
-  +`<div class="grid">${list.map(f=>cardHTML(f,'film',`${f.year} · ${f.versions[0].res}`)).join('')}</div>`;
+  +filterChips('ff',ff,[['4k','4K']],S.filmGenre,S.filmYear,'film')
+  +(list.length?`<div class="grid">${list.map(f=>cardHTML(f,'film',`${f.year} · ${f.versions[0].res}`)).join('')}</div>`:`<div class="empty">No films match these filters.<br><br><button class="btn sm sec" data-clearf="film">Clear filters</button></div>`);
 }
 function screenFilm(id){
   const f=film(id);const vi=S.versionSel?.[id]||0;const v=f.versions[vi];
@@ -596,6 +605,8 @@ function sheetHTML(){
   const k=S.sheet;if(!k)return '';let body='';
   const [type,...rest]=k.split(':');
   const radio=(label,sub,checked,data)=>`<button class="radio" aria-checked="${checked}" data-pick="${data}"><div class="m">${esc(label)}${sub?`<span>${esc(sub)}</span>`:''}</div><span class="chk">${I.check}</span></button>`;
+  if(type==='filmgenre'||type==='tvgenre'){const tv=type==='tvgenre';const cur=tv?S.tvGenre:S.filmGenre;const src=tv?SHOWS:FILMS;body=`<h3>Genre</h3>${radio('All genres','',!cur,`genre:${tv?'tv':'film'}:`)}${genresOf(src).map(g=>radio(g,`${src.filter(x=>x.genres.includes(g)).length} ${tv?'shows':'films'}`,cur===g,`genre:${tv?'tv':'film'}:${g}`)).join('')}`}
+  if(type==='filmyear'||type==='tvyear'){const tv=type==='tvyear';const cur=tv?S.tvYear:S.filmYear;const src=tv?SHOWS:FILMS;body=`<h3>Year</h3>${radio('All years','',!cur,`year:${tv?'tv':'film'}:`)}${decadesOf(src).map(dc=>radio(dc,`${src.filter(x=>decade(x.year)===dc).length} ${tv?'shows':'films'}`,cur===dc,`year:${tv?'tv':'film'}:${dc}`)).join('')}`}
   if(type==='sort')body=`<h3>Sort films by</h3>${[['title','Title'],['year','Year, newest first'],['rating','Rating'],['runtime','Runtime']].map(([v,l])=>radio(l,'',S.filmSort===v,'sort:'+v)).join('')}`;
   if(type==='tag'){const s=SOURCES.find(x=>x.id===rest[0]);const f=s.folders[+rest[1]];body=`<h3>${esc(f.p)}</h3><p style="font-size:13px;color:var(--a-muted);margin:0 0 8px">What's in this folder? This overrides the filename guess.</p>${[['tv','TV shows'],['film','Films'],['mixed','Mixed · decide per file'],[null,'Not media · exclude']].map(([v,l])=>radio(l,'',f.tag===v,`tag:${rest[0]}:${rest[1]}:${v}`)).join('')}`}
   if(type==='markseason')body=`<h3>Season ${rest[1]}</h3>${radio('Mark all watched','','false','mark:w')}${radio('Mark all unwatched','','false','mark:u')}`;
@@ -696,7 +707,7 @@ function render(){
 
 /* ---------- events (delegated) ---------- */
 $('#screen').addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-tab],[data-back],[data-play],[data-fav],[data-menu],[data-sheet],[data-close-sheet],[data-pick],[data-ctxact],[data-tvf],[data-ff],[data-season],[data-version],[data-toast],[data-setting],[data-add],[data-review],[data-fix],[data-q],[data-ob],[data-pa],[data-pv],[data-apptheme]');
+  const t=e.target.closest('[data-go],[data-tab],[data-back],[data-play],[data-fav],[data-menu],[data-sheet],[data-close-sheet],[data-pick],[data-ctxact],[data-tvf],[data-ff],[data-clearf],[data-season],[data-version],[data-toast],[data-setting],[data-add],[data-review],[data-fix],[data-q],[data-ob],[data-pa],[data-pv],[data-apptheme]');
   if(!t)return;
   if(t.dataset.stop!==undefined&&!t.dataset.pa&&!t.dataset.sheet)return;
   const d=t.dataset;
@@ -713,7 +724,8 @@ $('#screen').addEventListener('click',e=>{
   if(d.pick){pick(d.pick);return}
   if(d.ctxact){ctx(d.ctxact);return}
   if(d.tvf){S.tvFilter=d.tvf;render();return}
-  if(d.ff){if(['genre','year'].includes(d.ff)){toast('Genre/year picker sheet');return}S.filmFilter=d.ff;render();return}
+  if(d.ff){S.filmFilter=d.ff;render();return}
+  if(d.clearf){if(d.clearf==='tv'){S.tvFilter='all';S.tvGenre=null;S.tvYear=null}else{S.filmFilter='all';S.filmGenre=null;S.filmYear=null}render();return}
   if(d.season){const [id,n]=d.season.split(':');S.seasonSel=S.seasonSel||{};S.seasonSel[id]=+n;S._keepScroll=true;render();return}
   if(d.version){const [id,i]=d.version.split(':');S.versionSel=S.versionSel||{};S.versionSel[id]=+i;S._keepScroll=true;toast('Preferred version saved');return}
   if(d.toast){toast(d.toast);return}
@@ -733,6 +745,8 @@ let pressT=null;$('#screen').addEventListener('pointerdown',e=>{const t=e.target
 function pick(v){
   const [k,...r]=v.split(':');const a=r.join(':');const p=S.player;
   if(k==='sort')S.filmSort=a;
+  else if(k==='genre'){if(r[0]==='tv')S.tvGenre=r[1]||null;else S.filmGenre=r[1]||null}
+  else if(k==='year'){if(r[0]==='tv')S.tvYear=r[1]||null;else S.filmYear=r[1]||null}
   else if(k==='tag'){const s=SOURCES.find(x=>x.id===r[0]);s.folders[+r[1]].tag=r[2]==='null'?null:r[2];toast('Folder tagged · rescanning')}
   else if(k==='mark'){toast(a==='w'?'Season marked watched':'Season marked unwatched')}
   else if(k==='lang'){if(r[0]==='audio')S.settings.audioLang=r[1];else if(r[0]==='sub')S.settings.subLang=r[1]}
@@ -816,9 +830,9 @@ const QS={
  welcome:['Is one screen enough, or do you want a short feature tour?','Name: "Reel" is a placeholder.','Should it ask for local network permission here or when the first source is added?'],
  onboard:['Discovered devices first, manual entry second. Right order?','Should folder tagging be required, or default to "Mixed" and let the parser decide?','Is "browse while it scans" acceptable, or should first run wait for the scan?'],
  home:['Row order: Continue Watching, Next Up, Favourites, Recently Added, Unwatched. Reorder?','Needs Review badge lives on the wrench icon. Prominent enough?','Should an offline source show a banner, or a quieter indicator?'],
- tv:['Badge shows unwatched episode count. Keep, or show a dot?','Grid is 3 across on phone. Prefer 2 larger posters?','Filter chips vs a filter sheet?'],
+ tv:['Genre and Year chips open a sheet. Year groups by decade; prefer individual years?','Badge shows unwatched episode count. Keep, or show a dot?','Grid is 3 across on phone. Prefer 2 larger posters?','Filter chips vs a filter sheet?'],
  show:['Hero with backdrop and small poster, or poster-free hero?','Season picker as chips vs a dropdown?','Play button says the next episode. Good, or just "Play"?','Low-confidence match shows as an amber fact. Visible enough?'],
- films:['Sort options: title, year, rating, runtime. Add "date added"?','Subtitle under the poster shows year and resolution. Useful or noisy?','4K filter: keep as a chip, or fold into a quality filter?'],
+ films:['Genre and Year filters stack with Unwatched / Favourites / 4K. Should they also combine with each other (multi-select genres)?','Sort options: title, year, rating, runtime. Add "date added"?','Subtitle under the poster shows year and resolution. Useful or noisy?','4K filter: keep as a chip, or fold into a quality filter?'],
  film:['Resume button shows the timestamp. Keep "Start over" next to it?','Versions: tap to set preferred. Should playing a non-preferred version be one tap too?','File section: enough detail, or too technical for the detail page?'],
  search:['Search is a tab. Prefer an icon in the top bar to free a tab for Favourites?','Should "search file names on sources" be automatic when the library has no match?'],
  favourites:['Separate screen, or just a filter on TV and Films?','Should episodes be favouritable, or only shows and films?'],
