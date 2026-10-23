@@ -1,0 +1,63 @@
+# XcodeGen spec. Run `xcodegen generate` in this folder to produce Reel.xcodeproj.
+# Install XcodeGen with `brew install xcodegen`. See README.md for the manual alternative.
+name: Reel
+options:
+  bundleIdPrefix: uk.co.ketelle
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "15.3"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+packages:
+  ReelKit:
+    path: Packages/ReelKit
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""   # set your Team ID here or in Xcode > Signing & Capabilities
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+targets:
+  Reel:
+    type: application
+    platform: iOS
+    supportedDestinations: [iOS, iPadOS]
+    sources:
+      - path: Reel
+    dependencies:
+      - package: ReelKit
+        products: [MediaCore, Metadata, MediaSources, Playback, Library, Sync]
+    entitlements:
+      path: Reel/Reel.entitlements
+    info:
+      path: Reel/Info.plist
+      properties:
+        CFBundleDisplayName: Reel
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIBackgroundModes: [audio]
+        NSLocalNetworkUsageDescription: Reel looks for NAS shares and media servers on your network so you can add them as sources.
+        NSBonjourServices: [_smb._tcp, _webdav._tcp, _webdavs._tcp, _afpovertcp._tcp]
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          # Many home NAS WebDAV endpoints are plain HTTP on the LAN.
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.co.ketelle.reel
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        ENABLE_PREVIEWS: true
+    scheme:
+      testTargets:
+        - package: ReelKit/MediaCoreTests
+        - package: ReelKit/MetadataTests

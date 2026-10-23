@@ -1,0 +1,281 @@
+#if canImport(SwiftData)
+import Foundation
+import SwiftData
+import MediaCore
+
+// SwiftData schema. Mirrors PLAN.md §11.6. Credentials are never stored here.
+
+@Model
+public final class SourceRecord {
+    @Attribute(.unique) public var id: UUID
+    public var name: String
+    public var typeRaw: String
+    public var host: String
+    public var port: Int?
+    public var path: String
+    public var useTLS: Bool
+    public var username: String?
+    public var statusRaw: String
+    public var lastScan: Date?
+    public var hiddenFromLibrary: Bool
+    @Relationship(deleteRule: .cascade, inverse: \FolderRule.source) public var folderRules: [FolderRule]
+    @Relationship(deleteRule: .cascade, inverse: \MediaFile.source) public var files: [MediaFile]
+
+    public init(config: SourceConfig) {
+        id = config.id
+        name = config.name
+        typeRaw = config.type.rawValue
+        host = config.host
+        port = config.port
+        path = config.path
+        useTLS = config.useTLS
+        username = config.username
+        statusRaw = SourceStatus.unknown.rawValue
+        hiddenFromLibrary = false
+        folderRules = []
+        files = []
+    }
+
+    public var type: SourceType { SourceType(rawValue: typeRaw) ?? .local }
+    public var status: SourceStatus {
+        get { SourceStatus(rawValue: statusRaw) ?? .unknown }
+        set { statusRaw = newValue.rawValue }
+    }
+    public var config: SourceConfig {
+        SourceConfig(id: id, name: name, type: type, host: host, port: port, path: path, useTLS: useTLS, username: username)
+    }
+
+    /// The most specific rule whose folder contains the path.
+    public func tag(for relativePath: String) -> FolderTag? {
+        let lower = relativePath.lowercased()
+        return folderRules
+            .filter { lower == $0.folderPath.lowercased() || lower.hasPrefix($0.folderPath.lowercased() + "/") }
+            .max { $0.folderPath.count < $1.folderPath.count }?
+            .tag
+    }
+}
+
+@Model
+public final class FolderRule {
+    public var folderPath: String
+    public var tagRaw: String
+    public var includeInScan: Bool
+    public var source: SourceRecord?
+
+    public init(folderPath: String, tag: FolderTag, includeInScan: Bool = true) {
+        self.folderPath = folderPath
+        self.tagRaw = tag.rawValue
+        self.includeInScan = includeInScan
+    }
+    public var tag: FolderTag { FolderTag(rawValue: tagRaw) ?? .mixed }
+}
+
+@Model
+public final class MediaFile {
+    @Attribute(.unique) public var id: UUID
+    public var relativePath: String
+    public var size: Int64
+    public var modified: Date?
+    public var duration: TimeInterval?
+    public var videoCodec: String?
+    public var resolution: String?
+    public var audioSummary: String?
+    public var subtitleSummary: String?
+    /// Sidecar subtitle paths relative to the source root.
+    public var sidecars: [String]
+    public var qualityTags: [String]
+    public var classificationRaw: String
+    public var guessTitle: String?
+    public var guessYear: Int?
+    public var guessSeason: Int?
+    public var guessEpisode: Int?
+    public var reviewed: Bool
+    public var ignored: Bool
+    public var addedAt: Date
+    public var lastSeenAt: Date
+    public var source: SourceRecord?
+    public var item: MediaItem?
+
+    public init(relativePath: String, size: Int64, modified: Date?, source: SourceRecord) {
+        id = UUID()
+        self.relativePath = relativePath
+        self.size = size
+        self.modified = modified
+        self.source = source
+        sidecars = []
+        qualityTags = []
+        classificationRaw = "pending"
+        reviewed = false
+        ignored = false
+        addedAt = Date()
+        lastSeenAt = Date()
+    }
+
+    public var fileName: String { (relativePath as NSString).lastPathComponent }
+    public var needsReview: Bool { classificationRaw == "review" && !reviewed && !ignored }
+}
+
+@Model
+public final class MediaItem {
+    /// Stable sync identity (PLAN.md §10.4). Unique per library.
+    @Attribute(.unique) public var itemKey: String
+    public var kindRaw: String
+    public var tmdbID: Int?
+    public var title: String
+    public var sortTitle: String
+    public var year: Int?
+    public var overview: String?
+    public var posterPath: String?
+    public var backdropPath: String?
+    public var stillPath: String?
+    public var rating: Double?
+    public var runtimeMinutes: Int?
+    public var genres: [String]
+    public var cast: [String]
+    public var confidenceRaw: String
+    public var addedAt: Date
+    public var hidden: Bool
+
+    // Episode fields
+    public var seasonNumber: Int?
+    public var episodeNumber: Int?
+    public var airDate: Date?
+    public var show: MediaItem?
+    @Relationship(deleteRule: .cascade, inverse: \MediaItem.show) public var episodes: [MediaItem]
+    public var seasonCount: Int?
+
+    @Relationship(deleteRule: .nullify, inverse: \MediaFile.item) public var files: [MediaFile]
+
+    public init(itemKey: String, kind: MediaKind, title: String, year: Int? = nil, tmdbID: Int? = nil, confidence: MatchConfidence) {
+        self.itemKey = itemKey
+        kindRaw = kind.rawValue
+        self.title = title
+        sortTitle = MediaItem.makeSortTitle(title)
+        self.year = year
+        self.tmdbID = tmdbID
+        confidenceRaw = confidence.rawValue
+        genres = []
+        cast = []
+        addedAt = Date()
+        hidden = false
+        episodes = []
+        files = []
+    }
+
+    public var kind: MediaKind { MediaKind(rawValue: kindRaw) ?? .film }
+    public var confidence: MatchConfidence {
+        get { MatchConfidence(rawValue: confidenceRaw) ?? .unmatched }
+        set { confidenceRaw = newValue.rawValue }
+    }
+    public var episodeCode: String? {
+        guard let s = seasonNumber, let e = episodeNumber else { return nil }
+        return MediaFormat.episodeCode(season: s, episode: e)
+    }
+
+    static func makeSortTitle(_ title: String) -> String {
+        let lower = title.lowercased()
+        for article in ["the ", "a ", "an "] where lower.hasPrefix(article) { return String(lower.dropFirst(article.count)) }
+        return lower
+    }
+}
+
+/// Synced. One row per itemKey.
+@Model
+public final class WatchState {
+    @Attribute(.unique) public var itemKey: String
+    public var watched: Bool
+    public var position: TimeInterval
+    public var duration: TimeInterval
+    public var updatedAt: Date
+    public var deviceID: String
+    public var lastPlayedAt: Date?
+    /// Set when a local change is waiting to be pushed to CloudKit.
+    public var pendingSync: Bool
+
+    public init(itemKey: String, deviceID: String) {
+        self.itemKey = itemKey
+        watched = false
+        position = 0
+        duration = 0
+        updatedAt = Date()
+        self.deviceID = deviceID
+        pendingSync = true
+    }
+
+    /// Fraction 0...1, nil when nothing meaningful has been watched.
+    public var progress: Double? {
+        guard duration > 0, position > 30 else { return nil }
+        return min(1, position / duration)
+    }
+    public var isInProgress: Bool { !watched && (progress ?? 0) > 0.02 && (progress ?? 0) < 0.95 }
+}
+
+/// Synced, with a tombstone so removals propagate.
+@Model
+public final class Favourite {
+    @Attribute(.unique) public var itemKey: String
+    public var createdAt: Date
+    public var deletedAt: Date?
+    public var updatedAt: Date
+    public var pendingSync: Bool
+
+    public init(itemKey: String) {
+        self.itemKey = itemKey
+        createdAt = Date()
+        updatedAt = Date()
+        pendingSync = true
+    }
+    public var isActive: Bool { deletedAt == nil }
+}
+
+/// Synced. Manual match choices and hides. The file on disk is never touched.
+@Model
+public final class ItemOverride {
+    /// Keyed by the file's unmatched key so the override follows the file across re-scans.
+    @Attribute(.unique) public var fileKey: String
+    public var forcedTMDbID: Int?
+    public var forcedKindRaw: String?
+    public var hidden: Bool
+    public var updatedAt: Date
+    public var pendingSync: Bool
+
+    public init(fileKey: String) {
+        self.fileKey = fileKey
+        hidden = false
+        updatedAt = Date()
+        pendingSync = true
+    }
+    public var forcedKind: MediaKind? { forcedKindRaw.flatMap(MediaKind.init(rawValue:)) }
+}
+
+/// Synced.
+@Model
+public final class MediaCollection {
+    @Attribute(.unique) public var id: UUID
+    public var name: String
+    public var itemKeys: [String]
+    public var updatedAt: Date
+    public var pendingSync: Bool
+
+    public init(name: String) {
+        id = UUID()
+        self.name = name
+        itemKeys = []
+        updatedAt = Date()
+        pendingSync = true
+    }
+}
+
+public enum LibrarySchema {
+    public static let models: [any PersistentModel.Type] = [
+        SourceRecord.self, FolderRule.self, MediaFile.self, MediaItem.self,
+        WatchState.self, Favourite.self, ItemOverride.self, MediaCollection.self,
+    ]
+
+    public static func container(inMemory: Bool = false) throws -> ModelContainer {
+        let schema = Schema(models)
+        let config = ModelConfiguration("Reel", schema: schema, isStoredInMemoryOnly: inMemory)
+        return try ModelContainer(for: schema, configurations: [config])
+    }
+}
+#endif

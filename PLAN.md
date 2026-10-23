@@ -654,3 +654,43 @@ Everything other than VLCKit is permissive. All notices go in Settings > About >
 | SMB seek speed on Wi-Fi | Slow scrubbing | Larger network cache; thumbnail pre-generation |
 | TMDb rate limits during a 5000-file first scan | Slow matching | Throttle, cache, match visible items first |
 | Battery on software decode | Hot device | Prefer hardware; warn when software decode is active |
+
+---
+
+## 12. Code layout and first-build checklist
+
+The code lives in two places:
+
+```
+Reel/                      SwiftUI app target (generated .xcodeproj via project.yml)
+  App/                     ReelApp, AppSettings, PlayerCoordinator, RootView
+  Views/Library            Home, TV, Films, detail pages, Search, Needs Review, Fix Match
+  Views/Sources            Sources, Source detail, Add Source, file browser, folder tags
+  Views/Player             PlayerView (gestures, scrubber, sheets, Up Next, error card), VLCVideoView
+  Views/Settings           Settings, history, hidden items, licences, attribution
+  Views/Components         ArtworkImage, PosterCard, FilterBar, ItemGrid/ItemRow
+Packages/ReelKit/          One Swift package, six modules
+  MediaCore                Models, FilenameParser, Classifier, ItemKey, formatting    (pure Swift, tested)
+  Metadata                 TMDbClient, cache, rate limiter, MatchScorer                (Foundation, tested)
+  MediaSources             MediaSource protocol, Local, WebDAV, SMB, discovery, Keychain
+  Playback                 PlaybackEngine protocol, VLCPlaybackEngine, NowPlayingBridge
+  Library                  SwiftData schema, LibraryScanner, Matcher, LibraryStore, ImageLoader
+  Sync                     SyncEngine (CKSyncEngine)
+```
+
+Written without Xcode access, so the first build will surface a few compile errors. Where to look first, in order of likelihood:
+
+1. **VLCKit package URL and product name** (`Package.swift`, `Playback` target). VideoLAN has renamed these. Fix the URL/product and the `import VLCKit` / `import MobileVLCKit` fallback in `VLCPlaybackEngine.swift` picks up whichever exists.
+2. **VLCKit 3.x API spelling** in `VLCPlaybackEngine.swift`: `audioTrackIndexes`/`audioTrackNames`, `videoSubTitlesIndexes`/`videoSubTitlesNames`, `chapterDescriptions(ofTitle:)`, `VLCChapterDescriptionName`. If a name differs, Xcode's fix-it will point at the right one.
+3. **AMSMB2 async API** in `SMBSource.swift`: `connectShare(name:)`, `contentsOfDirectory(atPath:)`, `attributesOfItem(atPath:)`. All exist in 3.x; check the returned attribute keys if listings come back empty.
+4. **SwiftData `#Predicate` expressions** in `LibraryStore.swift` and `SyncEngine.swift`. The macro rejects some expressions (e.g. captured optionals). Simplify the predicate and filter in Swift if one is refused.
+5. **`CKSyncEngine` delegate signatures** in `SyncEngine.swift`. Both delegate methods are `nonisolated` and hop to the main actor; if Xcode complains about isolation, mark the class `nonisolated` for those two methods only.
+6. **Strict-concurrency warnings.** `SWIFT_STRICT_CONCURRENCY` is set to `minimal` in `project.yml` on purpose for the first build. Tighten it later.
+
+Once it builds, the device smoke test is:
+
+1. Add a TMDb key in Settings. Add a local folder with two or three MKVs. Confirm the scan banner, then posters on Home.
+2. Add the NAS over SMB. Test Connection must fail cleanly with a wrong password (red banner) and succeed with the right one.
+3. Play an MKV with multiple audio tracks and a PGS subtitle. Switch both mid-playback. Scrub. Lock. Close, reopen, confirm resume.
+4. Mark an episode watched on iPhone, open iPad, confirm the tick arrives (iCloud sync on, same Apple ID).
+5. Put a badly named file in a folder and confirm it lands in Needs Review; fix it via Fix Match.

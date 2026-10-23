@@ -1,0 +1,143 @@
+import SwiftUI
+import MediaCore
+import Library
+import Metadata
+
+struct NeedsReviewView: View {
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var settings: AppSettings
+    @State private var fixing: MediaFile?
+    @State private var busy: UUID?
+
+    var body: some View {
+        let files = library.filesNeedingReview()
+        List {
+            if files.isEmpty {
+                ContentUnavailableView("All clear", systemImage: "checkmark.seal", description: Text("Files the app can't match confidently will appear here. Nothing is changed on your drive."))
+            } else {
+                Section {
+                    ForEach(files, id: \.id) { f in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(f.relativePath).font(.footnote.weight(.semibold))
+                            Text("Best guess: \(guess(f))").font(.caption).foregroundStyle(f.guessTitle == nil ? .red : .yellow)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    Button("Accept") { resolve(f, kind: f.guessSeason != nil ? .episode : .film) }.buttonStyle(.borderedProminent)
+                                    Button("Fix match") { fixing = f }.buttonStyle(.bordered)
+                                    Button("Treat as TV") { resolve(f, kind: .episode) }.buttonStyle(.bordered)
+                                    Button("Treat as Film") { resolve(f, kind: .film) }.buttonStyle(.bordered)
+                                    Button("Ignore", role: .destructive) { try? library.ignoreFile(f) }.buttonStyle(.bordered)
+                                }.controlSize(.small)
+                            }
+                        }
+                        .opacity(busy == f.id ? 0.5 : 1)
+                    }
+                } footer: {
+                    Text("\(files.count) file\(files.count == 1 ? "" : "s"). Choices are saved in the app and synced; files are never renamed.")
+                }
+            }
+        }
+        .navigationTitle("Needs Review")
+        .sheet(item: $fixing) { FixMatchView(file: $0) }
+    }
+
+    private func guess(_ f: MediaFile) -> String {
+        guard let t = f.guessTitle, !t.isEmpty else { return "No match" }
+        if let s = f.guessSeason, let e = f.guessEpisode { return "TV · \(t) \(MediaFormat.episodeCode(season: s, episode: e))" }
+        return "Film · \(t)" + (f.guessYear.map { " (\($0))" } ?? "")
+    }
+
+    private func resolve(_ f: MediaFile, kind: MediaKind) {
+        guard let tmdb = settings.tmdb else { library.lastError = "Add a TMDb API key in Settings first."; return }
+        busy = f.id
+        Task { try? await library.resolveReview(f, as: kind, tmdbID: nil, tmdb: tmdb); busy = nil }
+    }
+}
+
+/// Search TMDb and pin an item (or an unmatched file) to a chosen result.
+struct FixMatchView: View {
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+    var item: MediaItem? = nil
+    var file: MediaFile? = nil
+
+    @State private var query = ""
+    @State private var year = ""
+    @State private var kind: MediaKind = .film
+    @State private var films: [TMDbMovieSummary] = []
+    @State private var shows: [TMDbShowSummary] = []
+    @State private var searching = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        TextField("Title", text: $query).textInputAutocapitalization(.words).onSubmit(search)
+                        TextField("Year", text: $year).keyboardType(.numberPad).frame(width: 64)
+                    }
+                    Picker("Type", selection: $kind) { Text("Film").tag(MediaKind.film); Text("TV Show").tag(MediaKind.show) }.pickerStyle(.segmented)
+                    Button(searching ? "Searching…" : "Search TMDb", action: search).disabled(searching || query.isEmpty)
+                }
+                if let error { Section { Text(error).foregroundStyle(.red) } }
+                Section {
+                    if kind == .film {
+                        ForEach(films) { m in ResultRow(title: m.title, year: m.year, overview: m.overview, poster: m.posterPath) { choose(m.id) } }
+                    } else {
+                        ForEach(shows) { s in ResultRow(title: s.name, year: s.year, overview: s.overview, poster: s.posterPath) { choose(s.id) } }
+                    }
+                } footer: { Text("Results from TMDb. Your choice is saved in the app and synced to your other devices. The file is not renamed.") }
+            }
+            .navigationTitle("Fix Match")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .onAppear {
+                query = item?.title ?? file?.guessTitle ?? ""
+                year = (item?.year ?? file?.guessYear).map(String.init) ?? ""
+                kind = (item?.kind == .show || file?.guessSeason != nil) ? .show : .film
+                if !query.isEmpty { search() }
+            }
+        }
+    }
+
+    private func search() {
+        guard let tmdb = settings.tmdb else { error = "Add a TMDb API key in Settings first."; return }
+        searching = true; error = nil
+        let y = Int(year)
+        Task {
+            do {
+                if kind == .film { films = try await tmdb.searchMovies(query: query, year: y) }
+                else { shows = try await tmdb.searchShows(query: query, year: y) }
+            } catch { self.error = error.localizedDescription }
+            searching = false
+        }
+    }
+
+    private func choose(_ id: Int) {
+        guard let tmdb = settings.tmdb else { return }
+        Task {
+            do {
+                if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb) }
+                else if let file { try await library.resolveReview(file, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+
+    struct ResultRow: View {
+        let title: String; let year: Int?; let overview: String?; let poster: String?; let action: () -> Void
+        var body: some View {
+            Button(action: action) {
+                HStack(alignment: .top, spacing: 12) {
+                    ArtworkImage(url: ArtworkURL.poster(poster), title: title, cornerRadius: 6).frame(width: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title + (year.map { " (\($0))" } ?? "")).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        if let overview { Text(overview).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                    }
+                }
+            }
+        }
+    }
+}
