@@ -302,17 +302,16 @@ Sources > + > Choose type
 
 **Decided**
 
-1. **Playback engine: VLCKit.** Broadest format and codec support, mature, and it covers MKV. AVPlayer stays an optional MP4-only path, dropped if it adds complexity.
-2. **Distribution: sideload now, TestFlight later.** No App Store review while building. TestFlight comes once the developer account is in place.
-3. **Pricing: free to start.** See section 10.2 for what "free" means for the data-provider terms.
+1. **Playback engine: VLCKit, LGPL build.** Broadest format and codec support, mature, and it covers MKV. The LGPL build is the one distributed via CocoaPods/SPM as `MobileVLCKit` or `VLCKit`; it excludes GPL-only modules (notably some commercial-codec and DVD/Blu-ray menu libraries, which this app does not need). AVPlayer stays an optional MP4-only path, dropped if it adds complexity.
+2. **Distribution: sideload now, TestFlight later.** Paid developer account is in place, so sideloads do not expire weekly and all capabilities (iCloud, background modes, Keychain groups) are available from day one.
+3. **Pricing: free, no in-app purchases, no adverts.** This keeps the app non-commercial under TMDb, TheTVDB, Fanart.tv and OpenSubtitles terms. Attribution is still required for each.
+4. **Licensing route: LGPL.** Dynamic linking of VLCKit as an XCFramework, licence notices in About, and the ability to relink is preserved by shipping the framework as a separate binary inside the app bundle. See section 10.1 for the obligations this takes on.
+5. **Minimum iOS version: iOS 17.** Enables CKSyncEngine, SwiftData, modern SwiftUI navigation, and simplifies PiP and HDR handling.
 
 **Open**
 
-4. **Developer account (decide before phase 4).** Free Apple ID sideloading works, but the app expires every 7 days and cannot use iCloud. The paid programme ($99/yr) removes both limits and is needed for TestFlight. iCloud sync cannot be built and tested on a free-account sideload.
-5. **Licensing.** Plain-language explanation in section 10.1. Matters before App Store, not before sideloading.
-6. **Metadata providers.** TMDb is the default. Free alternatives in section 10.3. Confirm whether TheTVDB and OpenSubtitles are wanted.
-7. **Minimum iOS version.** Recommend iOS 17 or later, which also enables CKSyncEngine for iCloud sync. Confirm.
-8. **Network libraries.** Use an SMB client library (e.g. AMSMB2) and a WebDAV client, rather than writing protocol code from scratch.
+6. **Metadata providers.** TMDb is the backbone. TheTVDB for episode ordering and OpenSubtitles for subtitle search are recommended; confirm both are wanted.
+7. **Network libraries.** Use an SMB client library (AMSMB2) and a WebDAV client, rather than writing protocol code from scratch. See section 11 for the full dependency list.
 
 ---
 
@@ -389,9 +388,14 @@ This is not legal advice. Have a lawyer check the final setup before App Store r
 
 ### 10.2 What "free" means here
 
-- **Free sideloaded app for personal use:** fits every free tier listed below.
-- **Free App Store app with ads, in-app purchases, or donations:** treat it as commercial for API terms. Get written confirmation from each provider first.
-- **Paid app:** same as above. Commercial terms apply.
+Decision: **free with no in-app purchases and no adverts.** That places the app in the non-commercial tier of every provider below, both for sideload and later for TestFlight or the App Store. If this ever changes (ads, IAP, donations, a paid tier), each provider's terms must be re-read and commercial licences obtained where needed.
+
+**LGPL obligations this app takes on**
+
+- Ship VLCKit as a dynamically linked framework, not statically linked into the main binary.
+- Include the VLCKit and FFmpeg licence texts and a list of the LGPL components in Settings > About > Licences.
+- Do not modify VLCKit. If a change is ever needed, publish that modified library source.
+- Keep the app's own source closed if desired; LGPL does not require opening it.
 
 ### 10.3 Free data sources
 
@@ -413,7 +417,7 @@ Use TMDb as the backbone. Add the others only where they fill a real gap, and sh
 
 **Storage:** CloudKit private database, synced with CKSyncEngine (iOS 17+). The data sits in the user's own iCloud, counts against their iCloud storage, and needs no server from you.
 
-**Requirement:** the iCloud capability needs the paid developer account. It cannot be tested on a free-account sideload.
+**Requirement:** the iCloud capability needs the paid developer account, which is in place.
 
 **What syncs**
 - Watched flag and last-played date, per item.
@@ -441,3 +445,212 @@ Use TMDb as the backbone. Add the others only where they fill a real gap, and sh
 **Offline:** writes go to a local store first and sync when iCloud is reachable.
 
 **Sign-in:** none. Sync is on when the device is signed into iCloud and the user has enabled it in Settings.
+
+---
+
+## 11. Solution design
+
+This section turns each feature area into a concrete approach: libraries, data model, and the handful of algorithms that matter.
+
+### 11.1 Architecture overview
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ SwiftUI app (iPhone + iPad)                                 │
+│  Home · TV · Films · Sources · Search · Player · Settings    │
+├────────────────────────────────────────────────────────────┤
+│ Feature layer (observable view models)                      │
+│  LibraryStore · PlaybackController · SourceManager · Sync    │
+├──────────────┬──────────────┬──────────────┬───────────────┤
+│ Playback     │ Sources      │ Metadata     │ Persistence   │
+│ VLCKit       │ AMSMB2 (SMB) │ TMDb client  │ SwiftData     │
+│ AVPlayer*    │ WebDAV       │ TheTVDB      │ CloudKit      │
+│ NowPlaying   │ FTP/SFTP     │ Fanart.tv    │ Keychain      │
+│ PiP/AirPlay  │ DLNA/UPnP    │ OpenSubs     │ Image cache   │
+│              │ Files/USB    │ Wikidata     │               │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+   * optional MP4-only path
+```
+
+- **Language and UI:** Swift 5.10+, SwiftUI with UIKit hosting only for the VLC render view.
+- **Concurrency:** Swift structured concurrency. One actor per source for connection state; one actor for the scan queue.
+- **Persistence:** SwiftData for the library (items, files, sources, watch state). CloudKit via CKSyncEngine for the sync subset.
+- **Modules:** Swift packages per layer (`Playback`, `Sources`, `Metadata`, `Library`, `Sync`, `UI`) so each can be tested without the app target.
+
+### 11.2 Playback with VLCKit
+
+**Integration**
+- Add `VLCKit` (iOS, LGPL) via Swift Package Manager as an XCFramework.
+- Wrap `VLCMediaPlayer` in a `PlaybackController` actor exposing a Swift-friendly stream of state: `.idle`, `.buffering(progress)`, `.playing(time)`, `.paused(time)`, `.ended`, `.failed(error)`.
+- Render into a `UIView` hosted in SwiftUI with `UIViewRepresentable`. The view handles `drawable` assignment and aspect-ratio mode (fit, fill, zoom).
+
+**Decoding**
+- Enable VideoToolbox hardware decoding via VLC options (`--codec=avcodec` with `--avcodec-hw=videotoolbox`). Fall back to software when hardware fails for a stream.
+- HDR: VLCKit passes HDR10 and HLG through to the display on iOS 17. Dolby Vision profiles 5 and 8 fall back to the HDR10 base layer. Document this limitation in Settings.
+
+**Tracks**
+- Audio and subtitle tracks are enumerated from `VLCMediaPlayer.audioTrackIndexes` and `videoSubTitlesIndexes`, with names and languages from the track descriptions. Switching is live.
+- External subtitles: `addPlaybackSlave(_:type:enforce:)` for SRT, ASS, VTT, SUB/IDX. ASS styling is rendered by libass inside VLC.
+- Subtitle delay and audio delay map directly to `currentVideoSubTitleDelay` and `currentAudioPlaybackDelay` (microseconds).
+
+**Seeking and thumbnails**
+- Seek via `time` or `position`. Scrub preview thumbnails come from a second, muted `VLCMediaThumbnailer` run in the background at 10-second intervals, cached per file.
+
+**Streaming from network sources**
+- SMB: VLCKit has a built-in SMB module, but credential handling and discovery are better in the app. Approach: mount via AMSMB2 for browsing and metadata, and hand VLC an `smb://user:pass@host/share/path` URL for playback so VLC does its own buffered reads. Credentials are URL-encoded from the Keychain at play time only.
+- WebDAV/HTTP: pass the authenticated `https://` URL; VLC handles range requests.
+- FTP/SFTP: VLC supports `ftp://` and `sftp://` natively.
+- Local: a `file://` URL from a security-scoped bookmark.
+
+**Buffering**
+- Set `network-caching` to 1500 ms by default, adjustable in Settings (500 to 5000 ms). Show a buffering spinner only after 400 ms to avoid flicker.
+
+**System integration**
+- `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` for lock screen and Control Centre.
+- Background audio via the `audio` background mode; video pauses, audio continues if the user enables "Play audio in background".
+- PiP: VLCKit does not render through `AVPlayerLayer`, so native PiP needs an `AVSampleBufferDisplayLayer` bridge. This is the riskiest item in the engine. Plan: ship without PiP in phase 1, add it in phase 4 via the sample-buffer bridge, and treat it as cut-able.
+- AirPlay: video AirPlay of VLC-decoded content is screen mirroring, not native streaming. Audio-only AirPlay works via the system route picker. Document this honestly in Settings.
+
+### 11.3 Source access
+
+| Source | Library | Approach |
+|---|---|---|
+| SMB | AMSMB2 (MIT) | Browse, stat, and read. Also used for the scan. Play via VLC's SMB URL. |
+| WebDAV | Custom thin client over `URLSession` (PROPFIND, GET with Range) | Small enough to own. |
+| FTP/SFTP | VLC for playback; `NMSSH` or `Citadel` for SFTP listing; plain `URLSession` for FTP listing | Low priority. |
+| DLNA/UPnP | SSDP discovery over UDP multicast; ContentDirectory browse over SOAP | Read-only. Playback via the HTTP URL the server gives. |
+| Local / USB | `UIDocumentPickerViewController` with `.open` mode, security-scoped bookmarks persisted | No copying; files stay in place. |
+| iCloud Drive | Same document picker; files download on demand | Show a download indicator. |
+
+**Discovery**
+- Bonjour: browse `_smb._tcp.` and `_afpovertcp._tcp.` for NAS hosts.
+- SSDP: `M-SEARCH` for `urn:schemas-upnp-org:device:MediaServer:1`.
+- Results merge into one list with host name, IP, and protocol badges.
+
+**Credentials**
+- Stored in the Keychain with `kSecAttrAccessibleAfterFirstUnlock`, keyed by source ID. Never written to SwiftData or CloudKit.
+- Each source has a `SourceConnection` actor that holds one open session, retries with exponential backoff (1 s, 2 s, 4 s, max 3), and reports `online`, `offline`, or `authFailed`.
+
+**Scanning**
+- A `ScanQueue` actor processes one source at a time, breadth-first, with a max of 4 concurrent `stat` calls per source.
+- Incremental: a file is "changed" if path, size, or modified date differs from the stored `MediaFile`.
+- Only video extensions are considered: mkv, mp4, m4v, mov, avi, ts, m2ts, mts, wmv, flv, webm, mpg, mpeg, vob, 3gp, ogv.
+- Sidecar subtitles (same base name, `.srt`, `.ass`, `.sub`, `.idx`, `.vtt`) are attached to the file record.
+- Background: `BGAppRefreshTask` requested daily; iOS decides when to run it. Full scans happen on manual refresh or app open.
+
+### 11.4 Classification and matching
+
+**Step 1: parse the path**
+
+A deterministic parser runs on the full relative path, not just the filename. It extracts title, year, season, episode, quality tags, and release-group noise.
+
+Rules, in order:
+1. Episode patterns on the filename: `S(\d{1,2})E(\d{1,3})`, `(\d{1,2})x(\d{1,3})`, `Season (\d+).*Episode (\d+)`, `E(\d{2,3})` when the parent folder matches `Season \d+`.
+2. Year on the filename or parent folder: `\((19|20)\d{2}\)` or `\.(19|20)\d{2}\.`.
+3. Strip quality and source tags: `1080p`, `2160p`, `4K`, `BluRay`, `WEB-DL`, `x264`, `x265`, `HEVC`, `HDR`, `DV`, `Atmos`, `DTS`, `REMUX`, and anything after a `-GROUP` suffix.
+4. Normalise separators (`.`, `_`) to spaces and trim.
+
+**Step 2: weigh folder hints**
+
+| Path contains | Effect |
+|---|---|
+| `tv`, `series`, `shows` | +2 toward TV |
+| `movies`, `films`, `cinema` | +2 toward Film |
+| `Season NN` parent | +3 toward TV |
+| User-tagged folder (Films / TV) | overrides everything |
+
+**Step 3: decide**
+
+- Episode pattern found → TV.
+- Year found, no episode pattern → Film.
+- Neither → Needs Review, with a best guess shown.
+
+**Step 4: match online**
+
+- TV: `GET /search/tv?query=<title>&first_air_date_year=<year?>`, pick the top result if its popularity is well ahead of the second; otherwise Needs Review with the top 3 shown.
+- Film: `GET /search/movie?query=<title>&year=<year>`, same rule.
+- Episode details: `GET /tv/{id}/season/{s}/episode/{e}`.
+- Confidence is stored per match (`auto-high`, `auto-low`, `manual`). Low-confidence matches get a small badge so the user can spot them.
+
+**Step 5: cache**
+
+- Every TMDb response is cached on disk for 7 days (metadata) or indefinitely (artwork, until the cache limit evicts it). Requests are throttled to stay under TMDb's rate limit (currently ~40 requests per 10 seconds).
+
+### 11.5 Artwork pipeline
+
+- Poster sizes: `w342` for grids, `w780` for detail. Backdrops: `w1280`. Episode stills: `w300`.
+- Download through a dedicated `ImageLoader` actor with an in-memory `NSCache` and a disk cache under `Caches/artwork/`.
+- Disk cache limit default 2 GB, adjustable; LRU eviction.
+- Placeholder: a generated gradient from the title's hash with the first letter, so grids never show empty boxes.
+- Fanart.tv (optional) adds clear logos used on the detail hero and in the Up Next card.
+
+### 11.6 Data model
+
+```
+Source            id, name, type, host, path, folderRules[], lastScan, status
+MediaFile         id, sourceId, relativePath, size, modified, duration?, videoCodec?, audioTracks[], subtitleTracks[], sidecars[]
+MediaItem         id, kind (film|show|episode), tmdbId?, title, year, overview, posterPath, backdropPath, matchConfidence
+Show              item + seasons[]
+Episode           item + showId, season, episode, airDate, stillPath
+Film              item + runtime, collectionId?
+WatchState        itemKey, watched, position, duration, updatedAt, deviceId     ← synced
+Favourite         itemKey, createdAt, deletedAt?                               ← synced
+Override          itemKey, forcedTmdbId?, hidden, kindOverride?, updatedAt     ← synced
+Collection        id, name, itemKeys[], updatedAt                              ← synced
+Playlist          id, name, itemKeys[], updatedAt
+```
+
+`itemKey` is the stable sync identity from section 10.4. A `MediaFile` points to one `MediaItem`; an item can have several files (versions).
+
+### 11.7 iCloud sync implementation
+
+- `CKSyncEngine` with one private zone `Library`.
+- Record types mirror the synced tables above. Each record carries `updatedAt` and `deviceId`.
+- Local changes are queued in SwiftData, then pushed. Remote changes are applied by `updatedAt` comparison (latest wins), with the watched-flag special case from section 10.4.
+- Deletes use tombstones (`deletedAt`) rather than hard deletes, so a favourite removed on one device clears everywhere.
+- Account changes (`CKAccountChanged`) reset the sync state and re-fetch.
+- Sync toggle in Settings. Off means local only; turning it on later performs a merge.
+
+### 11.8 Error handling
+
+Every failure maps to one of a small set of user-facing cards, each with a recovery action:
+
+| Failure | Card | Actions |
+|---|---|---|
+| Source unreachable | "Can't reach <source>" | Retry, Open Sources, Pick another version |
+| Auth failed | "Password rejected for <source>" | Edit credentials |
+| File missing | "File not found. It may have been moved." | Rescan, Remove from library |
+| Unsupported stream | "This file's <codec> track can't be decoded on this device." | Try software decoding, Skip |
+| Metadata offline | Silent; cached data shown | Banner: "Metadata unavailable, showing cached info" |
+
+### 11.9 Testing strategy
+
+- **Playback corpus:** 50 files covering MKV/HEVC/DTS-HD, MKV/H.264/AC3, AVI/XviD/MP3, TS/MPEG-2, WebM/VP9/Opus, MP4/AV1, PGS and ASS subtitles, multi-audio, 4K HDR10, Dolby Vision profile 8. Run on an iPhone 12 (lowest target) and an iPad Pro.
+- **Parser tests:** a table of 200 real-world filenames with expected title, year, season, episode, and kind. Pure unit tests, run on every commit.
+- **Source tests:** a Docker Samba server and a WebDAV server in CI for connect, list, stat, read, and seek.
+- **Sync tests:** two simulators against the CloudKit development environment; assert convergence for watched, resume, and favourite.
+- **UI tests:** snapshot tests for each screen on iPhone 15 and iPad Pro 12.9, light and dark.
+
+### 11.10 Dependencies
+
+| Package | Purpose | Licence |
+|---|---|---|
+| VLCKit | Playback | LGPL 2.1 |
+| AMSMB2 | SMB browsing | MIT |
+| Nuke or own ImageLoader | Image caching | MIT |
+| swift-log | Logging | Apache 2.0 |
+| KeychainAccess | Keychain wrapper | MIT |
+| swift-snapshot-testing | UI tests | MIT |
+
+Everything other than VLCKit is permissive. All notices go in Settings > About > Licences.
+
+### 11.11 Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| PiP with VLCKit | No native PiP | Sample-buffer bridge in phase 4; cut if it fails |
+| Video AirPlay is mirroring only | Lower quality on Apple TV | Document; consider AVPlayer path for MP4 later |
+| Dolby Vision profile 5 | Washed-out colour | Detect and warn; fall back to HDR10 |
+| SMB seek speed on Wi-Fi | Slow scrubbing | Larger network cache; thumbnail pre-generation |
+| TMDb rate limits during a 5000-file first scan | Slow matching | Throttle, cache, match visible items first |
+| Battery on software decode | Hot device | Prefer hardware; warn when software decode is active |
