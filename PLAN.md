@@ -124,11 +124,12 @@ Source management:
 - Watch history screen with a clear-history option.
 - Next-episode auto-play with countdown and a "Stop after this" option.
 - Watch state syncs across the user's own devices (see 3.6). Conflicts resolved by most recent write.
+- **Favourites:** mark any show, film, or episode as a favourite. A Favourites row on Home and a Favourites filter in TV and Films. Syncs via iCloud like watch state.
 
 ### 3.6 Accounts, sync, and privacy
 
 - No account required for local use.
-- Optional sign-in (Sign in with Apple) to sync library overrides, watch state, playlists, and source list across iPhone and iPad via iCloud (CloudKit).
+- iCloud sync (CloudKit) of watch state, resume positions, favourites, and library overrides across the user's iPhone and iPad. No separate sign-in: it uses the device's Apple ID. If iCloud is unavailable, the app works locally and syncs later. Design in section 10.4.
 - Credentials for sources never leave the device. They are not synced unless the user opts in and the keys go through iCloud Keychain.
 - No analytics by default. Opt-in crash reporting only.
 - Clear privacy policy stating which metadata lookups are sent to TMDb and OpenSubtitles (titles and file hashes or names, not files).
@@ -297,17 +298,21 @@ Sources > + > Choose type
 
 ---
 
-## 6. Technical decisions to confirm
+## 6. Technical decisions
 
-These choices change cost, licensing, and what is possible. Each one needs a decision before build starts.
+**Decided**
 
-1. **Playback engine.** MPVKit (LGPL/GPL options, modern) vs VLCKit (mature, LGPL) vs a custom FFmpeg build. Recommendation: start with MPVKit or VLCKit for breadth and speed, and evaluate AVPlayer for MP4 only later.
-2. **Licensing.** FFmpeg and most engines are LGPL or GPL. Shipping on the App Store requires LGPL-compliant dynamic linking or a GPL-compatible distribution. This needs a legal read before commitment.
-3. **Distribution.** App Store (sandboxing limits some protocols and background scanning) vs TestFlight or sideload for personal use. Confirm the target.
-4. **Metadata providers.** TMDb is free for non-commercial use with attribution. Commercial use needs review of its terms. Confirm whether the app will be paid or free.
-5. **Minimum iOS version.** Recommend iOS 17 or later to simplify SwiftUI, PiP, and Dolby Vision handling. Confirm.
-6. **Monetisation.** Free, one-off purchase, or subscription. This affects features like sync and metadata quotas.
-7. **Network libraries.** Use an SMB client library (e.g. AMSMB2) and a WebDAV client, rather than writing protocol code from scratch.
+1. **Playback engine: VLCKit.** Broadest format and codec support, mature, and it covers MKV. AVPlayer stays an optional MP4-only path, dropped if it adds complexity.
+2. **Distribution: sideload now, TestFlight later.** No App Store review while building. TestFlight comes once the developer account is in place.
+3. **Pricing: free to start.** See section 10.2 for what "free" means for the data-provider terms.
+
+**Open**
+
+4. **Developer account (decide before phase 4).** Free Apple ID sideloading works, but the app expires every 7 days and cannot use iCloud. The paid programme ($99/yr) removes both limits and is needed for TestFlight. iCloud sync cannot be built and tested on a free-account sideload.
+5. **Licensing.** Plain-language explanation in section 10.1. Matters before App Store, not before sideloading.
+6. **Metadata providers.** TMDb is the default. Free alternatives in section 10.3. Confirm whether TheTVDB and OpenSubtitles are wanted.
+7. **Minimum iOS version.** Recommend iOS 17 or later, which also enables CKSyncEngine for iCloud sync. Confirm.
+8. **Network libraries.** Use an SMB client library (e.g. AMSMB2) and a WebDAV client, rather than writing protocol code from scratch.
 
 ---
 
@@ -364,3 +369,75 @@ These choices change cost, licensing, and what is possible. Each one needs a dec
 5. Which sources matter most for the first release (SMB only, or SMB plus WebDAV)?
 6. Is iCloud sync a v1 requirement?
 7. Any preferred visual style, or should the UI start from a clean SwiftUI default?
+
+---
+
+## 10. Licensing, free sources, and sync design
+
+### 10.1 Licences in plain terms
+
+A software licence sets what you may do with a library's code. It is separate from the terms of any online data service.
+
+- **Your own code:** you choose the licence. Keeping the app closed-source is fine as long as every dependency allows it.
+- **Permissive licences (MIT, BSD, Apache):** you may use the code in any app, including paid ones. You only need to credit the authors.
+- **LGPL (VLCKit's core):** you may use the library in a closed-source app. You must keep its licence notice, credit it in About, and let the library be swapped or relinked. Dynamic linking makes that simple. Some VLC builds also include GPL components, and GPL can extend to the whole app. Check the exact build you use.
+- **GPL:** if GPL code is linked into your app, the whole app must be GPL and its source published. Apple's App Store terms are generally seen as incompatible with that, so GPL-only builds are a problem for App Store or TestFlight distribution later.
+- **Media and artwork:** films, shows, and poster images are copyrighted by their owners. Playing your own files is fine. The app ships no content. Artwork fetched from APIs is for display under each provider's terms.
+- **API terms:** TMDb and others set their own rules on attribution, commercial use, and rate limits. These apply on top of any code licence.
+
+This is not legal advice. Have a lawyer check the final setup before App Store release.
+
+### 10.2 What "free" means here
+
+- **Free sideloaded app for personal use:** fits every free tier listed below.
+- **Free App Store app with ads, in-app purchases, or donations:** treat it as commercial for API terms. Get written confirmation from each provider first.
+- **Paid app:** same as above. Commercial terms apply.
+
+### 10.3 Free data sources
+
+| Provider | Used for | Cost and key | Terms to note |
+|---|---|---|---|
+| TMDb | Films, TV, cast, posters, backdrops | Free API key | Free for non-commercial use with attribution and logo. Commercial use needs a licence. |
+| TheTVDB | Episode order, alternative episode data | Free key for personal use | Check current terms; commercial use typically needs a paid plan. |
+| Fanart.tv | Extra art: logos, clear art, banners | Free key | Attribution required. Check terms for commercial use. |
+| OpenSubtitles | External subtitle search and download | Free account, daily download quota | Check current API terms and quota rules. |
+| Wikidata | Cross-IDs between providers | Free | CC0, no restrictions. |
+| Wikipedia | Synopsis fallback | Free | CC BY-SA: attribution, and share-alike if text is copied. |
+| Wikimedia Commons | Some imagery | Free | Licence varies per file. Record it per image. |
+| Trakt | Optional alternative watch-history sync | Free for personal apps, app registration | Check terms if the app is ever commercial. |
+| IMDb | Not recommended | No public API | Scraping breaks its terms. Avoid. |
+
+Use TMDb as the backbone. Add the others only where they fill a real gap, and show attribution for each on the About screen.
+
+### 10.4 iCloud sync design
+
+**Storage:** CloudKit private database, synced with CKSyncEngine (iOS 17+). The data sits in the user's own iCloud, counts against their iCloud storage, and needs no server from you.
+
+**Requirement:** the iCloud capability needs the paid developer account. It cannot be tested on a free-account sideload.
+
+**What syncs**
+- Watched flag and last-played date, per item.
+- Resume position, per item.
+- Favourite flag, per show, film, or episode.
+- Library overrides (Fix Match choices, hidden items, collections).
+
+**What never syncs**
+- Source addresses and credentials. These stay in the device Keychain.
+- Local file paths. They differ between devices.
+- Artwork and metadata caches. These are re-downloaded per device.
+
+**Item identity:** sync by a stable key, not a device path. A film on a NAS mounted under two different names must still match.
+- Matched films: `movie:<tmdbId>`
+- Matched episodes: `show:<tmdbId>:S02E05`
+- Unmatched files: hash of filename, file size, and duration.
+
+**Conflict rules**
+- Watched: once watched on any device, stays watched unless the user marks it unwatched later (latest timestamp wins).
+- Resume position: latest timestamp wins.
+- Favourite: latest timestamp wins, with a tombstone so removals sync.
+
+**Write frequency:** resume positions write on pause, on exit, and every 30 seconds during playback. Not every second, to keep iCloud traffic low.
+
+**Offline:** writes go to a local store first and sync when iCloud is reachable.
+
+**Sign-in:** none. Sync is on when the device is signed into iCloud and the user has enabled it in Settings.
