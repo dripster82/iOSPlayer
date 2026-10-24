@@ -75,7 +75,7 @@ struct SourceDetailView: View {
                 }
             }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
 
-            Section("Folders · tap to tag") {
+            Section("Folders · tap to tag, swipe to remove") {
                 ForEach(source.folderRules.sorted { $0.folderPath < $1.folderPath }, id: \.folderPath) { rule in
                     Button { tagging = FolderPath(rule.folderPath) } label: {
                         HStack {
@@ -84,6 +84,9 @@ struct SourceDetailView: View {
                             Spacer()
                             TagPill(tag: rule.tag)
                         }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) { try? library.removeFolder(rule.folderPath, from: source) } label: { Label("Remove", systemImage: "trash") }
                     }
                 }
                 NavigationLink { FileBrowserView(source: source, path: "", tagging: true) } label: { Label("Add a folder…", systemImage: "plus") }
@@ -143,7 +146,9 @@ struct TagSheet: View {
                 Section {
                     row("TV shows", .tv); row("Films", .films); row("Mixed · decide per file", .mixed); row("Not media · exclude", .excluded)
                 } header: { Text(folder.isEmpty ? "/" : folder) } footer: { Text("Overrides the filename guess for everything in this folder.") }
-                Section { Button("Remove tag", role: .destructive) { try? library.setTag(nil, folder: folder, on: source); dismiss() } }
+                Section {
+                    Button("Remove folder from this source", role: .destructive) { try? library.removeFolder(folder, from: source); dismiss() }
+                } footer: { Text("Removes its files from the library. Excluding a folder does the same but keeps it listed so the scan skips it.") }
             }
             .navigationTitle("Folder tag").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() } }

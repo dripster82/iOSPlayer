@@ -43,6 +43,7 @@ struct Matcher {
         let isReview = file.classificationRaw == "review"
         let guessed: MediaKind? = isReview ? file.guessKindRaw.flatMap(MediaKind.init(rawValue:)) : (file.classificationRaw == "episode" ? .episode : .film)
         guard let kind = override?.forcedKind ?? guessed, !parsed.title.isEmpty || override?.forcedTMDbID != nil else { return markReview(file) }
+        file.guessKindRaw = kind.rawValue   // so a later scan retries this file with the same guess
         do {
             switch kind {
             case .episode, .show:

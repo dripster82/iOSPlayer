@@ -62,7 +62,33 @@ public final class LibraryStore: ObservableObject {
             rule.source = record
             record.folderRules.append(rule)
         }
+        // Excluding a folder should empty it from the library now, not just skip it on the next scan.
+        if tag == .excluded { purgeFiles(under: folder, in: record) }
         try context.save()
+    }
+
+    /// Drops a folder from a source: its rule, every file under it, and any item left with no files.
+    /// The next scan only brings the folder back if it still sits inside an included root.
+    public func removeFolder(_ folder: String, from record: SourceRecord) throws {
+        if let existing = record.folderRules.first(where: { $0.folderPath == folder }) { context.delete(existing) }
+        purgeFiles(under: folder, in: record)
+        try context.save()
+    }
+
+    private func purgeFiles(under folder: String, in record: SourceRecord) {
+        let prefix = folder.isEmpty ? "" : folder.hasSuffix("/") ? folder : folder + "/"
+        var touched: [MediaItem] = []
+        for file in record.files where prefix.isEmpty || file.relativePath.hasPrefix(prefix) || file.relativePath == folder {
+            if let item = file.item { touched.append(item) }
+            context.delete(file)
+        }
+        for item in touched {
+            let remaining = item.files.filter { !$0.isDeleted }
+            guard remaining.isEmpty else { continue }
+            let show = item.show
+            context.delete(item)
+            if let show, show.episodes.filter({ !$0.isDeleted }).isEmpty { context.delete(show) }
+        }
     }
 
     public func isScanning(_ id: UUID) -> Bool { scanTasks[id] != nil }

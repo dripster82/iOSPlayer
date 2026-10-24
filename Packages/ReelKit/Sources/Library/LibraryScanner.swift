@@ -93,7 +93,9 @@ public actor LibraryScanner {
 
         report.phase = .classifying
         progress?(report)
-        let pending = record.files.filter { $0.classificationRaw == "pending" && !$0.ignored }
+        // Review files without a guess kind came from an older build's matcher and would never be retried;
+        // re-parse them so the current parser and matcher get another go.
+        let pending = record.files.filter { ($0.classificationRaw == "pending" || ($0.classificationRaw == "review" && !$0.reviewed && $0.guessKindRaw == nil)) && !$0.ignored }
         for file in pending {
             apply(Classifier.classify(relativePath: file.relativePath, folderTag: record.tag(for: file.relativePath)), to: file)
         }
