@@ -132,6 +132,16 @@ struct FilmDetailView: View {
     @State private var missingFromCollection: [String] = []
 
     var body: some View {
+        // Fix Match re-points the files and deletes this object; the page under the sheet must not
+        // touch a deleted model (SwiftData traps on any property read). Show a stub until it pops.
+        if film.isDeleted {
+            ContentUnavailableView("Rematched", systemImage: "arrow.triangle.2.circlepath", description: Text("This title was matched to a different entry. Go back and open it again."))
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder private var content: some View {
         let ws = library.watchState(film.itemKey)
         let file = chosenFile ?? library.preferredFile(film)
         ScrollView {
@@ -251,6 +261,16 @@ struct ShowDetailView: View {
     }
 
     var body: some View {
+        // Fix Match re-points the files and deletes this object; the page under the sheet must not
+        // touch a deleted model (SwiftData traps on any property read). Show a stub until it pops.
+        if show.isDeleted {
+            ContentUnavailableView("Rematched", systemImage: "arrow.triangle.2.circlepath", description: Text("This title was matched to a different entry. Go back and open it again."))
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HeroHeader(item: show, subtitle: [show.year.map(String.init), show.seasonsLabel, show.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)

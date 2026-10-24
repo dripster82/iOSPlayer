@@ -8,7 +8,7 @@ struct ItemGrid: View {
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)], spacing: 14) {
-            ForEach(items, id: \.itemKey) { item in
+            ForEach(items.filter { !$0.isDeleted }, id: \.itemKey) { item in
                 NavigationLink(value: item.itemKey) {
                     PosterCard(item: item)
                 }
@@ -41,7 +41,7 @@ struct ItemRow: View {
                 }.padding(.horizontal)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 10) {
-                        ForEach(items, id: \.itemKey) { item in
+                        ForEach(items.filter { !$0.isDeleted }, id: \.itemKey) { item in
                             Group {
                                 if let onTap {
                                     Button { onTap(item) } label: { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
