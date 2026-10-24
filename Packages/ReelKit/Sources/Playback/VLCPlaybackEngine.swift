@@ -70,6 +70,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         let drawable = old.drawable
         old.delegate = nil
         old.stop()
+        // Releasing the old player deallocates it, and VLCMediaPlayer's dealloc joins the input thread.
+        // A wedged input never ends, so that join blocked the main thread until iOS killed the app
+        // (0x8BADF00D). The last reference is dropped on a background thread instead; if the input
+        // never finishes, that thread stays parked and the player leaks, which is the lesser evil.
+        Task.detached(priority: .background) { [old] in
+            try? await Task.sleep(for: .seconds(2))
+            _ = old
+        }
         player = VLCMediaPlayer()
         player.delegate = self
         player.drawable = drawable
@@ -215,6 +223,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var lastProgressCount = 0
     private var lastProgressAt = Date.distantPast
     private var lastProgressTime: TimeInterval = 0
+    /// Pictures alone: a stalled video decoder leaves the audio running, which the combined count
+    /// would read as progress. Ten seconds without a new picture while audio advances is a video stall.
+    private var lastPictures = 0
+    private var lastPicturesAt = Date.distantPast
+    private var lastPicturesTime: TimeInterval = 0
 
     /// Coming back to the foreground (after PiP, the lock screen or another app): if VLC says it is
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
@@ -241,12 +254,24 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         stallWatchdog?.cancel()
         lastProgressCount = 0
         lastProgressAt = Date()
+        lastPictures = 0
+        lastPicturesAt = Date()
         stallWatchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self, !Task.isCancelled else { return }
                 guard self.status == .playing, let stats = self.player.media?.statistics else { continue }
-                let count = Int(stats.displayedPictures) + Int(stats.playedAudioBuffers)
+                let pictures = Int(stats.displayedPictures)
+                let count = pictures + Int(stats.playedAudioBuffers)
+                if pictures != self.lastPictures {
+                    self.lastPictures = pictures; self.lastPicturesAt = Date(); self.lastPicturesTime = self.clock.time
+                } else if !self.player.videoTracks.isEmpty, count != self.lastProgressCount,
+                          Date().timeIntervalSince(self.lastPicturesAt) > 10, Date().timeIntervalSince(self.lastSeekAt) > 15,
+                          !self.isPictureInPictureActive {
+                    Diagnostics.log("player", "video stalled: no picture for \(Int(Date().timeIntervalSince(self.lastPicturesAt)))s while audio ran; reloading at \(Int(self.lastPicturesTime))s")
+                    self.reconnect(at: self.lastPicturesTime)
+                    continue
+                }
                 if count != self.lastProgressCount {
                     self.lastProgressCount = count
                     self.lastProgressAt = Date()
