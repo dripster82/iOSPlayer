@@ -33,6 +33,60 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         UserDefaults.standard.set(Array(entries.suffix(10)), forKey: "reel.sync.errorLog")
     }
 
+    /// CloudKit's localizedDescription is "Failed to send changes" for a dozen different causes. This
+    /// names the CKError code, any retry-after, and for a partial failure the first few records that
+    /// were refused and why, so the Settings and Diagnostics screens say something actionable.
+    static func describe(_ error: Error) -> String {
+        guard let ck = error as? CKError else {
+            let ns = error as NSError
+            return "\(ns.localizedDescription) [\(ns.domain) \(ns.code)]"
+        }
+        var parts = [codeName(ck.code)]
+        if let retry = ck.retryAfterSeconds { parts.append("retry in \(Int(retry))s") }
+        if ck.code == .partialFailure, let per = ck.partialErrorsByItemID {
+            let items = per.prefix(3).map { key, value -> String in
+                let name = (key as? CKRecord.ID)?.recordName ?? "\(key)"
+                let inner = (value as? CKError).map { codeName($0.code) } ?? value.localizedDescription
+                return "\(name.prefix(40)): \(inner)"
+            }
+            parts.append("\(per.count) records; " + items.joined(separator: "; "))
+        } else if ck.code != .partialFailure {
+            parts.append(ck.localizedDescription)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func codeName(_ code: CKError.Code) -> String {
+        switch code {
+        case .networkUnavailable: "no network"
+        case .networkFailure: "network failure"
+        case .serviceUnavailable: "iCloud unavailable"
+        case .requestRateLimited: "rate limited"
+        case .notAuthenticated: "not signed in to iCloud"
+        case .permissionFailure: "no permission"
+        case .quotaExceeded: "iCloud storage full"
+        case .limitExceeded: "request too large"
+        case .zoneNotFound: "zone missing"
+        case .userDeletedZone: "zone deleted by user"
+        case .serverRecordChanged: "record changed on server"
+        case .unknownItem: "record missing on server"
+        case .invalidArguments: "invalid record"
+        case .serverRejectedRequest: "rejected by server"
+        case .accountTemporarilyUnavailable: "iCloud account temporarily unavailable"
+        case .partialFailure: "some records failed"
+        case .internalError: "CloudKit internal error"
+        case .zoneBusy: "zone busy"
+        case .changeTokenExpired: "change token expired"
+        case .batchRequestFailed: "batch failed"
+        case .constraintViolation: "constraint violation"
+        case .assetFileNotFound: "asset file missing"
+        case .incompatibleVersion: "incompatible version"
+        case .managedAccountRestricted: "managed account restricted"
+        case .participantMayNeedVerification: "participant needs verification"
+        default: "CKError \(code.rawValue)"
+        }
+    }
+
     /// Rows still waiting to upload, for the Settings screen.
     public var pendingCount: Int {
         let d1 = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync })
@@ -54,7 +108,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             let left = pendingCount
             lastSummary = left == 0 ? "Up to date." : "\(left) changes still uploading in the background."
         } catch {
-            lastError = error.localizedDescription
+            lastError = Self.describe(error)
             lastSummary = "Sync failed."
         }
         isSyncing = false
@@ -212,11 +266,11 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     /// where the engine's own scheduling may not get a turn before the app is suspended.
     public func sendNow() async {
         pushPendingChanges()
-        do { try await engine?.sendChanges() } catch { lastError = error.localizedDescription }
+        do { try await engine?.sendChanges() } catch { lastError = "Send failed: " + Self.describe(error) }
     }
 
     public func fetchNow() async {
-        do { try await engine?.fetchChanges() } catch { lastError = error.localizedDescription }
+        do { try await engine?.fetchChanges() } catch { lastError = "Fetch failed: " + Self.describe(error) }
     }
 
     // MARK: - CKSyncEngineDelegate
@@ -279,7 +333,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
                     forgetSystemFields(id)
                     engine?.state.add(pendingRecordZoneChanges: [.saveRecord(id)])   // stale tag for a record that is gone: recreate
                 } else {
-                    lastError = failed.error.localizedDescription
+                    lastError = "\(failed.record.recordType) \(id.recordName.prefix(40)): " + Self.describe(failed.error)
                 }
             }
             for (id, _) in e.failedRecordDeletes { forgetSystemFields(id) }
@@ -288,9 +342,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             try? ctx.save()
             lastSyncedAt = Date()
         case .didFetchRecordZoneChanges(let e):
-            if let err = e.error { lastError = "Fetch failed: \(err.localizedDescription)" }
+            if let err = e.error { lastError = "Fetch failed: " + Self.describe(err) }
         case .sentDatabaseChanges(let e):
-            for (_, err) in e.failedZoneSaves.map({ ($0.zone, $0.error) }) { lastError = "Zone save failed: \(err.localizedDescription)" }
+            for (_, err) in e.failedZoneSaves.map({ ($0.zone, $0.error) }) { lastError = "Zone save failed: " + Self.describe(err) }
         case .fetchedDatabaseChanges, .willFetchChanges, .didFetchChanges, .willSendChanges, .didSendChanges, .willFetchRecordZoneChanges:
             break
         @unknown default: break

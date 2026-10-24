@@ -32,6 +32,7 @@ struct HomeView: View {
                 offlineBanner
                 scanBanner
                 unmatchedBanner
+                syncStatus
                 ItemRow(title: "Continue Watching", items: rows.continueWatching.map(\.0), wide: true, subtitle: { item in
                     guard let ws = rows.continueWatching.first(where: { $0.0.itemKey == item.itemKey })?.1 else { return "" }
                     let prefix = item.kind == .episode ? (item.episodeCode ?? "") + " · " : ""
@@ -107,6 +108,18 @@ struct HomeView: View {
         if let s = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed }) {
             Banner(colour: .red, text: s.status == .authFailed ? "Password rejected for \(s.name)." : "\(s.name) is offline. Showing cached library.") {
                 NavigationLink("Details") { SourceDetailView(source: s) }
+            }
+        }
+    }
+    /// One line on how the other device's progress is getting here. A problem names its cause (the
+    /// CloudKit code, not "Failed to send changes") and links to Settings, where Sync now retries it.
+    @ViewBuilder private var syncStatus: some View {
+        if sync.isEnabled {
+            if let e = sync.lastError {
+                Banner(colour: .orange, text: "Sync problem: \(e)") { NavigationLink("Details") { SettingsView() } }
+            } else if let at = sync.lastSyncedAt {
+                Label(sync.isSyncing ? "Syncing…" : "Synced \(at.formatted(.relative(presentation: .named)))", systemImage: sync.isSyncing ? "arrow.triangle.2.circlepath.icloud" : "checkmark.icloud")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
             }
         }
     }
