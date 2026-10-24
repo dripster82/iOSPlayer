@@ -59,7 +59,14 @@ targets:
           - CFBundleTypeName: Video
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
-            LSItemContentTypes: [public.movie, public.video, public.audiovisual-content, public.mpeg-4, com.apple.quicktime-movie, public.avi, org.matroska.mkv, public.mpeg-2-transport-stream, com.microsoft.windows-media-wmv]
+            LSItemContentTypes: [public.movie, public.video, public.audiovisual-content, public.mpeg-4, com.apple.m4v-video, com.apple.quicktime-movie, public.avi, public.mpeg, public.3gpp, org.matroska.mkv, org.webmproject.webm, public.mpeg-2-transport-stream, com.microsoft.windows-media-wmv, public.audio, public.mp3, com.apple.m4a-audio, org.xiph.flac]
+          # Other players (Infuse, VLC) each import .mkv under their own identifier, and iOS resolves an
+          # extension to one of them; a file that resolves to theirs never matches ours. Accepting any
+          # data, as they do, keeps Reel in every "Open in" list; the app decides what it can play.
+          - CFBundleTypeName: File
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.data, public.content, public.item]
         # reel://play?url=<percent-encoded URL>  and the Infuse-style  reel://x-callback-url/play?url=...
         CFBundleURLTypes:
           - CFBundleURLName: uk.co.ketelle.reel
@@ -72,6 +79,18 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension: [mkv, mka, mks]
               public.mime-type: [video/x-matroska]
+          - UTTypeIdentifier: org.webmproject.webm
+            UTTypeDescription: WebM Video
+            UTTypeConformsTo: [public.movie]
+            UTTypeTagSpecification:
+              public.filename-extension: [webm]
+              public.mime-type: [video/webm]
+          - UTTypeIdentifier: org.xiph.flac
+            UTTypeDescription: FLAC Audio
+            UTTypeConformsTo: [public.audio]
+            UTTypeTagSpecification:
+              public.filename-extension: [flac]
+              public.mime-type: [audio/flac]
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
         NSAppTransportSecurity:
