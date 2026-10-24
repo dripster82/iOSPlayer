@@ -30,6 +30,7 @@ final class AppSettings: ObservableObject {
     @Published var subtitlesOnByDefault: Bool { didSet { d.set(subtitlesOnByDefault, forKey: "subtitlesOnByDefault") } }
     @Published var backgroundAudio: Bool { didSet { d.set(backgroundAudio, forKey: "backgroundAudio") } }
     @Published var scanOnCellular: Bool { didSet { d.set(scanOnCellular, forKey: "scanOnCellular") } }
+    @Published var scanOnLaunch: Bool { didSet { d.set(scanOnLaunch, forKey: "scanOnLaunch") } }
     @Published var theme: Theme { didSet { d.set(theme.rawValue, forKey: "theme") } }
     @Published var artworkLimitBytes: Int { didSet { d.set(artworkLimitBytes, forKey: "reel.artworkLimit") } }
     @Published var hasCompletedOnboarding: Bool { didSet { d.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") } }
@@ -49,6 +50,7 @@ final class AppSettings: ObservableObject {
         subtitlesOnByDefault = d.bool(forKey: "subtitlesOnByDefault")
         backgroundAudio = d.bool(forKey: "backgroundAudio")
         scanOnCellular = d.bool(forKey: "scanOnCellular")
+        scanOnLaunch = d.object(forKey: "scanOnLaunch") as? Bool ?? true
         theme = Theme(rawValue: d.string(forKey: "theme") ?? "") ?? .system
         artworkLimitBytes = d.object(forKey: "reel.artworkLimit") as? Int ?? 2_000_000_000
         hasCompletedOnboarding = d.bool(forKey: "hasCompletedOnboarding")

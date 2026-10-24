@@ -50,6 +50,7 @@ struct SettingsView: View {
             }
 
             Section("Library") {
+                Toggle(isOn: $settings.scanOnLaunch) { VStack(alignment: .leading) { Text("Scan for new media on launch"); Text("Checks every source when the app opens (at most every 10 minutes). Sources → Refresh all does it on demand.").font(.caption).foregroundStyle(.secondary) } }
                 NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(library.filesNeedingReview().count) items") }
                 NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(library.items(kind: .film, includeHidden: true).filter(\.hidden).count + library.items(kind: .show, includeHidden: true).filter(\.hidden).count)") }
                 NavigationLink { HistoryView() } label: { Text("Watch history") }

@@ -11,6 +11,7 @@ struct ReelApp: App {
     @StateObject private var sync: SyncEngine
     @StateObject private var player: PlayerCoordinator
     @Environment(\.scenePhase) private var scenePhase
+    @State private var lastForegroundScan: Date = .distantPast
 
     init() {
         let container: ModelContainer
@@ -29,6 +30,15 @@ struct ReelApp: App {
         BackgroundScans.register(library: store, settings: settings)
     }
 
+    /// Incremental scan of every source when the app comes to the foreground: listing is cheap and only
+    /// new or changed files go to TMDb. Throttled so switching apps doesn't restart it every time.
+    private func scanForNewMediaIfDue() {
+        guard settings.scanOnLaunch, settings.hasCompletedOnboarding, !library.isScanning,
+              Date().timeIntervalSince(lastForegroundScan) > 10 * 60, !library.sources().isEmpty else { return }
+        lastForegroundScan = Date()
+        library.scanAll(providers: settings.providers)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -40,6 +50,7 @@ struct ReelApp: App {
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { await ImageLoader.shared.enforceLimit() }
                 .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { scanForNewMediaIfDue() }
                     guard phase == .background else { return }
                     // Finish an interrupted scan or match soon; otherwise refresh daily (PLAN §11.3).
                     let pending = library.isScanning || library.unmatchedFileCount() > 0
