@@ -31,12 +31,13 @@ struct SettingsView: View {
                 if !settings.tvdbAPIKey.isEmpty {
                     SecureField("TheTVDB subscriber PIN (optional)", text: $settings.tvdbPIN).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
+                SecureField("fanart.tv API key (optional)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("How do I get a key?") { showKeyHelp = true }
                 Picker("Metadata language", selection: $settings.metadataLanguage) {
                     ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }
                 }
             } header: { Text("Metadata") } footer: {
-                Text(settings.tmdbAPIKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information.")
+                Text(settings.tmdbAPIKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information. fanart.tv adds logos and extra backgrounds on detail screens; a project key is free at fanart.tv/get-an-api-key.")
             }
 
             Section {
@@ -187,6 +188,12 @@ struct AttributionView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("TMDb").font(.headline)
                     Text("This product uses the TMDb API but is not endorsed or certified by TMDb. Film and TV metadata, posters, backdrops and cast information are provided by The Movie Database (themoviedb.org).").font(.footnote)
+                }
+            }
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("fanart.tv").font(.headline)
+                    Text("Logos, clear art and extra backgrounds are provided by fanart.tv (fanart.tv) when a key is set, under its non-commercial terms.").font(.footnote)
                 }
             }
             Section {

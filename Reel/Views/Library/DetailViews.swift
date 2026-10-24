@@ -6,23 +6,38 @@ import Metadata
 /// Backdrop hero with poster and title, shared by film and show detail.
 struct HeroHeader: View {
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var settings: AppSettings
     let item: MediaItem
     let subtitle: String
     @Binding var fixMatchTarget: MediaItem?
 
+    /// TMDb's backdrop, or fanart.tv's when TMDb has none.
+    private var backdropURL: URL? { ArtworkURL.backdrop(item.backdropPath) ?? item.extraBackdropURL.flatMap(URL.init) }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            ArtworkImage(url: ArtworkURL.backdrop(item.backdropPath), title: item.title + " backdrop", aspect: 16 / 9, cornerRadius: 0)
+            ArtworkImage(url: backdropURL, title: item.title + " backdrop", aspect: 16 / 9, cornerRadius: 0)
                 .overlay { LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .init(x: 0.5, y: 0.3), endPoint: .bottom) }
             HStack(alignment: .bottom, spacing: 14) {
                 ArtworkImage(url: ArtworkURL.poster(item.posterPath, size: .detail), title: item.title).frame(width: 96).shadow(radius: 12)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.title).font(.title2.bold()).lineLimit(2)
+                    if let logo = item.logoURL.flatMap(URL.init) {
+                        // The show's own logo from fanart.tv in place of the typed title, as on a TV box.
+                        AsyncImage(url: logo) { image in
+                            image.resizable().scaledToFit().frame(maxWidth: 220, maxHeight: 64, alignment: .leading).shadow(radius: 6)
+                        } placeholder: { Text(item.title).font(.title2.bold()).lineLimit(2) }
+                        .accessibilityLabel(item.title)
+                    } else {
+                        Text(item.title).font(.title2.bold()).lineLimit(2)
+                    }
                     Text(subtitle).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             .padding(.horizontal)
+        }
+        .task(id: item.itemKey) {
+            if let fanart = settings.fanart { await library.fetchExtraArt(for: item, fanart: fanart) }
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {

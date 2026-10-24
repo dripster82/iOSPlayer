@@ -21,6 +21,7 @@ final class AppSettings: ObservableObject {
     @Published var tmdbAPIKey: String { didSet { d.set(tmdbAPIKey, forKey: "tmdbAPIKey") } }
     @Published var tvdbAPIKey: String { didSet { d.set(tvdbAPIKey, forKey: "tvdbAPIKey") } }
     @Published var tvdbPIN: String { didSet { d.set(tvdbPIN, forKey: "tvdbPIN") } }
+    @Published var fanartAPIKey: String { didSet { d.set(fanartAPIKey, forKey: "fanartAPIKey") } }
     @Published var openSubtitlesAPIKey: String { didSet { d.set(openSubtitlesAPIKey, forKey: "openSubtitlesAPIKey") } }
     @Published var openSubtitlesUsername: String { didSet { d.set(openSubtitlesUsername, forKey: "openSubtitlesUsername") } }
     /// Kept in the Keychain (with the source passwords), not in UserDefaults.
@@ -51,6 +52,7 @@ final class AppSettings: ObservableObject {
         tmdbAPIKey = d.string(forKey: "tmdbAPIKey") ?? ""
         tvdbAPIKey = d.string(forKey: "tvdbAPIKey") ?? ""
         tvdbPIN = d.string(forKey: "tvdbPIN") ?? ""
+        fanartAPIKey = d.string(forKey: "fanartAPIKey") ?? ""
         openSubtitlesAPIKey = d.string(forKey: "openSubtitlesAPIKey") ?? ""
         openSubtitlesUsername = d.string(forKey: "openSubtitlesUsername") ?? ""
         openSubtitlesPassword = CredentialStore.shared.load(for: Self.openSubtitlesCredentialID)?.password ?? ""
@@ -82,6 +84,12 @@ final class AppSettings: ObservableObject {
     var tvdb: TVDBClient? {
         guard !tvdbAPIKey.isEmpty else { return nil }
         return TVDBClient(apiKey: tvdbAPIKey, pin: tvdbPIN)
+    }
+
+    /// nil until the user has entered a fanart.tv project key.
+    var fanart: FanartClient? {
+        guard !fanartAPIKey.isEmpty else { return nil }
+        return FanartClient(apiKey: fanartAPIKey, language: metadataLanguage)
     }
 
     /// nil until the user has entered an OpenSubtitles API key. Searching works with the key alone.

@@ -213,6 +213,7 @@ struct Matcher {
         item.overview = d.overview
         item.posterPath = d.posterPath
         item.backdropPath = d.backdropPath
+        if let tvdb = d.externalIDs?.tvdbID { item.tvdbID = tvdb }
         item.rating = d.voteAverage
         item.runtimeMinutes = d.episodeRunTime?.first
         item.genres = d.genres?.map(\.name) ?? []

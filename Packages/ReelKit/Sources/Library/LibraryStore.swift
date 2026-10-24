@@ -317,6 +317,30 @@ public final class LibraryStore: ObservableObject {
         return o
     }
 
+    // MARK: - Extra artwork
+
+    /// Fills in fanart.tv logo and background for an item the first time its detail screen opens
+    /// (and again after a week). Shows need the TheTVDB id the matcher recorded; films use TMDb's id.
+    public func fetchExtraArt(for item: MediaItem, fanart: FanartClient) async {
+        if let at = item.extraArtCheckedAt, Date().timeIntervalSince(at) < 7 * 86_400 { return }
+        let art: FanartArt
+        do {
+            if item.kind == .show, let tvdb = item.tvdbID { art = try await fanart.show(tvdbID: tvdb) }
+            else if item.kind == .film, let id = item.tmdbID { art = try await fanart.movie(tmdbID: id) }
+            else { return }
+        } catch {
+            Diagnostics.log("artwork", "fanart for \(item.title.prefix(40)): \(error.localizedDescription)")
+            item.extraArtCheckedAt = Date()
+            try? context.save()
+            return
+        }
+        item.logoURL = art.logoURL
+        item.extraBackdropURL = art.backgroundURLs.first
+        item.extraArtCheckedAt = Date()
+        try? context.save()
+        if !art.isEmpty { objectWillChange.send() }
+    }
+
     // MARK: - Watch state
 
     public func watchState(_ key: String) -> WatchState? {

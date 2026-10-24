@@ -154,6 +154,12 @@ public final class MediaItem {
     public var pendingSync: Bool = false
     public var updatedAt: Date? = nil
     public var showKeyHint: String? = nil
+    /// TheTVDB id from TMDb's external ids; fanart.tv keys shows by it.
+    public var tvdbID: Int? = nil
+    /// fanart.tv extras, fetched on demand by the detail screen and kept per device.
+    public var logoURL: String? = nil
+    public var extraBackdropURL: String? = nil
+    public var extraArtCheckedAt: Date? = nil
 
     // Episode fields
     public var seasonNumber: Int?
