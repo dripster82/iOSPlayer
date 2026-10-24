@@ -41,7 +41,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, processing]
+        BGTaskSchedulerPermittedIdentifiers: [uk.co.ketelle.reel.scan]
         NSLocalNetworkUsageDescription: Reel looks for NAS shares and media servers on your network so you can add them as sources.
         NSBonjourServices: [_smb._tcp, _webdav._tcp, _webdavs._tcp, _afpovertcp._tcp]
         LSSupportsOpeningDocumentsInPlace: true

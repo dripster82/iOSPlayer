@@ -4,6 +4,9 @@ import SwiftData
 import MediaCore
 import MediaSources
 import Metadata
+#if canImport(UIKit) && !os(macOS)
+import UIKit
+#endif
 
 /// Main-thread façade over the model container: queries the views need, plus the write
 /// operations that must also mark rows for sync. Heavy work (scanning) runs on `Scanner`.
@@ -63,23 +66,39 @@ public final class LibraryStore: ObservableObject {
     }
 
     public func isScanning(_ id: UUID) -> Bool { scanTasks[id] != nil }
+    public var isScanning: Bool { !scanTasks.isEmpty }
+
+    /// Suspends until every running scan has finished. Used by the background processing task.
+    public func waitForScans() async {
+        for task in Array(scanTasks.values) { await task.value }
+    }
+
+    /// Stops running scans. Progress so far is saved every few files, so a later scan resumes cheaply.
+    public func cancelScans() {
+        scanTasks.values.forEach { $0.cancel() }
+    }
 
     public func scan(_ record: SourceRecord, tmdb: TMDbClient?) {
         guard scanTasks[record.id] == nil else { return }
         let id = record.id
         let creds = CredentialStore.shared.load(for: id)
         let scanner = LibraryScanner(modelContainer: container)
+        // Keep running for a while after the user leaves the app; iOS grants a few minutes.
+        let assertion = BackgroundAssertion(name: "Reel scan \(record.name)")
         scanTasks[id] = Task { [weak self] in
             do {
                 try await scanner.scan(sourceID: id, credentials: creds, tmdb: tmdb) { p in
                     Task { @MainActor [weak self] in self?.scanProgress[id] = p }
                 }
+            } catch is CancellationError {
+                // Expected when the background task expires or the user stops a scan.
             } catch {
                 await MainActor.run { [weak self] in self?.lastError = error.localizedDescription }
             }
             await MainActor.run { [weak self] in
                 self?.scanTasks[id] = nil
                 self?.objectWillChange.send()
+                assertion.end()
             }
         }
     }
@@ -307,5 +326,25 @@ public final class LibraryStore: ObservableObject {
     static func resolutionRank(_ r: String?) -> Int {
         switch r { case "2160p": 4; case "1080p": 3; case "720p": 2; case "576p", "480p": 1; default: 0 }
     }
+}
+
+/// Wraps `UIApplication.beginBackgroundTask` so a scan survives the user switching apps for a few
+/// minutes. On platforms without it (macOS tests) it is a no-op.
+@MainActor
+final class BackgroundAssertion {
+    #if canImport(UIKit) && !os(macOS)
+    private var id: UIBackgroundTaskIdentifier = .invalid
+    init(name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in self?.end() }
+    }
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+    #else
+    init(name: String) {}
+    func end() {}
+    #endif
 }
 #endif

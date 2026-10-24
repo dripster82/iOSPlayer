@@ -207,7 +207,12 @@ doesn't notify an `ObservableObject`'s subscribers. Keep that pattern.
 
 Phase 2 remainder
 - [ ] Wire `sync.pushPendingChanges()` after `LibraryStore` writes (currently only on Settings → Sync now and on enable).
-- [ ] `BGAppRefreshTask` daily scan (PLAN §11.3). Register in `ReelApp`, respect `scanOnCellular`.
+- [x] Background scanning (24 Oct): `LibraryStore.scan` holds a `beginBackgroundTask` assertion so a scan
+      survives leaving the app for a few minutes, and `Reel/App/BackgroundScans.swift` schedules a
+      `BGProcessingTask` (`uk.co.ketelle.reel.scan`) on every background transition: 60 s later if work is
+      pending, else daily. It respects `scanOnCellular` via `NWPathMonitor.isExpensive`. iOS decides when it
+      actually runs (usually charging + idle); to force it in the debugger pause the app and run
+      `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"uk.co.ketelle.reel.scan"]`.
 - [ ] Probe duration/codec/audio/subtitle summaries for `MediaFile` after first play (VLC `media.tracksInformation`) so Film detail's "File" section shows real codecs.
 - [ ] Scan: mark files not seen for N scans as missing rather than keeping them forever.
 

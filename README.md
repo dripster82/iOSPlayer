@@ -95,7 +95,7 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | FTP/SFTP/NFS/DLNA browsing | Not yet (greyed out in Add Source) |
 | OpenSubtitles search, TheTVDB, Fanart.tv | Not yet |
 | Picture in Picture, scrub thumbnails | Not yet (phase 4) |
-| Background scan scheduling (BGAppRefreshTask) | Not yet |
+| Background scan continuation (background task + BGProcessingTask) | Done |
 
 ## First build
 
