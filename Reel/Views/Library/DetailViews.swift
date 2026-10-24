@@ -31,6 +31,7 @@ struct HeroHeader: View {
                         Text(item.title).font(.title2.bold()).lineLimit(2)
                     }
                     Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                    TrailerButton(item: item).padding(.top, 2)
                 }
                 Spacer()
             }

@@ -120,6 +120,17 @@ public struct TMDbImages: Decodable, Sendable {
     public var logos: [TMDbImage]?
 }
 
+public struct TMDbVideo: Decodable, Sendable, Hashable, Identifiable {
+    public var id: String
+    public var key: String
+    public var site: String
+    public var type: String
+    public var name: String
+    public var official: Bool?
+    public var youTubeURL: URL? { site == "YouTube" ? URL(string: "https://www.youtube.com/watch?v=\(key)") : nil }
+}
+public struct TMDbVideos: Decodable, Sendable { public var results: [TMDbVideo] }
+
 public struct TMDbCompany: Decodable, Sendable, Hashable {
     public var id: Int
     public var name: String

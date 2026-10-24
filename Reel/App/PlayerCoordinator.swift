@@ -173,6 +173,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
         Self.applySubtitleStyle(&opts, settings)
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
+        scheduleScrubThumbnails(key: key, url: url)
         nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
         startSaveTimer()
         isLoading = false

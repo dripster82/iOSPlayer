@@ -79,10 +79,13 @@ final class ScrubThumbnails: ObservableObject {
             thumbnailer.snapshotPosition = position
             thumbnailer.thumbnailWidth = 320
             thumbnailer.thumbnailHeight = 180
-            job.thumbnailer = thumbnailer   // keep both alive until the delegate fires
+            // The thumbnailer's delegate is weak, so the job must be held here until it reports.
+            job.thumbnailer = thumbnailer
+            jobs.insert(job)
             thumbnailer.fetchThumbnail()
         }
     }
+    private static var jobs = Set<ThumbJob>()
 
     private final class ThumbJob: NSObject, VLCMediaThumbnailerDelegate {
         var thumbnailer: VLCMediaThumbnailer?
@@ -94,6 +97,7 @@ final class ScrubThumbnails: ObservableObject {
             continuation?.resume(returning: image)
             continuation = nil
             thumbnailer = nil
+            Task { @MainActor in ScrubThumbnails.jobs.remove(self) }
         }
     }
 }

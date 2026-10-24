@@ -105,6 +105,13 @@ public actor TMDbClient {
         return imgs
     }
 
+    /// Trailers and teasers on YouTube, official trailers first.
+    public func trailers(id: Int, isShow: Bool) async throws -> [TMDbVideo] {
+        let v: TMDbVideos = try await get("\(isShow ? "tv" : "movie")/\(id)/videos", [], label: "videos")
+        let rank: (TMDbVideo) -> Int = { ($0.type == "Trailer" ? 0 : $0.type == "Teaser" ? 1 : 2) + ($0.official == true ? 0 : 10) }
+        return v.results.filter { $0.youTubeURL != nil }.sorted { rank($0) < rank($1) }
+    }
+
     /// Everything a person acted in, films and TV together. Crew credits are left out.
     public func personCredits(id: Int) async throws -> [TMDbPersonCredit] {
         let credits: TMDbPersonCredits = try await get("person/\(id)/combined_credits", [], label: "person credits")

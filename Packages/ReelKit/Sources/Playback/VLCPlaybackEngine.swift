@@ -53,10 +53,32 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// True while the system PiP window is showing the video.
     @Published public private(set) var isPictureInPictureActive = false
 
-    public let player = VLCMediaPlayer()
+    /// Replaced by `rebuildPlayer` when libvlc wedges (an input that never finishes stopping leaves
+    /// every later open hanging); everything that holds a reference reads it through here.
+    public private(set) var player = VLCMediaPlayer()
+    private var openTimeouts = 0
     /// The object VLCKit's PiP window drives for play/pause/seek. `VLCVideoView` returns it from
     /// `mediaController()`; it talks to `player` directly because PiP calls arrive off the main actor.
     public let pictureInPictureMediaController: VLCPictureInPictureMediaControlling
+    private var pipMediaController: PiPMediaController { pictureInPictureMediaController as! PiPMediaController }
+
+    /// A fresh VLCMediaPlayer wired like the old one. libvlc stops asynchronously; an SMB input stuck in
+    /// a read sometimes never finishes, and the player then serialises every later open behind it,
+    /// so the only way out is a new player. The drawable and PiP bridge move across.
+    private func rebuildPlayer(reason: String) {
+        let old = player
+        let drawable = old.drawable
+        old.delegate = nil
+        old.stop()
+        player = VLCMediaPlayer()
+        player.delegate = self
+        player.drawable = drawable
+        pipMediaController.player = player
+        pipController = nil
+        canStartPictureInPicture = false
+        isPictureInPictureActive = false
+        Diagnostics.log("player", "rebuilt VLC player: \(reason)")
+    }
 
     private weak var pipController: (any VLCPictureInPictureWindowControlling)?
     /// When the PiP window last closed. VLC's PiP output can take the inline video output down with it
@@ -92,6 +114,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func load(_ item: PlaybackItem, options: PlaybackOptions) {
         recoveries = 0
+        openTimeouts = 0
         performLoad(item, options: options)
     }
 
@@ -120,6 +143,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
         stop()
+        if player.state == .stopping { rebuildPlayer(reason: "previous input still stopping") }
         Diagnostics.log("player", "load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
         self.item = item
         self.options = options
@@ -252,6 +276,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             if case .failed = self.status { return }
             let target = self.item?.url.host.map { "on \($0)" } ?? "the file"
             Diagnostics.log("player", "open timed out after 20s \(target)")
+            self.openTimeouts += 1
+            if self.openTimeouts == 1, let current = self.item {
+                // First timeout: assume the player wedged (it usually has, when the share answered the
+                // pre-flight connect) and try once more on a fresh one before blaming the server.
+                self.rebuildPlayer(reason: "open timed out")
+                self.performLoad(current, options: self.options)
+                return
+            }
             self.stopRequested = true
             self.player.stop()
             self.setStatus(.failed("No response opening \(target) after 20 seconds. Check the server is on and reachable, then retry."))
@@ -591,7 +623,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 /// deliberately not on the main actor and talks to the (thread-safe) `VLCMediaPlayer` directly,
 /// like VideoLAN's own PiP example. The engine's published state catches up via the delegate.
 private final class PiPMediaController: NSObject, VLCPictureInPictureMediaControlling, @unchecked Sendable {
-    private let player: VLCMediaPlayer
+    var player: VLCMediaPlayer
     init(player: VLCMediaPlayer) { self.player = player }
 
     func play() { player.play() }
