@@ -31,6 +31,17 @@ final class ChapterIntroTests: XCTestCase {
         XCTAssertEqual(episode.intro?.id, 1)
     }
 
+    func testLongColdOpenIsNotMistakenForTheTitles() {
+        // Stargate Atlantis S01E15 as cut on the BluRay: 118 s cold open, 61 s titles, story, 35 s ending.
+        let e15 = [ch(0, "Chapter 01", 0, 118), ch(1, "Chapter 02", 118, 61), ch(2, "Chapter 03", 179, 2404), ch(3, "Chapter 04", 2583, 35)]
+        XCTAssertEqual(e15.intro?.id, 1)
+    }
+
+    func testTitlesFirstWhenNothingPrecedesThem() {
+        let e = [ch(0, "Chapter 1", 0, 60), ch(1, "Chapter 2", 60, 1500), ch(2, "Chapter 3", 1560, 300)]
+        XCTAssertEqual(e.intro?.id, 0)
+    }
+
     func testFilmWithLongUnnamedChaptersHasNoIntro() {
         let film = [ch(0, "Chapter 1", 0, 600), ch(1, "Chapter 2", 600, 900), ch(2, "Chapter 3", 1500, 1200)]
         XCTAssertNil(film.intro)
@@ -43,6 +54,6 @@ final class ChapterIntroTests: XCTestCase {
 
     func testLastChapterIsNeverTheIntro() {
         let two = [ch(0, "Chapter 1", 0, 60), ch(1, "Chapter 2", 60, 60), ch(2, "Chapter 3", 120, 60)]
-        XCTAssertEqual(two.intro?.id, 0)
+        XCTAssertEqual(two.intro?.id, 1, "a title-length chapter after a cold open beats the first chapter")
     }
 }

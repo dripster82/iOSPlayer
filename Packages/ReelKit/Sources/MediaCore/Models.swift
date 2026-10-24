@@ -170,12 +170,18 @@ public extension Array where Element == Chapter {
     /// The chapter the Skip intro button should jump over, or nil.
     ///
     /// Named chapters win. Unnamed ones fall back to shape: TV episodes are usually cut as a cold
-    /// open, the title sequence, then the story, so a short chapter (20 s to 2 min) that starts in the
-    /// first five minutes and is not the last chapter is taken as the intro, but only when every chapter
-    /// is unnamed. Films with a handful of long chapters match nothing.
+    /// open, the title sequence, then the story. Title sequences run 25–95 s; cold opens run longer
+    /// (Stargate Atlantis S01E15: a 118 s cold open, then the 61 s titles). Among chapters that start
+    /// in the first five minutes and are not the last, a title-length chapter that follows another
+    /// chapter is preferred over the first chapter; the first is used only when nothing else fits.
+    /// Only when every chapter is unnamed; films with a handful of long chapters match nothing.
     var intro: Chapter? {
         if let named = first(where: \.looksLikeIntro) { return named }
         guard count >= 3, allSatisfy(\.hasGenericTitle) else { return nil }
-        return dropLast().first { c in c.start < 300 && c.duration >= 20 && c.duration <= 120 }
+        let early = dropLast().filter { $0.start < 300 }
+        let titleLength = early.filter { $0.duration >= 25 && $0.duration <= 95 }
+        if let afterColdOpen = titleLength.first(where: { $0.id != early.first?.id }) { return afterColdOpen }
+        if let first = titleLength.first { return first }
+        return early.first { $0.duration >= 20 && $0.duration <= 120 && $0.id != early.first?.id }
     }
 }
