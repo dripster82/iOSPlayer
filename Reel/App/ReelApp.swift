@@ -15,7 +15,6 @@ struct ReelApp: App {
     @StateObject private var player: PlayerCoordinator
     @StateObject private var downloads: DownloadManager
     @Environment(\.scenePhase) private var scenePhase
-    @State private var lastForegroundScan: Date = .distantPast
 
     init() {
         let container: ModelContainer
@@ -53,6 +52,13 @@ struct ReelApp: App {
 
     /// Incremental scan of every source when the app comes to the foreground: listing is cheap and only
     /// new or changed files go to TMDb. Throttled so switching apps doesn't restart it every time.
+    /// Persisted, so killing and relaunching the app inside ten minutes does not scan again: each scan
+    /// publishes progress every second, which has every screen rebuilding its rows for its duration.
+    private var lastForegroundScan: Date {
+        get { UserDefaults.standard.object(forKey: "reel.lastForegroundScan") as? Date ?? .distantPast }
+        nonmutating set { UserDefaults.standard.set(newValue, forKey: "reel.lastForegroundScan") }
+    }
+
     private func scanForNewMediaIfDue() {
         guard settings.scanOnLaunch, settings.hasCompletedOnboarding, !library.isScanning,
               Date().timeIntervalSince(lastForegroundScan) > 10 * 60, !library.sources().isEmpty else { return }

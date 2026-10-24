@@ -26,7 +26,8 @@ public final class LibraryStore: ObservableObject {
     // Built lazily from one fetch each; dropped on every write and whenever sync applies changes.
     private var watchCache: [String: WatchState]?
     private var favouriteCache: Set<String>?
-    public func invalidateCaches() { watchCache = nil; favouriteCache = nil }
+    public func invalidateCaches() { watchCache = nil; favouriteCache = nil; groupIndexCache = nil }
+    private var groupIndexCache: GroupIndex?
     private var scanTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(container: ModelContainer) {
@@ -366,6 +367,14 @@ public final class LibraryStore: ObservableObject {
         public var series: [(id: Int, group: Group)] = []
     }
     public func groupIndex() -> GroupIndex {
+        // Cached until a write or sync drops it: the Collections screen refreshes on every scan tick
+        // and this pass decodes three arrays per film, a second or more on a 500-film library.
+        if let groupIndexCache { return groupIndexCache }
+        let index = buildGroupIndex()
+        groupIndexCache = index
+        return index
+    }
+    private func buildGroupIndex() -> GroupIndex {
         var byUniverse: [String: [MediaItem]] = [:]
         var logos: [String: String] = [:]
         var bySeries: [Int: (String, String?, [MediaItem])] = [:]
@@ -446,7 +455,11 @@ public final class LibraryStore: ObservableObject {
     /// a film page found no siblings. Run once per launch: one TMDb detail call per film, almost all
     /// of them served from the metadata cache that the original match filled.
     public func backfillCollections(tmdb: TMDbClient) async {
-        let pending = items(kind: .film, includeHidden: true).filter { ($0.collectionCheckedAt == nil || $0.universeCheckedAt == nil) && $0.tmdbID != nil }
+        let pending = items(kind: .film, includeHidden: true).filter { f in
+            f.tmdbID != nil && (f.collectionCheckedAt == nil || f.universeCheckedAt == nil
+                                || (!f.studios.isEmpty && f.studioLogos.isEmpty)            // logos came later than studios
+                                || (f.collectionID != nil && f.collectionPosterPath == nil))  // so did the series poster
+        }
         guard !pending.isEmpty else { return }
         Diagnostics.log("library", "backfilling collections and universes for \(pending.count) films")
         var found = 0
@@ -467,6 +480,7 @@ public final class LibraryStore: ObservableObject {
         }
         try? context.save()
         Diagnostics.log("library", "collections backfilled: \(found) of \(pending.count) films belong to one")
+        groupIndexCache = nil
         if found > 0 { objectWillChange.send() }
     }
 
