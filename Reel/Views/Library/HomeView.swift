@@ -1,11 +1,13 @@
 import SwiftUI
 import MediaCore
 import Library
+import Sync
 
 struct HomeView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var player: PlayerCoordinator
+    @EnvironmentObject private var sync: SyncEngine
     @State private var fixMatchTarget: MediaItem?
     @State private var showReview = false
     /// Rows are computed off the render path: the store publishes on every scan step, and walking every
@@ -52,6 +54,12 @@ struct HomeView: View {
                 }
             }
             .padding(.vertical)
+        }
+        // Pull to refresh: push anything pending, fetch the other devices' progress, favourites and
+        // fixes, then rebuild the rows from the result.
+        .refreshable {
+            await sync.syncNow()
+            refreshRows()
         }
         .navigationTitle("Home")
         .toolbar {

@@ -39,6 +39,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public let pictureInPictureMediaController: VLCPictureInPictureMediaControlling
 
     private weak var pipController: (any VLCPictureInPictureWindowControlling)?
+    /// When the PiP window last closed. VLC's PiP output can take the inline video output down with it
+    /// (closing the window with its X tells the system the content "stopped"), which would otherwise read
+    /// as the stream ending and leave a black player; see `recoverAfterPictureInPicture`.
+    private var pipEndedAt: Date?
+    private var pipEndedRecently: Bool { pipEndedAt.map { Date().timeIntervalSince($0) < 4 } ?? false }
     private var item: PlaybackItem?
     private var options = PlaybackOptions()
     private var tracksLoaded = false
@@ -208,7 +213,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func pictureInPictureDidBecomeAvailable(_ controller: any VLCPictureInPictureWindowControlling) {
         pipController = controller
         controller.stateChangeEventHandler = { [weak self] started in
-            Task { @MainActor in self?.isPictureInPictureActive = started }
+            Task { @MainActor in
+                guard let self else { return }
+                self.isPictureInPictureActive = started
+                if !started { self.pipEndedAt = Date(); self.recoverAfterPictureInPicture() }
+            }
         }
         canStartPictureInPicture = true
     }
@@ -222,6 +231,19 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func stopPictureInPicture() {
         guard isPictureInPictureActive else { return }
         pipController?.stopPictureInPicture()
+    }
+
+    /// If the inline video output did not survive the PiP window closing, reload the same item at the
+    /// current position so the picture comes back without the user restarting the app.
+    private func recoverAfterPictureInPicture() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard var current = item, !isPictureInPictureActive else { return }
+            let broken = !player.hasVideoOut || player.state == .stopped || player.state == .stopping
+            guard broken else { return }
+            current.startAt = max(0, time)
+            load(current, options: options)
+        }
     }
 
     // MARK: - VLCMediaPlayerDelegate
@@ -273,6 +295,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             // end. `hasPlayed` also filters the stop events of the *previous* media, which can land
             // after `load()` has already moved on (stop is asynchronous in libvlc 4).
             guard !stopRequested, hasPlayed else { break }
+            // A stop right after the PiP window closed is VLC tearing down its PiP output, not the end
+            // of the film: hold as paused and let the PiP recovery reload the picture.
+            if isPictureInPictureActive || pipEndedRecently { status = .paused; recoverAfterPictureInPicture(); break }
             status = .ended
             canStartPictureInPicture = false
         case .error: status = .failed("VLC couldn't play this file.")
