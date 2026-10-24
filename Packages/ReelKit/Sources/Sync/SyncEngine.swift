@@ -65,6 +65,12 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         engine = CKSyncEngine(config)
         engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
         dedupeSources()
+        // Devices that enabled sync before library sync existed have a library that never went up.
+        let backfillKey = "reel.sync.libraryBackfill.v1"
+        if !UserDefaults.standard.bool(forKey: backfillKey) {
+            markEverythingPending()
+            UserDefaults.standard.set(true, forKey: backfillKey)
+        }
         pushPendingChanges()
     }
 
@@ -253,7 +259,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             r["updatedAt"] = i.updatedAt ?? Date()
             return r
         case "file":
-            guard let f = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == key })).first, let source = f.source, source.type != .local else { return nil }
+            let name = id.recordName   // syncKey holds the full record name, not just the hash
+            guard let f = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == name })).first, let source = f.source, source.type != .local else { return nil }
             let r = CKRecord(recordType: "File", recordID: id)
             r["sourceID"] = source.id.uuidString; r["relativePath"] = f.relativePath; r["size"] = f.size; r["modified"] = f.modified
             r["duration"] = f.duration; r["videoCodec"] = f.videoCodec; r["resolution"] = f.resolution
