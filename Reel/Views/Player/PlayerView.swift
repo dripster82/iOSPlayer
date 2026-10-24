@@ -154,7 +154,7 @@ struct PlayerContentView: View {
             }
             Spacer()
             HStack(spacing: 44) {
-                circle("backward.end.fill", size: 54) { engine.seek(to: 0) }
+                circle("backward.end.fill", size: 54) { player.playPreviousOrRestart(settings: settings) }
                 Button { engine.togglePlayPause() } label: {
                     Image(systemName: engine.status == .playing ? "pause.fill" : "play.fill").font(.system(size: 32, weight: .bold)).foregroundStyle(.black).frame(width: 74, height: 74).background(.white, in: Circle())
                 }
@@ -165,7 +165,11 @@ struct PlayerContentView: View {
                 TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime) { engine.seek(to: $0) }
                 HStack(spacing: 8) {
                     tag("\(engine.rate.formatted())×", on: engine.rate != 1) { sheet = .speed }
-                    if !engine.chapters.isEmpty { tag("Chapters") { sheet = .chapters } }
+                    if !engine.chapters.isEmpty {
+                        circle("backward.frame", size: 30) { jumpChapter(-1) }
+                        tag("Chapters") { sheet = .chapters }
+                        circle("forward.frame", size: 30) { jumpChapter(+1) }
+                    }
                     tag(fill ? "Fill" : "Fit") { fill.toggle(); engine.setFill(fill) }
                     Spacer()
                     circle("lock") { locked = true; controlsVisible = false }
@@ -244,6 +248,22 @@ struct PlayerContentView: View {
     }
 
     // MARK: - Helpers
+
+    /// Previous = start of the current chapter, or the one before it when already near its start.
+    private func jumpChapter(_ direction: Int) {
+        let chapters = engine.chapters.sorted { $0.start < $1.start }
+        guard !chapters.isEmpty else { return }
+        let t = engine.time
+        let currentIndex = chapters.lastIndex(where: { $0.start <= t + 0.5 }) ?? 0
+        if direction > 0 {
+            guard currentIndex + 1 < chapters.count else { return }
+            engine.seek(to: chapters[currentIndex + 1].start)
+        } else {
+            let current = chapters[currentIndex]
+            if t - current.start > 3 || currentIndex == 0 { engine.seek(to: current.start) } else { engine.seek(to: chapters[currentIndex - 1].start) }
+        }
+        showControls()
+    }
 
     private func showControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }; scheduleHide() }
     private func hideControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false } }

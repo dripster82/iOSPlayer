@@ -399,6 +399,14 @@ public final class LibraryStore: ObservableObject {
             ?? orderedEpisodes(of: show, includingSpecials: true).first
     }
 
+    /// The episode preceding `episode` in season/episode order; specials only precede specials.
+    public func episodeBefore(_ episode: MediaItem) -> MediaItem? {
+        guard let show = episode.show else { return nil }
+        let eps = orderedEpisodes(of: show, includingSpecials: (episode.seasonNumber ?? 0) == 0)
+        guard let i = eps.firstIndex(where: { $0.itemKey == episode.itemKey }), i > 0 else { return nil }
+        return eps[i - 1]
+    }
+
     /// The episode following `episode` in season/episode order; specials only follow specials.
     public func episodeAfter(_ episode: MediaItem) -> MediaItem? {
         guard let show = episode.show else { return nil }

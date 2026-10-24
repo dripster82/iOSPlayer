@@ -14,6 +14,7 @@ final class PlayerCoordinator: ObservableObject {
     @Published private(set) var currentFile: MediaFile?
     @Published var loadError: String?
     @Published private(set) var upNext: MediaItem?
+    @Published private(set) var previous: MediaItem?
     @Published var isLoading = false
     let engine = VLCPlaybackEngine()
     private let library: LibraryStore
@@ -38,6 +39,7 @@ final class PlayerCoordinator: ObservableObject {
         current = item
         currentFile = file
         upNext = item.kind == .episode ? library.episodeAfter(item) : nil
+        previous = item.kind == .episode ? library.episodeBefore(item) : nil
         isPresented = true
         isLoading = true
         loadError = nil
@@ -96,6 +98,11 @@ final class PlayerCoordinator: ObservableObject {
     func playFile(_ file: MediaFile, settings: AppSettings) {
         let temp = MediaItem(itemKey: ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: nil), kind: .film, title: file.fileName, confidence: .unmatched)
         play(temp, file: file, settings: settings)
+    }
+
+    /// Back within the first seconds means "the one before", like a music player; otherwise restart.
+    func playPreviousOrRestart(settings: AppSettings) {
+        if engine.time < 3, let previous { play(previous, settings: settings) } else { engine.seek(to: 0) }
     }
 
     func playNext(settings: AppSettings) {
