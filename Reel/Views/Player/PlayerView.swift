@@ -88,7 +88,7 @@ struct PlayerContentView: View {
     // MARK: - Gestures
 
     private func gestureLayer(size: CGSize) -> some View {
-        TapLayer(
+        GestureLayer(
             onTap: {
                 if locked { withAnimation { showLockHint() } } else { controlsVisible ? hideControls() : showControls() }
             },
@@ -101,38 +101,37 @@ struct PlayerContentView: View {
                 Task { try? await Task.sleep(for: .milliseconds(600)); if skipFlash?.left == left { skipFlash = nil } }
             },
             onHoldBegan: { if !holdingSpeed, !locked { holdingSpeed = true; engine.setRate(2) } },
-            onHoldEnded: { if holdingSpeed { holdingSpeed = false; engine.setRate(1) } }
-        )
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 12).onChanged { v in
-                    guard !locked, !holdingSpeed else { return }
-                    if abs(v.translation.width) > abs(v.translation.height) {
-                        let delta = v.translation.width / size.width * min(engine.duration, 600)
-                        scrubTime = max(0, min(engine.duration, engine.time + delta))
-                        showControls()
+            onHoldEnded: { if holdingSpeed { holdingSpeed = false; engine.setRate(1) } },
+            onDragChanged: { d in
+                guard !locked, !holdingSpeed else { return }
+                if abs(d.translation.width) > abs(d.translation.height) {
+                    let delta = d.translation.width / d.size.width * min(engine.duration, 600)
+                    scrubTime = max(0, min(engine.duration, engine.time + delta))
+                    showControls()
+                } else {
+                    // A full-height drag spans the whole range, measured from where the level was.
+                    let frac = -d.translation.height / d.size.height
+                    if d.start.x < d.size.width / 2 {
+                        let start = dragStartLevel ?? ScreenBrightness.value
+                        dragStartLevel = start
+                        ScreenBrightness.value = start + frac
+                        brightnessOverlay = ScreenBrightness.value
                     } else {
-                        // A full-height drag spans the whole range, measured from where the level was.
-                        let frac = -v.translation.height / size.height
-                        if v.startLocation.x < size.width / 2 {
-                            let start = dragStartLevel ?? ScreenBrightness.value
-                            dragStartLevel = start
-                            ScreenBrightness.value = start + frac
-                            brightnessOverlay = ScreenBrightness.value
-                        } else {
-                            let start = dragStartLevel ?? Double(VolumeControl.current)
-                            dragStartLevel = start
-                            let level = max(0, min(1, start + frac))
-                            volumeOverlay = level
-                            VolumeControl.set(Float(level))
-                        }
+                        let start = dragStartLevel ?? Double(VolumeControl.current)
+                        dragStartLevel = start
+                        let level = max(0, min(1, start + frac))
+                        volumeOverlay = level
+                        VolumeControl.set(Float(level))
                     }
-                }.onEnded { _ in
-                    if let t = scrubTime { engine.seek(to: t); scrubTime = nil }
-                    dragStartLevel = nil
-                    Task { try? await Task.sleep(for: .milliseconds(700)); volumeOverlay = nil; brightnessOverlay = nil }
                 }
-            )
-            .simultaneousGesture(MagnificationGesture().onEnded { s in guard !locked else { return }; fill = s > 1; engine.setFill(fill) })
+            },
+            onDragEnded: {
+                if let t = scrubTime { engine.seek(to: t); scrubTime = nil }
+                dragStartLevel = nil
+                Task { try? await Task.sleep(for: .milliseconds(700)); volumeOverlay = nil; brightnessOverlay = nil }
+            },
+            onPinchEnded: { scale in guard !locked else { return }; fill = scale > 1; engine.setFill(fill) }
+        )
     }
 
     // MARK: - Controls
