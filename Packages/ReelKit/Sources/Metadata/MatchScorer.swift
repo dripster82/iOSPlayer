@@ -50,7 +50,7 @@ public enum MatchScorer {
         return Decision(pick: nil, confidence: .unmatched, alternatives: alternatives)
     }
 
-    static func normalise(_ s: String) -> String {
+    public static func normalise(_ s: String) -> String {
         let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).lowercased()
         let stripped = folded.replacingOccurrences(of: #"[^a-z0-9 ]"#, with: " ", options: .regularExpression)
         let words = stripped.split(separator: " ").filter { !["the", "a", "an"].contains($0) }

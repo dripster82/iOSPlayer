@@ -78,7 +78,10 @@ public final class LibraryStore: ObservableObject {
         scanTasks.values.forEach { $0.cancel() }
     }
 
-    public func scan(_ record: SourceRecord, tmdb: TMDbClient?) {
+    public func scan(_ record: SourceRecord, tmdb: TMDbClient?) { scan(record, providers: MetadataProviders(tmdb: tmdb)) }
+    public func scanAll(tmdb: TMDbClient?) { scanAll(providers: MetadataProviders(tmdb: tmdb)) }
+
+    public func scan(_ record: SourceRecord, providers: MetadataProviders) {
         guard scanTasks[record.id] == nil else { return }
         let id = record.id
         let creds = CredentialStore.shared.load(for: id)
@@ -87,7 +90,7 @@ public final class LibraryStore: ObservableObject {
         let assertion = BackgroundAssertion(name: "Reel scan \(record.name)")
         scanTasks[id] = Task { [weak self] in
             do {
-                try await scanner.scan(sourceID: id, credentials: creds, tmdb: tmdb) { p in
+                try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
                     Task { @MainActor [weak self] in self?.scanProgress[id] = p }
                 }
             } catch is CancellationError {
@@ -103,7 +106,7 @@ public final class LibraryStore: ObservableObject {
         }
     }
 
-    public func scanAll(tmdb: TMDbClient?) { sources().forEach { scan($0, tmdb: tmdb) } }
+    public func scanAll(providers: MetadataProviders) { sources().forEach { scan($0, providers: providers) } }
 
     // MARK: - Items
 

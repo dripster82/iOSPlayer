@@ -73,6 +73,12 @@ public actor TMDbClient {
         return page.results
     }
 
+    /// The TMDb show carrying a given TheTVDB id, if TMDb knows it.
+    public func findShow(tvdbID: Int) async throws -> TMDbShowSummary? {
+        let found: TMDbFindResult = try await get("find/\(tvdbID)", [URLQueryItem(name: "external_source", value: "tvdb_id")], label: "find")
+        return found.tvResults.first
+    }
+
     // MARK: - Details
 
     public func movie(id: Int) async throws -> TMDbMovieDetail {

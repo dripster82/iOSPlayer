@@ -637,6 +637,9 @@ Every failure maps to one of a small set of user-facing cards, each with a recov
 |---|---|---|
 | MobileVLCKit 3.7.3 (VideoLAN binary, dynamic xcframework, fetched by `Scripts/fetch-vlckit.sh`; no SwiftPM package exists) | Playback | LGPL 2.1 |
 | AMSMB2 4.x | SMB browsing | MIT |
+| AniDB titles dump (anidb.net/api/anime-titles.xml.gz) | Anime title recognition, offline | AniDB non-commercial terms; attribution in Settings |
+| Anime-Lists (github.com/Anime-Lists/anime-lists) | AniDB → TMDb season/episode mapping | Public data file; attribution in Settings |
+| TheTVDB v4 API (user's own project key) | Fallback show search bridged to TMDb | TheTVDB attribution required; shown in Settings |
 | Nuke or own ImageLoader | Image caching | MIT |
 | swift-log | Logging | Apache 2.0 |
 | KeychainAccess | Keychain wrapper | MIT |

@@ -16,17 +16,24 @@ struct SettingsView: View {
                 SecureField("TMDb API key (v3)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                     // A v3 key is 32 hex characters. The moment a complete one lands, match everything scanned without it.
                     .onChange(of: settings.tmdbAPIKey) { _, key in
-                        if key.count == 32, library.unmatchedFileCount() > 0 { library.scanAll(tmdb: settings.tmdb) }
+                        if key.count == 32, library.unmatchedFileCount() > 0 { library.scanAll(providers: settings.providers) }
                     }
                 if library.unmatchedFileCount() > 0, settings.tmdb != nil {
-                    Button("Match \(library.unmatchedFileCount()) unmatched files now") { library.scanAll(tmdb: settings.tmdb) }
+                    Button("Match \(library.unmatchedFileCount()) unmatched files now") { library.scanAll(providers: settings.providers) }
+                }
+                Toggle(isOn: $settings.animeMatching) {
+                    VStack(alignment: .leading) { Text("Anime matching"); Text("AniDB titles + Anime-Lists map fansub names and absolute episode numbers to TMDb. No key needed.").font(.caption).foregroundStyle(.secondary) }
+                }
+                SecureField("TheTVDB API key (optional)", text: $settings.tvdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                if !settings.tvdbAPIKey.isEmpty {
+                    SecureField("TheTVDB subscriber PIN (optional)", text: $settings.tvdbPIN).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
                 Button("How do I get a key?") { showKeyHelp = true }
                 Picker("Metadata language", selection: $settings.metadataLanguage) {
                     ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }
                 }
             } header: { Text("Metadata") } footer: {
-                Text(settings.tmdbAPIKey.isEmpty ? "Required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb.")
+                Text(settings.tmdbAPIKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information.")
             }
 
             Section("Playback") {
@@ -155,6 +162,18 @@ struct AttributionView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("TMDb").font(.headline)
                     Text("This product uses the TMDb API but is not endorsed or certified by TMDb. Film and TV metadata, posters, backdrops and cast information are provided by The Movie Database (themoviedb.org).").font(.footnote)
+                }
+            }
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("AniDB and Anime-Lists").font(.headline)
+                    Text("Anime titles are recognised using the AniDB title database (anidb.net), used under its non-commercial terms, and mapped to TMDb seasons and episodes with the community Anime-Lists project (github.com/Anime-Lists/anime-lists).").font(.footnote)
+                }
+            }
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("TheTVDB").font(.headline)
+                    Text("When a TheTVDB key is set, show lookups that TMDb cannot resolve use metadata provided by TheTVDB (thetvdb.com). Please consider contributing to TheTVDB if you find it useful.").font(.footnote)
                 }
             }
             Section {

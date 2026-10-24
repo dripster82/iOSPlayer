@@ -39,7 +39,7 @@ enum BackgroundScans {
             schedule(after: 15 * 60)
             return
         }
-        library.scanAll(tmdb: settings.tmdb)
+        library.scanAll(providers: settings.providers)
         await library.waitForScans()
         let finished = library.unmatchedFileCount() == 0
         task.setTaskCompleted(success: true)

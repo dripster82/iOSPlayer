@@ -15,6 +15,22 @@ struct Matcher {
 
     let context: ModelContext
     let tmdb: TMDbClient
+    var tvdb: TVDBClient? = nil
+    var anidb: AniDBTitles? = nil
+    var animeLists: AnimeLists? = nil
+
+    init(context: ModelContext, tmdb: TMDbClient) {
+        self.context = context
+        self.tmdb = tmdb
+    }
+
+    init(context: ModelContext, tmdb: TMDbClient, providers: MetadataProviders) {
+        self.context = context
+        self.tmdb = tmdb
+        tvdb = providers.tvdb
+        anidb = providers.anidb
+        animeLists = providers.animeLists
+    }
 
     /// Review files are tried too, using the classifier's guess, but only an unambiguous (autoHigh)
     /// result is accepted for them; anything weaker stays in Needs Review.
@@ -32,24 +48,30 @@ struct Matcher {
             case .episode, .show:
                 guard let s = parsed.season, let e = parsed.episode else { return markReview(file) }
                 let showID: Int
+                var season = s, episode = e
                 var confidence: MatchConfidence = .autoHigh
                 if let forced = override?.forcedTMDbID { showID = forced; confidence = .manual }
+                else if let anime = await resolveAnime(parsed) {
+                    // AniDB knows the title exactly and Anime-Lists says where it sits on TMDb.
+                    showID = anime.tmdbShow; season = anime.season; episode = anime.episode
+                }
                 else {
                     let results = try await searchShowsShortening(parsed)
                     let d = MatchScorer.decideShow(results, parsed: parsed)
-                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
-                    showID = pick.id
-                    confidence = d.confidence
+                    if let pick = d.pick, !isReview || d.confidence == .autoHigh { showID = pick.id; confidence = d.confidence }
+                    else if let viaTVDB = try await resolveShowViaTVDB(parsed) { showID = viaTVDB; confidence = .autoLow }
+                    else { return markReview(file) }
                 }
                 let show = try await upsertShow(id: showID, confidence: confidence)
-                let episode = try await upsertEpisode(show: show, season: s, episode: e)
-                file.item = episode
+                let episodeItem = try await upsertEpisode(show: show, season: season, episode: episode)
+                file.item = episodeItem
                 file.classificationRaw = confidence == .autoLow ? "episode-low" : "episode"
                 return .matched
             case .film:
                 let movieID: Int
                 var confidence: MatchConfidence = .autoHigh
                 if let forced = override?.forcedTMDbID { movieID = forced; confidence = .manual }
+                else if let animeFilm = await resolveAnimeFilm(parsed) { movieID = animeFilm }
                 else {
                     let results = try await tmdb.searchMovies(query: parsed.title, year: parsed.year)
                     let d = MatchScorer.decideMovie(results, parsed: parsed)
@@ -79,6 +101,65 @@ struct Matcher {
             words.removeLast()
             query = words.joined(separator: " ")
         }
+    }
+
+    // MARK: - Anime (AniDB titles + Anime-Lists → TMDb)
+
+    /// Titles to try against AniDB. "Title" with season 2 is usually a separate AniDB entry called
+    /// "Title 2nd Season" / "Title II" / "Title Season 2"; the plain title would map to season 1.
+    private func animeCandidates(_ parsed: ParsedName) -> [String] {
+        let t = parsed.title
+        guard let s = parsed.season, s >= 2 else { return [t] }
+        let ordinal = ["", "", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"][min(s, 9)]
+        let roman = ["", "", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"][min(s, 9)]
+        return ["\(t) \(ordinal) Season", "\(t) Season \(s)", "\(t) \(roman)", "\(t) \(s)", "\(t) Part \(s)"]
+    }
+
+    private func resolveAnime(_ parsed: ParsedName) async -> AnimeLists.Entry.Target? {
+        guard let anidb, let animeLists, !parsed.title.isEmpty, let e = parsed.episode else { return nil }
+        let anidbSeason = parsed.season == 0 ? 0 : 1
+        for candidate in animeCandidates(parsed) {
+            var targets: [AnimeLists.Entry.Target] = []
+            for hit in await anidb.lookup(candidate) {
+                if let entry = await animeLists.entry(forAniDB: hit.aid), let target = entry.resolve(anidbSeason: anidbSeason, episode: e) {
+                    targets.append(target)
+                }
+            }
+            // Two different shows sharing a synonym is ambiguous; one show (even via several entries) is fine.
+            let shows = Set(targets.map(\.tmdbShow))
+            if shows.count == 1 { return targets[0] }
+            if shows.count > 1 { return nil }
+        }
+        return nil
+    }
+
+    private func resolveAnimeFilm(_ parsed: ParsedName) async -> Int? {
+        guard let anidb, let animeLists, !parsed.title.isEmpty else { return nil }
+        let ids = await withTaskGroup(of: Int?.self) { group -> Set<Int> in
+            for hit in await anidb.lookup(parsed.title) {
+                group.addTask { await animeLists.entry(forAniDB: hit.aid)?.tmdbMovie }
+            }
+            var out = Set<Int>()
+            for await id in group { if let id { out.insert(id) } }
+            return out
+        }
+        return ids.count == 1 ? ids.first : nil
+    }
+
+    // MARK: - TheTVDB fallback
+
+    /// When TMDb's search draws a blank, ask TheTVDB and bridge back to TMDb through the remote id
+    /// TheTVDB stores, or TMDb's own /find by TheTVDB id. Items stay TMDb-backed either way.
+    private func resolveShowViaTVDB(_ parsed: ParsedName) async throws -> Int? {
+        guard let tvdb, !parsed.title.isEmpty else { return nil }
+        let results = try await tvdb.searchSeries(query: parsed.title, year: parsed.year)
+        let wanted = MatchScorer.normalise(parsed.title)
+        let ordered = results.sorted { (MatchScorer.normalise($0.name) == wanted ? 0 : 1) < (MatchScorer.normalise($1.name) == wanted ? 0 : 1) }
+        for series in ordered.prefix(3) {
+            if let id = series.tmdbID { return id }
+            if let found = try? await tmdb.findShow(tvdbID: series.id) { return found.id }
+        }
+        return nil
     }
 
     private func markReview(_ file: MediaFile) -> Outcome {

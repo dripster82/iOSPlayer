@@ -81,11 +81,11 @@ struct HomeView: View {
         if !scanning, unmatched > 0 {
             if let err = library.lastMatchError {
                 Banner(colour: .red, text: "\(unmatched) files not matched. Last error: \(err)") {
-                    Button("Retry") { library.scanAll(tmdb: settings.tmdb) }.disabled(settings.tmdb == nil)
+                    Button("Retry") { library.scanAll(providers: settings.providers) }.disabled(settings.tmdb == nil)
                 }
             } else {
                 Banner(colour: .yellow, text: settings.tmdb == nil ? "\(unmatched) files scanned. Add a TMDb key in Settings to match them." : "\(unmatched) files scanned but not matched yet.") {
-                    if settings.tmdb != nil { Button("Match now") { library.scanAll(tmdb: settings.tmdb) } }
+                    if settings.tmdb != nil { Button("Match now") { library.scanAll(providers: settings.providers) } }
                     else { NavigationLink("Settings") { SettingsView() } }
                 }
             }

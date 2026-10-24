@@ -1,5 +1,6 @@
 import SwiftUI
 import Metadata
+import Library
 
 /// User preferences. Everything here is per-device; nothing syncs.
 /// `@Published` + `didSet` rather than `@AppStorage`, because `@AppStorage` doesn't notify an ObservableObject's subscribers.
@@ -17,6 +18,9 @@ final class AppSettings: ObservableObject {
     private let d = UserDefaults.standard
 
     @Published var tmdbAPIKey: String { didSet { d.set(tmdbAPIKey, forKey: "tmdbAPIKey") } }
+    @Published var tvdbAPIKey: String { didSet { d.set(tvdbAPIKey, forKey: "tvdbAPIKey") } }
+    @Published var tvdbPIN: String { didSet { d.set(tvdbPIN, forKey: "tvdbPIN") } }
+    @Published var animeMatching: Bool { didSet { d.set(animeMatching, forKey: "animeMatching") } }
     @Published var metadataLanguage: String { didSet { d.set(metadataLanguage, forKey: "metadataLanguage") } }
     @Published var hardwareDecoding: Bool { didSet { d.set(hardwareDecoding, forKey: "hardwareDecoding") } }
     @Published var networkCachingMS: Int { didSet { d.set(networkCachingMS, forKey: "networkCachingMS") } }
@@ -33,6 +37,9 @@ final class AppSettings: ObservableObject {
 
     init() {
         tmdbAPIKey = d.string(forKey: "tmdbAPIKey") ?? ""
+        tvdbAPIKey = d.string(forKey: "tvdbAPIKey") ?? ""
+        tvdbPIN = d.string(forKey: "tvdbPIN") ?? ""
+        animeMatching = d.object(forKey: "animeMatching") as? Bool ?? true
         metadataLanguage = d.string(forKey: "metadataLanguage") ?? "en-GB"
         hardwareDecoding = d.object(forKey: "hardwareDecoding") as? Bool ?? true
         networkCachingMS = d.object(forKey: "networkCachingMS") as? Int ?? 1500
@@ -53,6 +60,21 @@ final class AppSettings: ObservableObject {
         guard !tmdbAPIKey.isEmpty else { return nil }
         let region = metadataLanguage.split(separator: "-").count > 1 ? String(metadataLanguage.split(separator: "-")[1]) : "GB"
         return TMDbClient(apiKey: tmdbAPIKey, language: metadataLanguage, region: region)
+    }
+
+    /// nil until the user has entered a TheTVDB project key.
+    var tvdb: TVDBClient? {
+        guard !tvdbAPIKey.isEmpty else { return nil }
+        return TVDBClient(apiKey: tvdbAPIKey, pin: tvdbPIN)
+    }
+
+    /// Shared so the AniDB and Anime-Lists indexes load once per launch, not once per scan.
+    private static let anidb = AniDBTitles()
+    private static let animeLists = AnimeLists()
+
+    /// What the matcher may consult: TMDb (required for anything), TheTVDB if keyed, AniDB + Anime-Lists if enabled.
+    var providers: MetadataProviders {
+        MetadataProviders(tmdb: tmdb, tvdb: tvdb, anidb: animeMatching ? Self.anidb : nil, animeLists: animeMatching ? Self.animeLists : nil)
     }
 
     static let languages: [(code: String, name: String)] = [

@@ -181,3 +181,10 @@ public struct TMDbSeasonDetail: Decodable, Sendable {
     public var episodes: [TMDbEpisode]
     enum CodingKeys: String, CodingKey { case id, name, overview, episodes; case seasonNumber = "season_number"; case posterPath = "poster_path" }
 }
+
+/// `/find/{id}` response: TMDb entries matching an external (TheTVDB, IMDb) id.
+public struct TMDbFindResult: Decodable, Sendable {
+    public var tvResults: [TMDbShowSummary]
+    public var movieResults: [TMDbMovieSummary]
+    enum CodingKeys: String, CodingKey { case tvResults = "tv_results"; case movieResults = "movie_results" }
+}

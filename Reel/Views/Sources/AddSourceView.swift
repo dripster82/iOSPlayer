@@ -193,7 +193,7 @@ struct AddSourceView: View {
     private func save() {
         do {
             let record = try library.addSource(config, credentials: credentials, folderRules: picked.map { ($0.key, $0.value) })
-            library.scan(record, tmdb: settings.tmdb)
+            library.scan(record, providers: settings.providers)
             onComplete?()
             dismiss()
         } catch { self.error = error.localizedDescription }

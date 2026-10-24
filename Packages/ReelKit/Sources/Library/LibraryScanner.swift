@@ -28,7 +28,7 @@ public actor LibraryScanner {
 
     public typealias ProgressHandler = @Sendable (ScanProgress) -> Void
 
-    public func scan(sourceID: UUID, credentials: Credentials?, tmdb: TMDbClient?, progress: ProgressHandler? = nil) async throws {
+    public func scan(sourceID: UUID, credentials: Credentials?, providers: MetadataProviders, progress: ProgressHandler? = nil) async throws {
         guard let record = try fetchSource(sourceID) else { throw SourceError.notFound(sourceID.uuidString) }
         var report = ScanProgress(sourceID: sourceID, sourceName: record.name, filesSeen: 0, filesNew: 0, matched: 0, needsReview: 0, phase: .connecting)
         progress?(report)
@@ -99,10 +99,10 @@ public actor LibraryScanner {
         }
         try modelContext.save()
 
-        if let tmdb {
+        if let tmdb = providers.tmdb {
             report.phase = .matching
             progress?(report)
-            let matcher = Matcher(context: modelContext, tmdb: tmdb)
+            let matcher = Matcher(context: modelContext, tmdb: tmdb, providers: providers)
             // Review files are tried too when the classifier had a guess; the matcher only accepts a sure hit for them.
             for file in record.files where file.item == nil && !file.ignored && !file.reviewed && (file.classificationRaw != "review" || file.guessKindRaw != nil) {
                 try Task.checkCancellation()

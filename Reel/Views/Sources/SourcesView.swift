@@ -26,7 +26,7 @@ struct SourcesView: View {
                 Text("Passwords are kept in the device Keychain and never synced.")
             }
             Section("Library scan") {
-                Button { library.scanAll(tmdb: settings.tmdb) } label: { Label("Refresh all sources", systemImage: "arrow.clockwise") }
+                Button { library.scanAll(providers: settings.providers) } label: { Label("Refresh all sources", systemImage: "arrow.clockwise") }
                     .disabled(library.sources().isEmpty)
                 Toggle("Scan on mobile data", isOn: $settings.scanOnCellular)
             }
@@ -69,9 +69,9 @@ struct SourceDetailView: View {
         List {
             Section {
                 switch source.status {
-                case .offline: Banner(colour: .red, text: "Can't reach \(source.host). Last scan \(source.lastScan?.formatted(.relative(presentation: .named)) ?? "never").") { Button("Retry") { library.scan(source, tmdb: settings.tmdb) } }
+                case .offline: Banner(colour: .red, text: "Can't reach \(source.host). Last scan \(source.lastScan?.formatted(.relative(presentation: .named)) ?? "never").") { Button("Retry") { library.scan(source, providers: settings.providers) } }
                 case .authFailed: Banner(colour: .red, text: "Password rejected.") { Button("Edit") { editing = true } }
-                default: Banner(colour: .green, text: "\(source.type.displayName) · \(source.host.isEmpty ? source.name : source.host)") { Button(library.isScanning(source.id) ? "Scanning…" : "Rescan") { library.scan(source, tmdb: settings.tmdb) }.disabled(library.isScanning(source.id)) }
+                default: Banner(colour: .green, text: "\(source.type.displayName) · \(source.host.isEmpty ? source.name : source.host)") { Button(library.isScanning(source.id) ? "Scanning…" : "Rescan") { library.scan(source, providers: settings.providers) }.disabled(library.isScanning(source.id)) }
                 }
             }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
 

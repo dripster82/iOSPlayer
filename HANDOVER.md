@@ -56,6 +56,8 @@ Reel/                   SwiftUI app target
 Packages/ReelKit/       ONE Swift package, SIX modules (keeps Xcode happy, lets pure modules test on any platform)
   Sources/MediaCore     Models.swift, FilenameParser.swift, Classifier.swift, ItemKey.swift, Formatting.swift   — pure Swift
   Sources/Metadata      TMDbClient, TMDbModels, MetadataCache, RateLimiter, ArtworkURL, MatchScorer          — Foundation only
+                        TVDBClient (v4, optional key), AniDBTitles (offline titles dump), AnimeLists (AniDB→TMDb
+                        season/episode mapping), Gunzip (Apple zlib; AniDB dump is .xml.gz)
   Sources/MediaSources  MediaSource (protocol, SourceConfig, SourceFactory, withRetries), LocalSource,
                         WebDAVSource (+PropfindParser), SMBSource (#if canImport(AMSMB2)), CredentialStore, SourceDiscovery
   Sources/Playback      PlaybackState (protocol + PlaybackItem/Options), VLCPlaybackEngine, NowPlayingBridge
@@ -218,7 +220,13 @@ Phase 2 remainder
 
 Phase 3
 - [ ] OpenSubtitles search/download in the subtitle sheet (confirmation step, daily quota).
-- [ ] TheTVDB episode ordering fallback; Fanart.tv clear logos on the hero.
+- [x] Metadata providers (24 Oct): `MetadataProviders` bundles TMDb + optional TheTVDB + AniDB/Anime-Lists.
+      Matcher order for episodes: forced override → AniDB exact title (incl. "2nd Season"/"II"/"Part 2"
+      candidates) → Anime-Lists `tmdbtv`/`tmdbseason`/`tmdboffset` → TMDb search (shortening) → TheTVDB
+      search bridged to TMDb via remote ids or `/find`. Items are always TMDb-backed. AniDB needs no key
+      (daily dump, cached weekly in Caches/metadata/anidb-titles.json; ~2 MB download); TheTVDB needs the
+      user's v4 project key (Settings). Toggle "Anime matching" in Settings.
+- [ ] Fanart.tv clear logos on the hero.
 - [ ] Duplicate detection UI ("2 versions" badge exists via `files.count > 1`; add preferred-version persistence).
 - [ ] FTP/SFTP/NFS/DLNA browsing (`UnsupportedSource` placeholders exist; VLC already plays their URLs).
 - [ ] Playlists / Up Next queue beyond next-episode.

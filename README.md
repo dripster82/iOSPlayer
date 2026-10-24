@@ -93,7 +93,8 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | Sources, Add Source (discovered/manual/local), folder tags, file browser | Done |
 | Needs Review, Fix Match, Settings, Licences, Attribution | Done |
 | FTP/SFTP/NFS/DLNA browsing | Not yet (greyed out in Add Source) |
-| OpenSubtitles search, TheTVDB, Fanart.tv | Not yet |
+| Anime matching (AniDB titles + Anime-Lists → TMDb), TheTVDB fallback (optional key) | Done |
+| OpenSubtitles search, Fanart.tv | Not yet |
 | Picture in Picture, scrub thumbnails | Not yet (phase 4) |
 | Background scan continuation (background task + BGProcessingTask) | Done |
 
