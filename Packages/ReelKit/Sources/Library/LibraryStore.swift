@@ -305,7 +305,16 @@ public final class LibraryStore: ObservableObject {
         ws.updatedAt = Date()
         ws.deviceID = deviceID
         ws.pendingSync = true
-        if duration > 0, position / duration >= 0.95 { ws.watched = true }
+        if duration > 0 {
+            let fraction = position / duration
+            if fraction >= 0.95 {
+                ws.watched = true
+            } else if fraction > 0.02 {
+                // Replaying something already watched and stopping part-way puts it back into
+                // Continue Watching; the tick returns once it is finished again.
+                ws.watched = false
+            }
+        }
         try? context.save()
         notifySync()
     }
