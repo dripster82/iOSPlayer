@@ -125,8 +125,33 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // VLC keeps reporting the old position for a few ticks after a seek; don't let those drag the
         // scrubber back before the jump lands.
         ignoreTicksUntil = Date().addingTimeInterval(0.6)
+        startSeekWatchdog(target: clamped)
     }
     private var ignoreTicksUntil = Date.distantPast
+    private var lastTickAt = Date.distantPast
+    private var seekWatchdog: Task<Void, Never>?
+
+    /// Seeking over SMB with libvlc 4 sometimes never comes back: the player sits in "buffering" and no
+    /// time tick follows. If nothing has ticked a few seconds after a seek, try the seek another way;
+    /// if that fails too, reload the stream at the target, which always works.
+    private func startSeekWatchdog(target: TimeInterval) {
+        seekWatchdog?.cancel()
+        let issuedAt = Date()
+        seekWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled, self.status != .paused, self.status != .idle, self.status != .ended else { return }
+            if self.lastTickAt < issuedAt {
+                if self.duration > 0 { self.player.position = target / self.duration } else { self.player.time = VLCTime(int: Int32(target * 1000)) }
+                self.player.play()
+            }
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, self.status != .paused, self.status != .idle, self.status != .ended else { return }
+            if self.lastTickAt < issuedAt, var current = self.item {
+                current.startAt = target
+                self.load(current, options: self.options)
+            }
+        }
+    }
 
     public func skip(by seconds: TimeInterval) { seek(to: time + seconds) }
 
@@ -173,6 +198,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func stop() {
+        seekWatchdog?.cancel()
         if player.state != .stopped {
             stopRequested = true
             player.stop()
@@ -341,6 +367,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func handleTimeChange() {
         // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
         let now = TimeInterval(player.time.intValue) / 1000
+        lastTickAt = Date()
+        if status == .buffering { setStatus(.playing) }
         if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
