@@ -14,6 +14,13 @@ struct SettingsView: View {
         Form {
             Section {
                 SecureField("TMDb API key (v3)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    // A v3 key is 32 hex characters. The moment a complete one lands, match everything scanned without it.
+                    .onChange(of: settings.tmdbAPIKey) { _, key in
+                        if key.count == 32, library.unmatchedFileCount() > 0 { library.scanAll(tmdb: settings.tmdb) }
+                    }
+                if library.unmatchedFileCount() > 0, settings.tmdb != nil {
+                    Button("Match \(library.unmatchedFileCount()) unmatched files now") { library.scanAll(tmdb: settings.tmdb) }
+                }
                 Button("How do I get a key?") { showKeyHelp = true }
                 Picker("Metadata language", selection: $settings.metadataLanguage) {
                     ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }

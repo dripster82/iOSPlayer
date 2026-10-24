@@ -7,34 +7,44 @@ import Metadata
 /// Turns a classified `MediaFile` into a `MediaItem` via TMDb, honouring any `ItemOverride`.
 /// Runs inside the Scanner's model actor; not thread-safe on its own.
 struct Matcher {
-    enum Outcome { case matched, review, skipped }
+    enum Outcome: Equatable {
+        case matched, review
+        /// Left for the next scan. Carries the reason so the UI can show why nothing matched.
+        case skipped(String?)
+    }
 
     let context: ModelContext
     let tmdb: TMDbClient
 
+    /// Review files are tried too, using the classifier's guess, but only an unambiguous (autoHigh)
+    /// result is accepted for them; anything weaker stays in Needs Review.
     func match(_ file: MediaFile) async -> Outcome {
         let parsed = ParsedName(title: file.guessTitle ?? "", year: file.guessYear, season: file.guessSeason, episode: file.guessEpisode)
         let fileKey = ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: file.duration)
         let override = try? fetchOverride(fileKey)
-        if override?.hidden == true { file.ignored = true; return .skipped }
+        if override?.hidden == true { file.ignored = true; return .skipped(nil) }
 
-        let kind: MediaKind = override?.forcedKind ?? (file.classificationRaw == "episode" ? .episode : .film)
+        let isReview = file.classificationRaw == "review"
+        let guessed: MediaKind? = isReview ? file.guessKindRaw.flatMap(MediaKind.init(rawValue:)) : (file.classificationRaw == "episode" ? .episode : .film)
+        guard let kind = override?.forcedKind ?? guessed, !parsed.title.isEmpty || override?.forcedTMDbID != nil else { return markReview(file) }
         do {
             switch kind {
             case .episode, .show:
                 guard let s = parsed.season, let e = parsed.episode else { return markReview(file) }
                 let showID: Int
-                if let forced = override?.forcedTMDbID { showID = forced }
+                var confidence: MatchConfidence = .autoHigh
+                if let forced = override?.forcedTMDbID { showID = forced; confidence = .manual }
                 else {
                     let results = try await tmdb.searchShows(query: parsed.title, year: parsed.year)
                     let d = MatchScorer.decideShow(results, parsed: parsed)
-                    guard let pick = d.pick else { return markReview(file) }
+                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
                     showID = pick.id
-                    if d.confidence == .autoLow { file.classificationRaw = "episode-low" }
+                    confidence = d.confidence
                 }
-                let show = try await upsertShow(id: showID, confidence: override != nil ? .manual : (file.classificationRaw == "episode-low" ? .autoLow : .autoHigh))
+                let show = try await upsertShow(id: showID, confidence: confidence)
                 let episode = try await upsertEpisode(show: show, season: s, episode: e)
                 file.item = episode
+                file.classificationRaw = confidence == .autoLow ? "episode-low" : "episode"
                 return .matched
             case .film:
                 let movieID: Int
@@ -43,17 +53,18 @@ struct Matcher {
                 else {
                     let results = try await tmdb.searchMovies(query: parsed.title, year: parsed.year)
                     let d = MatchScorer.decideMovie(results, parsed: parsed)
-                    guard let pick = d.pick else { return markReview(file) }
+                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
                     movieID = pick.id
                     confidence = d.confidence
                 }
                 let film = try await upsertFilm(id: movieID, confidence: confidence)
                 file.item = film
+                file.classificationRaw = "film"
                 return .matched
             }
         } catch {
             // Network or decode failure: leave the file pending so the next scan retries.
-            return .skipped
+            return .skipped(error.localizedDescription)
         }
     }
 

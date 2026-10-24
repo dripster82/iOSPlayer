@@ -132,6 +132,22 @@ cd Packages/ReelKit && swift test --filter 'MediaCoreTests|MetadataTests'
 ```
 or Product → Test in Xcode. 27 tests, all passing as of this handover.
 
+## 3.4 First device run (24 Oct 2026, Paul's NAS, 4,297 files)
+
+Pulled the SwiftData store off the phone with `xcrun devicectl device copy from --domain-type appDataContainer
+--domain-identifier uk.co.ketelle.reel --source "Library/Application Support"` and found:
+
+- **Library empty despite a full scan.** The source was scanned before the TMDb key was entered, so the
+  matcher never ran and nothing ever re-matched. Fixed: Home shows an "N files scanned but not matched"
+  banner with *Match now*, Settings matches automatically when a 32-char key lands, and matcher errors now
+  surface in `ScanProgress.lastError` instead of being swallowed.
+- **261 Needs Review, almost all anime fansub names.** Parser now handles `[Group]Title_-_01_(tags)`,
+  `(Hi10)_Title_-_01`, `Title - S03E11v2`, `Title Ep01`, `Episode 0 Title` under a `… Season 2` folder,
+  `2nd Season` in a title, and `OVA/` folders as season 0. `/BDMV/` disc dumps are ignored. Review files
+  with a guess are now tried by the matcher and accepted only on an unambiguous hit.
+- **Fill mode shrank the video to a third.** `scaleFactor` is in pixels, not points. Fill now uses
+  `videoCropGeometry` and is re-applied on layout.
+
 ## 4. Device smoke test (your second task)
 
 Needs: a TMDb v3 API key (free, themoviedb.org → Settings → API), a few MKVs, ideally a NAS with SMB.

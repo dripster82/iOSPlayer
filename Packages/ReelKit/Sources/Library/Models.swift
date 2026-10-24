@@ -90,6 +90,8 @@ public final class MediaFile {
     public var guessYear: Int?
     public var guessSeason: Int?
     public var guessEpisode: Int?
+    /// "film" / "episode": the classifier's best guess for a review file, so the matcher can still try it.
+    public var guessKindRaw: String?
     public var reviewed: Bool
     public var ignored: Bool
     public var addedAt: Date

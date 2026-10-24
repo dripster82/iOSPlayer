@@ -127,13 +127,31 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         currentSubtitleTrack = nil
     }
 
-    /// 0 = fit (VLC default). Fill is approximated by scaling to cover the drawable.
+    private var fillEnabled = false
+
+    /// Fit letterboxes inside the drawable (VLC's default). Fill crops the picture to the drawable's
+    /// aspect ratio so it covers the screen. Scaling was wrong here before: `scaleFactor` works in
+    /// pixels, so a points-based factor shrank the video to a third on a 3× display.
     public func setFill(_ fill: Bool) {
-        guard fill, let view = player.drawable as? PlatformView else { player.scaleFactor = 0; return }
-        let size = player.videoSize
-        guard size.width > 0, size.height > 0 else { player.scaleFactor = 0; return }
-        let scale = max(view.bounds.width / size.width, view.bounds.height / size.height)
-        player.scaleFactor = Float(scale)
+        fillEnabled = fill
+        applyFill()
+    }
+
+    /// Re-applies the current Fit/Fill choice. `VLCVideoView` calls it whenever the drawable is laid out.
+    public func drawableDidLayout() { applyFill() }
+
+    private func applyFill() {
+        player.scaleFactor = 0
+        guard fillEnabled, let view = player.drawable as? PlatformView else { setCropGeometry(nil); return }
+        let w = Int(view.bounds.width.rounded()), h = Int(view.bounds.height.rounded())
+        guard w > 0, h > 0 else { setCropGeometry(nil); return }
+        setCropGeometry("\(w):\(h)")
+    }
+
+    /// VLCKit exposes the crop filter as a C string that libvlc copies on set.
+    private func setCropGeometry(_ geometry: String?) {
+        guard let geometry else { player.videoCropGeometry = nil; return }
+        geometry.withCString { player.videoCropGeometry = UnsafeMutablePointer(mutating: $0) }
     }
 
     // MARK: - VLCMediaPlayerDelegate

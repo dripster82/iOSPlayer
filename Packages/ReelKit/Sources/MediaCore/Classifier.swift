@@ -54,6 +54,8 @@ public enum Classifier {
         let name = lower.split(separator: "/").last.map(String.init) ?? lower
         if name.hasPrefix("sample") || name.contains("-sample.") || name.contains(".sample.") { return true }
         if lower.contains("/extras/") || lower.contains("/featurettes/") || lower.contains("/trailers/") { return true }
+        // Raw disc structures: numbered .m2ts / .vob streams can't be matched to anything.
+        if lower.contains("/bdmv/") || lower.contains("/video_ts/") || lower.contains("/certificate/") { return true }
         if name.hasSuffix("-trailer.mp4") || name.hasSuffix("-trailer.mkv") { return true }
         return false
     }

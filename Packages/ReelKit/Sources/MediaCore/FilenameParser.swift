@@ -34,7 +34,7 @@ public enum FilenameParser {
     // Order matters: the first episode pattern that matches wins.
     private static let episodePatterns: [NSRegularExpression] = [
         // S02E05, s2e5, S02E05E06, S02E05-E06, S02E05-06
-        try! NSRegularExpression(pattern: #"(?i)\bS(\d{1,2})\s?E(\d{1,3})(?:\s?-?\s?E?(\d{1,3}))?\b"#),
+        try! NSRegularExpression(pattern: #"(?i)\bS(\d{1,2})\s?E(\d{1,3})(?:v\d)?(?:\s?-?\s?E?(\d{1,3}))?\b"#),
         // 2x05, 2x05-06
         try! NSRegularExpression(pattern: #"(?i)\b(\d{1,2})x(\d{1,3})(?:-(\d{1,3}))?\b"#),
         // Season 2 Episode 5, Season 2 - Episode 5
@@ -44,8 +44,23 @@ public enum FilenameParser {
     ]
 
     private static let seasonFolderPattern = try! NSRegularExpression(pattern: #"(?i)^(?:Season|Series|S)\s?(\d{1,2})$"#)
+    // "OVA", "OVAs", "Specials", "Extras" folders hold season 0.
+    private static let specialsFolderPattern = try! NSRegularExpression(pattern: #"(?i)^(?:OVAs?|OADs?|Specials?|Extras?)$"#)
     // E05 or 05 - Title or 05. Title, only trusted when the parent folder is a season folder.
     private static let bareEpisodePattern = try! NSRegularExpression(pattern: #"(?i)^(?:E|Ep|Episode\s?)?(\d{1,3})(?:\s*[-._]\s*|\s+)"#)
+
+    // Anime / fansub shapes, tried only when nothing above matched.
+    // "OVA 01", "Special 2" → season 0.
+    private static let specialEpisodePattern = try! NSRegularExpression(pattern: #"(?i)\b(?:OVA|OAD|Special|SP)\s?(\d{1,3})\b"#)
+    // "Ep01", "Ep 01", "Episode 1", "E01" with no season marker. "Ep"/"E" need a zero-padded number so a
+    // home video called "allotment_ep5_final" stays in review rather than becoming S01E05.
+    private static let episodeOnlyPattern = try! NSRegularExpression(pattern: #"(?i)(?:^|\s)(?:Episode\s?(\d{1,3})|Ep\.?\s?(\d{2,3})|E(\d{2,3}))(?:v\d)?\b"#)
+    // "Title - 01", "Title - 01v2", "Title - 01 [1080p]". Absolute numbering; season comes from the name or defaults to 1.
+    private static let dashEpisodePattern = try! NSRegularExpression(pattern: #"(?i)^(.+?)\s+-\s+(\d{1,3})(?:v\d)?(?:\s|$|[\[(])"#)
+    // "2nd Season", "Season 2", "S2" inside a title or folder name.
+    private static let seasonInNamePattern = try! NSRegularExpression(pattern: #"(?i)(?:\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b|\b(?:Complete\s+)?(?:Season|Series)\s?(\d{1,2})\b|\bS(\d{1,2})\b)"#)
+    // "[Group] Title", "(Hi10) Title" — a leading bracketed release group, never a "(2019)" year.
+    private static let leadingGroupPattern = try! NSRegularExpression(pattern: #"^\s*[\[(]([^\]\)]{1,40})[\]\)]\s*"#)
     private static let yearPattern = try! NSRegularExpression(pattern: #"(?<![\dA-Za-z])((?:19|20)\d{2})(?![\dA-Za-z])"#)
 
     /// Tags that end the title and are kept as quality hints.
@@ -57,13 +72,17 @@ public enum FilenameParser {
         "atmos", "truehd", "dts", "dts-hd", "dtshd", "dts-x", "ac3", "eac3", "e-ac3", "ddp", "dd5.1", "dd", "aac", "flac", "opus", "mp3", "5.1", "7.1", "2.0",
         "proper", "repack", "internal", "limited", "extended", "unrated", "directors", "theatrical", "imax", "remastered", "multi", "dual", "subbed", "dubbed",
         "amzn", "nf", "dsnp", "hmax", "atvp", "itunes", "hulu",
+        // Fansub conventions
+        "audio", "dual-audio", "hi10", "hi10p", "bd1080p", "bd720p", "bd480p", "eng", "jap", "jpn", "sub", "subs", "subbed", "uncensored", "batch",
+        "1920x1080", "1280x720", "3840x2160", "720x480",
     ]
 
     public static func parse(relativePath: String) -> ParsedName {
         let components = relativePath.split(separator: "/").map(String.init).filter { !$0.isEmpty }
         guard let fileName = components.last else { return ParsedName(title: "") }
-        let stem = stripExtension(fileName)
-        let parents = Array(components.dropLast())
+        // Underscores are spaces, and a leading "[Group]" is noise, for every pattern below.
+        let stem = stripLeadingGroup(stripExtension(fileName).replacingOccurrences(of: "_", with: " "))
+        let parents = Array(components.dropLast()).map { stripLeadingGroup($0.replacingOccurrences(of: "_", with: " ")) }
 
         var result = ParsedName(title: "")
 
@@ -75,10 +94,9 @@ public enum FilenameParser {
             result.title = clean(String(stem[..<ep.range.lowerBound]))
         }
 
-        // 2. Season folder + bare episode number ("Season 2/05 - Title.mkv").
+        // 2. Season folder + bare episode number ("Season 2/05 - Title.mkv", "OVA/01 - Title.mkv").
         if result.episode == nil, let parent = parents.last,
-           let seasonMatch = seasonFolderPattern.firstMatch(in: parent, range: fullRange(parent)),
-           let season = Int(substring(parent, seasonMatch.range(at: 1))),
+           let season = seasonNumber(ofFolder: parent),
            let epMatch = bareEpisodePattern.firstMatch(in: stem, range: fullRange(stem)),
            let episode = Int(substring(stem, epMatch.range(at: 1))) {
             result.season = season
@@ -86,14 +104,29 @@ public enum FilenameParser {
             result.title = ""  // show title comes from the grandparent folder
         }
 
+        // 2b. Anime / fansub shapes: "Title - 01", "Title Ep01", "OVA 01 - Title", "Episode 0 Title".
+        if result.episode == nil, let ep = matchLooseEpisode(in: stem) {
+            result.season = ep.season
+            result.episode = ep.episode
+            result.title = clean(ep.title)
+            if result.season == nil {
+                // "Title 2nd Season - 01": the season lives in the title or the folder, else assume 1.
+                let split = splitSeason(fromName: result.title)
+                result.title = clean(split.text)
+                result.season = split.season ?? parents.last.flatMap { seasonNumber(ofFolder: $0) ?? splitSeason(fromName: $0).season } ?? 1
+            }
+        }
+
         // 3. Show title from folders when the filename gave none.
         if result.isEpisode {
             var showFolder: String? = parents.last
-            if let p = parents.last, seasonFolderPattern.firstMatch(in: p, range: fullRange(p)) != nil {
+            if let p = parents.last, seasonNumber(ofFolder: p) != nil {
                 showFolder = parents.dropLast().last
             }
             if let showFolder, !isGenericFolder(showFolder) {
-                result.folderTitle = clean(stripYear(showFolder).text)
+                // "My Hero Academia Complete Season 2" names the show and the season.
+                let split = splitSeason(fromName: stripYear(showFolder).text)
+                result.folderTitle = clean(split.text)
                 if result.title.isEmpty { result.title = result.folderTitle ?? "" }
             }
         }
@@ -139,6 +172,45 @@ public enum FilenameParser {
             return EpisodeMatch(season: s, episode: e, end: end, range: r)
         }
         return nil
+    }
+
+    private struct LooseEpisode { var title: String; var season: Int?; var episode: Int }
+
+    /// Fansub shapes. Returns the text before the marker as the title; season is 0 for OVAs, nil otherwise.
+    private static func matchLooseEpisode(in text: String) -> LooseEpisode? {
+        if let m = specialEpisodePattern.firstMatch(in: text, range: fullRange(text)), let e = Int(substring(text, m.range(at: 1))) {
+            return LooseEpisode(title: (text as NSString).substring(to: m.range.location), season: 0, episode: e)
+        }
+        if let m = episodeOnlyPattern.firstMatch(in: text, range: fullRange(text)),
+           let e = (1...3).lazy.compactMap({ Int(substring(text, m.range(at: $0))) }).first {
+            return LooseEpisode(title: (text as NSString).substring(to: m.range.location), season: nil, episode: e)
+        }
+        if let m = dashEpisodePattern.firstMatch(in: text, range: fullRange(text)), let e = Int(substring(text, m.range(at: 2))) {
+            return LooseEpisode(title: substring(text, m.range(at: 1)), season: nil, episode: e)
+        }
+        return nil
+    }
+
+    /// "Season 2", "Series 2", "S2", "OVA" → the season a folder holds, or nil for an ordinary folder.
+    private static func seasonNumber(ofFolder name: String) -> Int? {
+        if let m = seasonFolderPattern.firstMatch(in: name, range: fullRange(name)) { return Int(substring(name, m.range(at: 1))) }
+        if specialsFolderPattern.firstMatch(in: name, range: fullRange(name)) != nil { return 0 }
+        return nil
+    }
+
+    /// Pulls "2nd Season" / "Season 2" / "S2" out of a show name: ("Sword Art Online", 2).
+    private static func splitSeason(fromName name: String) -> (text: String, season: Int?) {
+        guard let m = seasonInNamePattern.firstMatch(in: name, range: fullRange(name)) else { return (name, nil) }
+        let season = (1...3).lazy.compactMap { Int(substring(name, m.range(at: $0))) }.first
+        let text = (name as NSString).replacingCharacters(in: m.range, with: " ")
+        return (text, season)
+    }
+
+    private static func stripLeadingGroup(_ text: String) -> String {
+        guard let m = leadingGroupPattern.firstMatch(in: text, range: fullRange(text)) else { return text }
+        let inner = substring(text, m.range(at: 1))
+        if inner.range(of: #"^(19|20)\d{2}$"#, options: .regularExpression) != nil { return text }
+        return (text as NSString).substring(from: m.range.location + m.range.length)
     }
 
     private static func stripYear(_ text: String) -> (text: String, year: Int?) {
@@ -232,7 +304,8 @@ public enum FilenameParser {
 
     private static func isGenericFolder(_ name: String) -> Bool {
         let n = name.lowercased()
-        return ["tv", "tv shows", "shows", "series", "films", "movies", "video", "videos", "media", "downloads", "complete", "incoming"].contains(n)
+        return ["tv", "tv shows", "shows", "series", "films", "movies", "video", "videos", "media", "downloads", "complete", "incoming",
+                "anime", "torrents", "sort", "2 sort", "to sort", "unsorted", "new", "stream", "bdmv"].contains(n)
     }
 
     private static func stripExtension(_ name: String) -> String {

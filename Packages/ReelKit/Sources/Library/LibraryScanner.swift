@@ -14,6 +14,10 @@ public struct ScanProgress: Sendable, Equatable {
     public var matched: Int
     public var needsReview: Int
     public var phase: Phase
+    /// Files the matcher could not resolve this pass (network/TMDb errors). Retried on the next scan.
+    public var skipped: Int = 0
+    /// The last matcher error, so the UI can say why a library is still empty.
+    public var lastError: String? = nil
     public enum Phase: String, Sendable { case connecting, listing, classifying, matching, done, failed }
 }
 
@@ -99,13 +103,16 @@ public actor LibraryScanner {
             report.phase = .matching
             progress?(report)
             let matcher = Matcher(context: modelContext, tmdb: tmdb)
-            for file in record.files where file.item == nil && !file.ignored && file.classificationRaw != "review" {
+            // Review files are tried too when the classifier had a guess; the matcher only accepts a sure hit for them.
+            for file in record.files where file.item == nil && !file.ignored && !file.reviewed && (file.classificationRaw != "review" || file.guessKindRaw != nil) {
                 try Task.checkCancellation()
                 let outcome = await matcher.match(file)
                 switch outcome {
                 case .matched: report.matched += 1
                 case .review: report.needsReview += 1
-                case .skipped: break
+                case .skipped(let reason):
+                    report.skipped += 1
+                    if let reason { report.lastError = reason }
                 }
                 if (report.matched + report.needsReview) % 10 == 0 { progress?(report); try modelContext.save() }
             }
@@ -121,11 +128,12 @@ public actor LibraryScanner {
     private func apply(_ c: Classification, to file: MediaFile) {
         switch c {
         case .episode(let p):
-            file.classificationRaw = "episode"; fill(file, p)
+            file.classificationRaw = "episode"; file.guessKindRaw = nil; fill(file, p)
         case .film(let p):
-            file.classificationRaw = "film"; fill(file, p)
+            file.classificationRaw = "film"; file.guessKindRaw = nil; fill(file, p)
         case .needsReview(let p, let guess):
             file.classificationRaw = "review"; fill(file, p)
+            file.guessKindRaw = guess?.rawValue
             if guess == nil { file.guessTitle = p.title.isEmpty ? nil : p.title }
         case .ignore:
             file.ignored = true; file.classificationRaw = "ignored"

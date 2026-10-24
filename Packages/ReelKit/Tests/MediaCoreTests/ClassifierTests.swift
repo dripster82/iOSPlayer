@@ -32,4 +32,14 @@ final class ClassifierTests: XCTestCase {
         XCTAssertEqual(Classifier.classify(relativePath: "Films/Film (2019)/sample.mkv", folderTag: nil), .ignore)
         XCTAssertEqual(Classifier.classify(relativePath: "Films/Film (2019)/Extras/deleted.mkv", folderTag: nil), .ignore)
     }
+
+    func testBlurayDiscStructureIsIgnored() {
+        XCTAssertEqual(Classifier.classify(relativePath: "Torrents/2 Sort/[BDMV] Danmachi S2/Danmachi S2 BD-1/BDMV/STREAM/00002.m2ts", folderTag: nil), .ignore)
+    }
+
+    func testFansubDashEpisodeIsEpisodeWithoutFolderHints() {
+        let c = Classifier.classify(relativePath: "Torrents/2 Sort/Tokyo Underground/(Hi10)_Tokyo_Underground_-_01_(480p).mkv", folderTag: nil)
+        guard case .episode(let p) = c else { return XCTFail("expected episode, got \(c)") }
+        XCTAssertEqual(p.title, "Tokyo Underground")
+    }
 }

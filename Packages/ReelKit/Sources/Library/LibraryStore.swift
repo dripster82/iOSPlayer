@@ -106,6 +106,17 @@ public final class LibraryStore: ObservableObject {
         return (try? context.fetch(d)) ?? []
     }
 
+    /// Files the classifier accepted that still have no TMDb item: scanned without a key, or the matcher failed.
+    public func unmatchedFileCount() -> Int {
+        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.item == nil && !$0.ignored && !$0.reviewed && ($0.classificationRaw == "episode" || $0.classificationRaw == "film") })
+        return (try? context.fetchCount(d)) ?? 0
+    }
+
+    /// The last matcher error from any finished scan, if the matcher gave up on files.
+    public var lastMatchError: String? {
+        scanProgress.values.first { $0.phase == .done && $0.skipped > 0 && $0.lastError != nil }?.lastError
+    }
+
     public func filesNeedingReview() -> [MediaFile] {
         let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.reviewed && !$0.ignored }, sortBy: [SortDescriptor(\.relativePath)])
         return (try? context.fetch(d)) ?? []

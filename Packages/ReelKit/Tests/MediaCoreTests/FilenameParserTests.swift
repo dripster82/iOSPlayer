@@ -91,4 +91,62 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertEqual(r.year, 2023)
         XCTAssertFalse(r.isEpisode)
     }
+
+    // MARK: - Anime / fansub shapes (from a real 4,000-file library)
+
+    func testFansubGroupUnderscoreDashEpisode() {
+        let r = p("Torrents/2 Sort/Hataraku Saibou Black/[DB]Hataraku Saibou Black_-_01_(Dual Audio_10bit_1080p_x265).mkv")
+        XCTAssertEqual(r.title, "Hataraku Saibou Black")
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 1)
+        XCTAssertTrue(r.quality.contains("1080p"))
+    }
+
+    func testParenGroupPrefix() {
+        let r = p("Torrents/2 Sort/Tokyo Underground/(Hi10)_Tokyo_Underground_-_01_(480p)_(V-A).mkv")
+        XCTAssertEqual(r.title, "Tokyo Underground")
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 1)
+    }
+
+    func testEpisodeVersionSuffix() {
+        let r = p("Is It Wrong to Try to Pick Up Girls in a Dungeon - S03E11v2 (BDRip 1920x1080 x265 10-bit AAC) [Dual Audio].mkv")
+        XCTAssertEqual(r.title, "Is It Wrong to Try to Pick Up Girls in a Dungeon")
+        XCTAssertEqual(r.season, 3)
+        XCTAssertEqual(r.episode, 11)
+    }
+
+    func testEpPrefixNoSeason() {
+        let r = p("Torrents/2 Sort/[E-D] .Hack Sign/[Exiled-Destiny]_Hack_Sign_Ep01_(55A4696B).mkv")
+        XCTAssertEqual(r.title, "Hack Sign")
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 1)
+    }
+
+    func testOrdinalSeasonInTitle() {
+        let r = p("[Cleo]Sword_Art_Online_Alicization_War_of_Underworld_2nd_Season_-_01_(Dual Audio_10bit_1080p_x265).mkv")
+        XCTAssertEqual(r.title, "Sword Art Online Alicization War of Underworld")
+        XCTAssertEqual(r.season, 2)
+        XCTAssertEqual(r.episode, 1)
+    }
+
+    func testEpisodeWordWithSeasonInShowFolder() {
+        let r = p("Torrents/2 Sort/My Hero Academia Complete Season 2/Episode 0 Hero Notebook.mkv")
+        XCTAssertEqual(r.title, "My Hero Academia")
+        XCTAssertEqual(r.season, 2)
+        XCTAssertEqual(r.episode, 0)
+    }
+
+    func testOVAFolderIsSeasonZero() {
+        let r = p("[kmplx] My Teen Romantic Comedy SNAFU (BD 1080p x265)/S1 - My Teen Romantic Comedy SNAFU/OVA/OVA 01 - We Must Wish Them The Very Best.mkv")
+        XCTAssertEqual(r.title, "My Teen Romantic Comedy SNAFU")
+        XCTAssertEqual(r.season, 0)
+        XCTAssertEqual(r.episode, 1)
+    }
+
+    func testDashYearIsNotAnEpisode() {
+        let r = p("Films/Blade Runner 2049 - 2017.mkv")
+        XCTAssertNil(r.episode)
+        XCTAssertEqual(r.year, 2017)
+    }
 }

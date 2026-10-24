@@ -14,6 +14,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 22) {
                 offlineBanner
                 scanBanner
+                unmatchedBanner
                 let cont = library.continueWatching()
                 ItemRow(title: "Continue Watching", items: cont.map(\.0), wide: true, subtitle: { item in
                     guard let ws = library.watchState(item.itemKey) else { return "" }
@@ -28,7 +29,9 @@ struct HomeView: View {
                     ContentUnavailableView {
                         Label("Your library is empty", systemImage: "film.stack")
                     } description: {
-                        Text(settings.tmdb == nil ? "Add a TMDb API key in Settings, then add a source and scan." : "Add a source and run a scan to fill it.")
+                        Text(settings.tmdb == nil ? "Add a TMDb API key in Settings, then add a source and scan."
+                             : library.unmatchedFileCount() > 0 ? "Your files are scanned but not matched yet. Tap Match now above."
+                             : "Add a source and run a scan to fill it.")
                     } actions: {
                         NavigationLink("Open Sources") { SourcesView() }
                     }.padding(.top, 60)
@@ -69,6 +72,23 @@ struct HomeView: View {
     @ViewBuilder private var scanBanner: some View {
         if let p = library.scanProgress.values.first(where: { $0.phase != .done && $0.phase != .failed }) {
             Banner(colour: .yellow, text: "Scanning \(p.sourceName): \(p.filesSeen) files, \(p.matched) matched") { ProgressView() }
+        }
+    }
+    /// Files were scanned but never matched (no TMDb key at the time, or the matcher hit errors).
+    @ViewBuilder private var unmatchedBanner: some View {
+        let scanning = library.scanProgress.values.contains { $0.phase != .done && $0.phase != .failed }
+        let unmatched = library.unmatchedFileCount()
+        if !scanning, unmatched > 0 {
+            if let err = library.lastMatchError {
+                Banner(colour: .red, text: "\(unmatched) files not matched. Last error: \(err)") {
+                    Button("Retry") { library.scanAll(tmdb: settings.tmdb) }.disabled(settings.tmdb == nil)
+                }
+            } else {
+                Banner(colour: .yellow, text: settings.tmdb == nil ? "\(unmatched) files scanned. Add a TMDb key in Settings to match them." : "\(unmatched) files scanned but not matched yet.") {
+                    if settings.tmdb != nil { Button("Match now") { library.scanAll(tmdb: settings.tmdb) } }
+                    else { NavigationLink("Settings") { SettingsView() } }
+                }
+            }
         }
     }
 }
