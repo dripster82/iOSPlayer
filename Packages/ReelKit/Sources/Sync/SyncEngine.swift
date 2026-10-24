@@ -439,6 +439,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             let r = baseRecord("Source", id)
             r["name"] = s.name; r["type"] = s.typeRaw; r["host"] = s.host; r["port"] = s.port; r["path"] = s.path
             r["useTLS"] = s.useTLS ? 1 : 0; r["username"] = s.username; r["hidden"] = s.hiddenFromLibrary ? 1 : 0
+            r["mac"] = s.macAddress
             r["folderRules"] = Self.list(s.folderRules.map { "\($0.folderPath)|\($0.tagRaw)" })
             r["updatedAt"] = s.updatedAt ?? Date()
             return r
@@ -530,6 +531,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             let s = adopted ?? { let x = SourceRecord(config: config); ctx.insert(x); return x }()
             s.name = config.name; s.typeRaw = config.type.rawValue; s.host = config.host; s.port = config.port; s.path = config.path
             s.useTLS = config.useTLS; s.username = config.username
+            if let mac = r["mac"] as? String, !mac.isEmpty { s.macAddress = mac }
             s.hiddenFromLibrary = ((r["hidden"] as? Int) ?? 0) == 1
             // Folder rules merge by path: remote entries win, local-only entries survive. A remote record with
             // no rules (the other device scans the root) must not wipe this device's folder choices, and in

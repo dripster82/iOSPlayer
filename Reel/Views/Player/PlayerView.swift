@@ -41,7 +41,12 @@ struct PlayerContentView: View {
                 Color.black.ignoresSafeArea()
                 VLCVideoView(engine: engine).ignoresSafeArea()
                 gestureLayer(size: geo.size)
-                if engine.status == .opening || engine.status == .buffering || player.isLoading { ProgressView().controlSize(.large).tint(.white) }
+                if engine.status == .opening || engine.status == .buffering || player.isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large).tint(.white)
+                        if player.isLoading, let m = player.loadingMessage { Text(m).font(.footnote).foregroundStyle(.white.opacity(0.8)) }
+                    }
+                }
                 if let f = skipFlash { skipFlashView(left: f.left, size: geo.size).id(f.id) }
                 if holdingSpeed { flag("2×") }
                 if let v = volumeOverlay { verticalMeter(v, icon: "speaker.wave.2.fill").position(x: geo.size.width * 0.86, y: geo.size.height / 2) }
@@ -72,7 +77,7 @@ struct PlayerContentView: View {
             // (its controller allows automatic start from inline); `startPictureInPicture` is a no-op then.
             switch phase {
             case .background where engine.status == .playing: engine.startPictureInPicture()
-            case .active: engine.stopPictureInPicture()
+            case .active: engine.stopPictureInPicture(); engine.verifyPlaybackAfterForeground()
             default: break
             }
         }

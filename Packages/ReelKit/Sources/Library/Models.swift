@@ -22,6 +22,8 @@ public final class SourceRecord {
     /// Sync bookkeeping (PLAN §10): the definition syncs, the password goes through iCloud Keychain.
     public var pendingSync: Bool = false
     public var updatedAt: Date? = nil
+    /// Wake-on-LAN address; optional, synced with the rest of the definition.
+    public var macAddress: String? = nil
     @Relationship(deleteRule: .cascade, inverse: \FolderRule.source) public var folderRules: [FolderRule]
     @Relationship(deleteRule: .cascade, inverse: \MediaFile.source) public var files: [MediaFile]
 
@@ -34,6 +36,7 @@ public final class SourceRecord {
         path = config.path
         useTLS = config.useTLS
         username = config.username
+        macAddress = config.macAddress
         statusRaw = SourceStatus.unknown.rawValue
         hiddenFromLibrary = false
         folderRules = []
@@ -46,7 +49,7 @@ public final class SourceRecord {
         set { statusRaw = newValue.rawValue }
     }
     public var config: SourceConfig {
-        SourceConfig(id: id, name: name, type: type, host: host, port: port, path: path, useTLS: useTLS, username: username)
+        SourceConfig(id: id, name: name, type: type, host: host, port: port, path: path, useTLS: useTLS, username: username, macAddress: macAddress)
     }
 
     /// The most specific rule whose folder contains the path.

@@ -473,11 +473,38 @@ public final class LibraryStore: ObservableObject {
     // MARK: - Playback URL
 
     /// Resolves a playable URL for the preferred (or given) file of an item, connecting to its source.
-    public func playbackURL(for file: MediaFile) async throws -> (URL, [URL]) {
+    /// `status` is told what is going on while that takes a while (waking a sleeping NAS).
+    public func playbackURL(for file: MediaFile, status: @escaping @Sendable (String) -> Void = { _ in }) async throws -> (URL, [URL]) {
         guard let record = file.source else { throw SourceError.notFound(file.relativePath) }
         let source = SourceFactory.make(record.config)
         let creds = CredentialStore.shared.load(for: record.id)
-        try await source.connect(credentials: creds)
+        let name = record.name, mac = record.macAddress
+        do {
+            try await source.connect(credentials: creds)
+        } catch SourceError.unreachable(let host) where mac != nil {
+            // The NAS may just be asleep. Send Wake-on-LAN and keep trying for a while; a Synology takes
+            // 30–90 s to answer SMB after the packet. Each attempt is itself ~20 s of timeouts.
+            status("Waking \(name)…")
+            Diagnostics.log("source", "\(host) unreachable; sending Wake-on-LAN to \(name)")
+            try? await WakeOnLAN.wake(mac: mac!)
+            let deadline = Date().addingTimeInterval(90)
+            var attempt = 0
+            while true {
+                attempt += 1
+                try await Task.sleep(for: .seconds(5))
+                do {
+                    try await source.connect(credentials: creds)
+                    Diagnostics.log("source", "\(name) answered after wake, attempt \(attempt)")
+                    break
+                } catch {
+                    if Date() > deadline {
+                        Diagnostics.log("source", "\(name) still unreachable \(Int(Date().timeIntervalSince(deadline) + 90))s after wake")
+                        throw error
+                    }
+                    status("Waking \(name)… still waiting (\(attempt))")
+                }
+            }
+        }
         let url = try await source.playbackURL(file.relativePath, credentials: creds)
         var subs: [URL] = []
         for s in file.sidecars { if let u = try? await source.playbackURL(s, credentials: creds) { subs.append(u) } }

@@ -12,8 +12,10 @@ public struct SourceConfig: Codable, Hashable, Identifiable, Sendable {
     public var path: String
     public var useTLS: Bool
     public var username: String?
+    /// Hardware address for Wake-on-LAN, so a NAS that has gone to sleep can be woken before playback.
+    public var macAddress: String?
 
-    public init(id: UUID = UUID(), name: String, type: SourceType, host: String = "", port: Int? = nil, path: String = "", useTLS: Bool = true, username: String? = nil) {
+    public init(id: UUID = UUID(), name: String, type: SourceType, host: String = "", port: Int? = nil, path: String = "", useTLS: Bool = true, username: String? = nil, macAddress: String? = nil) {
         self.id = id
         self.name = name
         self.type = type
@@ -22,6 +24,7 @@ public struct SourceConfig: Codable, Hashable, Identifiable, Sendable {
         self.path = path
         self.useTLS = useTLS
         self.username = username
+        self.macAddress = macAddress
     }
 }
 

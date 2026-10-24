@@ -23,6 +23,7 @@ struct AddSourceView: View {
     @State private var useTLS = true
     @State private var username = ""
     @State private var password = ""
+    @State private var macAddress = ""
     @State private var testing = false
     @State private var error: String?
     @State private var rootEntries: [DirectoryEntry] = []
@@ -50,6 +51,7 @@ struct AddSourceView: View {
             if let e = editing {
                 type = e.type; name = e.name; host = e.host; port = e.port.map(String.init) ?? ""; path = e.path; useTLS = e.useTLS
                 username = e.username ?? ""; password = CredentialStore.shared.load(for: e.id)?.password ?? ""
+                macAddress = e.macAddress ?? ""
                 step = .form
             } else { discovery.start() }
         }
@@ -97,6 +99,9 @@ struct AddSourceView: View {
                 TextField("Port (optional)", text: $port).keyboardType(.numberPad)
                 if type == .webdav { Toggle("Use HTTPS", isOn: $useTLS) }
             }
+            Section {
+                TextField("MAC address (optional)", text: $macAddress, prompt: Text("A1:B2:C3:D4:E5:F6")).textInputAutocapitalization(.characters).autocorrectionDisabled()
+            } footer: { Text("For Wake-on-LAN. If the server has gone to sleep, Reel wakes it and waits before playing. Find it in the NAS's network settings; Wake-on-LAN must be enabled there too.") }
             Section {
                 TextField("Username (optional)", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField("Password", text: $password)
@@ -151,17 +156,19 @@ struct AddSourceView: View {
     }
 
     private var config: SourceConfig {
-        SourceConfig(id: editing?.id ?? UUID(), name: name.isEmpty ? (host.isEmpty ? "Source" : host) : name, type: type, host: host, port: Int(port), path: path, useTLS: useTLS, username: username.isEmpty ? nil : username)
+        SourceConfig(id: editing?.id ?? UUID(), name: name.isEmpty ? (host.isEmpty ? "Source" : host) : name, type: type, host: host, port: Int(port), path: path, useTLS: useTLS, username: username.isEmpty ? nil : username, macAddress: WakeOnLAN.normalise(macAddress))
     }
     private var credentials: Credentials? { username.isEmpty && password.isEmpty ? nil : Credentials(username: username, password: password) }
 
     private func test() async {
         testing = true; error = nil
+        if !macAddress.isEmpty, WakeOnLAN.normalise(macAddress) == nil { error = WakeOnLAN.WakeError.badAddress.errorDescription; testing = false; return }
         let src = SourceFactory.make(config)
         do {
             try await src.connect(credentials: credentials)
             if let e = editing {
                 e.name = config.name; e.host = host; e.port = Int(port); e.path = path; e.useTLS = useTLS; e.username = config.username; e.status = .unknown
+                e.macAddress = config.macAddress; e.updatedAt = Date(); e.pendingSync = true
                 if let credentials { try? CredentialStore.shared.save(credentials, for: e.id) } else { CredentialStore.shared.remove(for: e.id) }
                 try? library.context.save()
                 await src.disconnect()

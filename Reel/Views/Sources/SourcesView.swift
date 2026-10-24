@@ -64,12 +64,29 @@ struct SourceDetailView: View {
     @State private var confirmRemove = false
     @State private var tagging: FolderPath?
     @State private var editing = false
+    @State private var woke = false
+
+    /// Sends the magic packet; the button reads "sent" for a few seconds so a second tap isn't needed.
+    private func wake() async {
+        guard let mac = source.macAddress else { return }
+        Diagnostics.log("source", "manual Wake-on-LAN to \(source.name)")
+        try? await WakeOnLAN.wake(mac: mac)
+        woke = true
+        try? await Task.sleep(for: .seconds(5))
+        woke = false
+    }
+    private func wakeThenScan() async {
+        if source.macAddress != nil { await wake(); try? await Task.sleep(for: .seconds(20)) }
+        library.scan(source, providers: settings.providers)
+    }
 
     var body: some View {
         List {
             Section {
                 switch source.status {
-                case .offline: Banner(colour: .red, text: "Can't reach \(source.host). Last scan \(source.lastScan?.formatted(.relative(presentation: .named)) ?? "never").") { Button("Retry") { library.scan(source, providers: settings.providers) } }
+                case .offline: Banner(colour: .red, text: "Can't reach \(source.host). Last scan \(source.lastScan?.formatted(.relative(presentation: .named)) ?? "never").") {
+                    Button(source.macAddress == nil ? "Retry" : "Wake & retry") { Task { await wakeThenScan() } }
+                }
                 case .authFailed: Banner(colour: .red, text: "Password rejected.") { Button("Edit") { editing = true } }
                 default: Banner(colour: .green, text: "\(source.type.displayName) · \(source.host.isEmpty ? source.name : source.host)") { Button(library.isScanning(source.id) ? "Scanning…" : "Rescan") { library.scan(source, providers: settings.providers) }.disabled(library.isScanning(source.id)) }
                 }
@@ -104,7 +121,11 @@ struct SourceDetailView: View {
                 if !source.host.isEmpty { LabeledContent("Host", value: source.host) }
                 if source.type != .local { LabeledContent("Share / path", value: source.path) }
                 if let u = source.username { LabeledContent("Username", value: u) }
-                if source.type != .local { Button("Edit credentials") { editing = true } }
+                if let mac = source.macAddress {
+                    LabeledContent("Wake-on-LAN", value: mac)
+                    Button(woke ? "Wake packet sent" : "Wake now") { Task { await wake() } }.disabled(woke)
+                }
+                if source.type != .local { Button(source.macAddress == nil ? "Edit connection" : "Edit connection or MAC address") { editing = true } }
             }
             Section {
                 Toggle("Hide this source from the library", isOn: Binding(get: { source.hiddenFromLibrary }, set: { source.hiddenFromLibrary = $0; try? library.context.save() }))

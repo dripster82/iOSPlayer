@@ -16,6 +16,8 @@ final class PlayerCoordinator: ObservableObject {
     @Published private(set) var upNext: MediaItem?
     @Published private(set) var previous: MediaItem?
     @Published var isLoading = false
+    /// What the spinner is waiting on, when it is something slow such as waking a sleeping NAS.
+    @Published var loadingMessage: String?
     let engine = VLCPlaybackEngine()
     private let library: LibraryStore
     private var saveTimer: AnyCancellable?
@@ -42,10 +44,14 @@ final class PlayerCoordinator: ObservableObject {
         previous = item.kind == .episode ? library.episodeBefore(item) : nil
         isPresented = true
         isLoading = true
+        loadingMessage = nil
         loadError = nil
         Task {
             do {
-                let (url, subs) = try await library.playbackURL(for: file)
+                let (url, subs) = try await library.playbackURL(for: file) { message in
+                    Task { @MainActor in self.loadingMessage = message }
+                }
+                loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
                 var opts = PlaybackOptions()
                 opts.hardwareDecoding = settings.hardwareDecoding
@@ -61,6 +67,7 @@ final class PlayerCoordinator: ObservableObject {
                 isLoading = false
             } catch {
                 isLoading = false
+                loadingMessage = nil
                 loadError = error.localizedDescription
                 Diagnostics.log("player", "could not resolve \(file.fileName): \(error.localizedDescription)")
             }
