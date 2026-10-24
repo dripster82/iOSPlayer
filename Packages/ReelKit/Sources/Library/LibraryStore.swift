@@ -38,6 +38,8 @@ public final class LibraryStore: ObservableObject {
 
     @discardableResult
     public func addSource(_ config: SourceConfig, credentials: Credentials?, folderRules: [(String, FolderTag)]) throws -> SourceRecord {
+        var config = config
+        config.name = config.name.trimmingCharacters(in: .whitespaces)
         let record = SourceRecord(config: config)
         for (path, tag) in folderRules {
             let rule = FolderRule(folderPath: path, tag: tag, includeInScan: tag != .excluded)

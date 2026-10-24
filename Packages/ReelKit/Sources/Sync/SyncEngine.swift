@@ -64,7 +64,25 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         let config = CKSyncEngine.Configuration(database: CKContainer(identifier: cloudContainerID).privateCloudDatabase, stateSerialization: serialization, delegate: self)
         engine = CKSyncEngine(config)
         engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
+        dedupeSources()
         pushPendingChanges()
+    }
+
+    /// Two devices that each added the same share before sync existed hold it under different ids. The
+    /// remote copy is recognised by type + host + share and never instantiated locally; this also removes
+    /// any duplicate that slipped in earlier (locally only: the other device keeps its own record).
+    private func dedupeSources() {
+        let all = (try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []
+        var seen: [String: SourceRecord] = [:]
+        for s in all.sorted(by: { $0.files.count > $1.files.count }) {
+            let key = Self.identity(type: s.type, host: s.host, path: s.path)
+            if seen[key] != nil, s.type != .local { ctx.delete(s) } else { seen[key] = s }
+        }
+        try? ctx.save()
+    }
+
+    private static func identity(type: SourceType, host: String, path: String) -> String {
+        "\(type.rawValue)|\(host.trimmingCharacters(in: .whitespaces).lowercased())|\(path.trimmingCharacters(in: CharacterSet(charactersIn: " /")).lowercased())"
     }
 
     /// First enable on a device with an existing library: everything it has should go up.
@@ -135,6 +153,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             for mod in e.modifications { apply(mod.record) }
             for del in e.deletions { applyDeletion(del.recordID) }
             reconcileLinks()
+            dedupeSources()
             try? ctx.save()
             lastSyncedAt = Date()
         case .sentRecordZoneChanges(let e):
@@ -269,6 +288,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
                   let typeRaw = r["type"] as? String, let type = SourceType(rawValue: typeRaw), type != .local else { return }
             let existing = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first
             if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
+            // Same share already present under another id (added on this device before sync): keep ours.
+            let identity = Self.identity(type: type, host: (r["host"] as? String) ?? "", path: (r["path"] as? String) ?? "")
+            if existing == nil, ((try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []).contains(where: { $0.id != uuid && Self.identity(type: $0.type, host: $0.host, path: $0.path) == identity }) { return }
             let config = SourceConfig(id: uuid, name: (r["name"] as? String) ?? "Source", type: type, host: (r["host"] as? String) ?? "",
                                       port: r["port"] as? Int, path: (r["path"] as? String) ?? "", useTLS: ((r["useTLS"] as? Int) ?? 1) == 1, username: r["username"] as? String)
             let s = existing ?? { let x = SourceRecord(config: config); ctx.insert(x); return x }()
