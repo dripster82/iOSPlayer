@@ -81,6 +81,28 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         try? ctx.save()
     }
 
+    /// Moves a local source (and its files) to the id the other device uses. The files' old CloudKit
+    /// records are deleted and they are re-uploaded under names derived from the new id.
+    private func rekey(_ source: SourceRecord, to newID: UUID) -> SourceRecord {
+        let oldID = source.id
+        if let creds = CredentialStore.shared.load(for: oldID) {
+            try? CredentialStore.shared.save(creds, for: newID)
+            CredentialStore.shared.remove(for: oldID)
+        }
+        var oldNames = [SyncKeys.source(oldID)]
+        for f in source.files {
+            if let old = f.syncKey { oldNames.append(old) }
+            f.syncKey = nil
+            f.pendingSync = true
+            f.updatedAt = Date()
+        }
+        source.id = newID
+        source.pendingSync = false
+        try? ctx.save()
+        deleteRecords(named: oldNames)
+        return source
+    }
+
     private static func identity(type: SourceType, host: String, path: String) -> String {
         "\(type.rawValue)|\(host.trimmingCharacters(in: .whitespaces).lowercased())|\(path.trimmingCharacters(in: CharacterSet(charactersIn: " /")).lowercased())"
     }
@@ -288,12 +310,20 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
                   let typeRaw = r["type"] as? String, let type = SourceType(rawValue: typeRaw), type != .local else { return }
             let existing = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first
             if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
-            // Same share already present under another id (added on this device before sync): keep ours.
+            // Same share already present under another id (each device added it before sync existed). Both
+            // devices must end up on ONE id or their file records (and so Needs Review, reviewed, ignored)
+            // never meet. Rule: the smaller UUID wins. If the remote id is smaller we re-key our source to it
+            // and re-upload our files under the new names; otherwise we ignore the remote copy and the other
+            // device re-keys when it receives ours.
             let identity = Self.identity(type: type, host: (r["host"] as? String) ?? "", path: (r["path"] as? String) ?? "")
-            if existing == nil, ((try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []).contains(where: { $0.id != uuid && Self.identity(type: $0.type, host: $0.host, path: $0.path) == identity }) { return }
+            var adopted: SourceRecord? = existing
+            if existing == nil, let twin = ((try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []).first(where: { $0.id != uuid && Self.identity(type: $0.type, host: $0.host, path: $0.path) == identity }) {
+                guard uuid.uuidString < twin.id.uuidString else { return }
+                adopted = rekey(twin, to: uuid)
+            }
             let config = SourceConfig(id: uuid, name: (r["name"] as? String) ?? "Source", type: type, host: (r["host"] as? String) ?? "",
                                       port: r["port"] as? Int, path: (r["path"] as? String) ?? "", useTLS: ((r["useTLS"] as? Int) ?? 1) == 1, username: r["username"] as? String)
-            let s = existing ?? { let x = SourceRecord(config: config); ctx.insert(x); return x }()
+            let s = adopted ?? { let x = SourceRecord(config: config); ctx.insert(x); return x }()
             s.name = config.name; s.typeRaw = config.type.rawValue; s.host = config.host; s.port = config.port; s.path = config.path
             s.useTLS = config.useTLS; s.username = config.username
             s.hiddenFromLibrary = ((r["hidden"] as? Int) ?? 0) == 1
