@@ -17,32 +17,43 @@ network shares or local storage, sorts the library into TV and Films, and fetche
 
 ## Build
 
-The Xcode project is generated from `project.yml` so it never conflicts in git.
+The Xcode project is generated from `project.yml` so it never conflicts in git. VLCKit is not
+on Swift Package Manager, so VideoLAN's official MobileVLCKit binary is fetched once per checkout.
 
 ```sh
 brew install xcodegen
+Scripts/fetch-vlckit.sh    # ~260 MB download → Packages/ReelKit/Vendor/MobileVLCKit.xcframework (gitignored)
 xcodegen generate          # creates Reel.xcodeproj
 open Reel.xcodeproj
 ```
 
-Then in Xcode: select the **Reel** target → Signing & Capabilities → pick your Team. Xcode will
-resolve the Swift packages (VLCKit, AMSMB2, KeychainAccess) on first open.
+`project.yml` already carries the team (`834D8P4J32`, automatic signing) and bundle ID
+`uk.co.ketelle.reel`. Xcode resolves AMSMB2 and KeychainAccess on first open.
+
+**iCloud needs one interactive step.** The App ID has to be registered with the iCloud capability and
+the `iCloud.uk.co.ketelle.reel` container created. Xcode does this itself the first time you build with
+an Apple ID signed in (Xcode → Settings → Accounts). Until then signing fails with "No Accounts" and
+"profile doesn't include the iCloud capability". For a device build without iCloud in the meantime run
+`Scripts/build-device.sh`, which signs with `Reel/Reel-NoiCloud.entitlements` and installs on the phone.
+Xcode rewrites `Reel/Reel.entitlements` to an empty `<dict/>` on every such build; the script restores it,
+otherwise `git checkout -- Reel/Reel.entitlements`.
 
 **No XcodeGen?** Create an empty iOS App project named `Reel` in Xcode, delete its generated
 `ContentView.swift`/`ReelApp.swift`, drag the `Reel/` folder in, add the local package at
 `Packages/ReelKit` (File → Add Package Dependencies → Add Local) and link all six products, then
 copy the `info.properties` and entitlements from `project.yml`/`Reel/Reel.entitlements` into the target.
 
-### If VLCKit fails to resolve
+### VLCKit
 
-`Packages/ReelKit/Package.swift` points at the official VLCKit Swift package. VideoLAN has moved the
-package URL and product name before. If resolution fails:
+`Packages/ReelKit/Package.swift` declares `MobileVLCKit` as a local binary target at
+`Packages/ReelKit/Vendor/MobileVLCKit.xcframework`, only when that folder exists. Without it the pure
+modules still build and test (Linux CI, fresh checkout); `VLCPlaybackEngine` is behind
+`#if canImport(MobileVLCKit)`. The fetch script pins MobileVLCKit **3.7.3** by sha256 from
+`download.videolan.org/pub/cocoapods/prod/`. To upgrade, change `VERSION` and `SHA256` in the script and
+delete the `Vendor` folder.
 
-1. Check the current URL in the VLCKit README at <https://code.videolan.org/videolan/VLCKit>.
-2. Update the `.package(url:)` line and the `.product(name:)` in the `Playback` target.
-3. The wrapper imports `VLCKit` or `MobileVLCKit`, whichever is available, so either 3.x product works.
-
-The licence route is LGPL: VLCKit is linked dynamically as an xcframework and credited in Settings → About → Licences. Do not switch to a static build.
+The licence route is LGPL: MobileVLCKit 3.7.3 is a **dynamic** framework (verified with `file`), embedded
+by Xcode, and credited in Settings → About → Licences. Do not switch to a static build.
 
 ## Run
 
@@ -65,7 +76,8 @@ that the classifier must get right; add a row whenever a file is misfiled.
 
 ## Status
 
-What is built (phase 1–2 of PLAN.md §7), untested on a device until the first Xcode build:
+What is built (phase 1–2 of PLAN.md §7). Compiles for iOS with Xcode 26.6, all 27 unit tests pass, and a
+signed Debug build installs on a device. The device smoke test (HANDOVER.md §4) has not been run yet.
 
 | Area | State |
 |---|---|
@@ -85,7 +97,7 @@ What is built (phase 1–2 of PLAN.md §7), untested on a device until the first
 | Picture in Picture, scrub thumbnails | Not yet (phase 4) |
 | Background scan scheduling (BGAppRefreshTask) | Not yet |
 
-## Known first-build risks
+## First build
 
-This code was written without access to Xcode, so expect a handful of compile errors on the first
-build. The most likely spots are listed in `PLAN.md` §12. Fix forward; the structure is sound.
+The first compile (Xcode 26.6, 24 Oct 2026) needed only small fixes, listed in `HANDOVER.md` §3.1.
+The device build is warning-free.

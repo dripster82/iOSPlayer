@@ -213,11 +213,17 @@ public enum FilenameParser {
         return out
     }
 
-    /// "5.1", "7.1", "H.264" keep their dot.
+    /// "5.1", "7.1", "DD5.1", "H.264" keep their dot. Only a single digit on each side counts,
+    /// so "S02E05.1080p" and "2022.2160p" are still split into separate tokens.
     private static func isDecimalContext(_ text: String, _ i: String.Index) -> Bool {
         guard i > text.startIndex, text.index(after: i) < text.endIndex else { return false }
-        let prev = text[text.index(before: i)], next = text[text.index(after: i)]
-        return (prev.isNumber && next.isNumber) || ((prev == "H" || prev == "h") && next.isNumber)
+        let prevIndex = text.index(before: i), nextIndex = text.index(after: i)
+        let prev = text[prevIndex], next = text[nextIndex]
+        if (prev == "H" || prev == "h") && next.isNumber { return true }
+        guard prev.isNumber, next.isNumber else { return false }
+        let prevPrevIsDigit = prevIndex > text.startIndex && text[text.index(before: prevIndex)].isNumber
+        let nextNextIsDigit = text.index(after: nextIndex) < text.endIndex && text[text.index(after: nextIndex)].isNumber
+        return !prevPrevIsDigit && !nextNextIsDigit
     }
 
     private static func isLastSegment(_ text: String, _ i: String.Index) -> Bool {

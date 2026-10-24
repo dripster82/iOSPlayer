@@ -1,5 +1,14 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+// VideoLAN's official MobileVLCKit binary (LGPL 2.1). There is no official SwiftPM package for
+// VLCKit 3.x, so the xcframework is vendored by `Scripts/fetch-vlckit.sh` (gitignored). When it is
+// absent — Linux CI, or a fresh checkout before the fetch — the Playback module still compiles because
+// VLCPlaybackEngine is wrapped in `#if canImport(MobileVLCKit)`; only the pure modules are testable then.
+let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let vlcKitPath = "Vendor/MobileVLCKit.xcframework"
+let hasVLCKit = FileManager.default.fileExists(atPath: packageDir.appendingPathComponent(vlcKitPath).path)
 
 let package = Package(
     name: "ReelKit",
@@ -14,10 +23,8 @@ let package = Package(
         .library(name: "Sync", targets: ["Sync"]),
     ],
     dependencies: [
-        // LGPL 2.1. Shipped as a dynamic xcframework; see PLAN.md §10.
-        .package(url: "https://code.videolan.org/videolan/VLCKit-SPM.git", from: "3.6.0"),
         // MIT. SMB2/3 client used for browsing and scanning.
-        .package(url: "https://github.com/amosavian/AMSMB2.git", from: "3.0.0"),
+        .package(url: "https://github.com/amosavian/AMSMB2.git", from: "4.0.0"),
         // MIT. Keychain wrapper for source credentials.
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
     ],
@@ -33,7 +40,7 @@ let package = Package(
             name: "MediaSources",
             dependencies: [
                 "MediaCore",
-                .product(name: "AMSMB2", package: "AMSMB2", condition: .when(platforms: [.iOS])),
+                .product(name: "AMSMB2", package: "AMSMB2"),
                 .product(name: "KeychainAccess", package: "KeychainAccess", condition: .when(platforms: [.iOS, .macOS])),
             ]
         ),
@@ -41,10 +48,26 @@ let package = Package(
         // VLCKit wrapper exposing an async state stream to SwiftUI.
         .target(
             name: "Playback",
-            dependencies: [
-                "MediaCore",
-                .product(name: "VLCKit", package: "VLCKit-SPM", condition: .when(platforms: [.iOS])),
-            ]
+            dependencies: ["MediaCore"] + (hasVLCKit ? [.target(name: "MobileVLCKit", condition: .when(platforms: [.iOS]))] : []),
+            linkerSettings: hasVLCKit ? [
+                // System frameworks and libraries MobileVLCKit depends on (dynamic xcframework, embedded by Xcode).
+                .linkedFramework("AVFoundation", .when(platforms: [.iOS])),
+                .linkedFramework("AudioToolbox", .when(platforms: [.iOS])),
+                .linkedFramework("CFNetwork", .when(platforms: [.iOS])),
+                .linkedFramework("CoreGraphics", .when(platforms: [.iOS])),
+                .linkedFramework("CoreMedia", .when(platforms: [.iOS])),
+                .linkedFramework("CoreText", .when(platforms: [.iOS])),
+                .linkedFramework("CoreVideo", .when(platforms: [.iOS])),
+                .linkedFramework("OpenGLES", .when(platforms: [.iOS])),
+                .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
+                .linkedFramework("Security", .when(platforms: [.iOS])),
+                .linkedFramework("VideoToolbox", .when(platforms: [.iOS])),
+                .linkedLibrary("c++", .when(platforms: [.iOS])),
+                .linkedLibrary("xml2", .when(platforms: [.iOS])),
+                .linkedLibrary("z", .when(platforms: [.iOS])),
+                .linkedLibrary("bz2", .when(platforms: [.iOS])),
+                .linkedLibrary("iconv", .when(platforms: [.iOS])),
+            ] : []
         ),
 
         // SwiftData models, scan queue, matcher, image loader.
@@ -55,5 +78,5 @@ let package = Package(
 
         .testTarget(name: "MediaCoreTests", dependencies: ["MediaCore"]),
         .testTarget(name: "MetadataTests", dependencies: ["Metadata"]),
-    ]
+    ] + (hasVLCKit ? [.binaryTarget(name: "MobileVLCKit", path: vlcKitPath)] : [])
 )

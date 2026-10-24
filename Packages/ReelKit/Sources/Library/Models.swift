@@ -2,6 +2,7 @@
 import Foundation
 import SwiftData
 import MediaCore
+import MediaSources
 
 // SwiftData schema. Mirrors PLAN.md §11.6. Credentials are never stored here.
 

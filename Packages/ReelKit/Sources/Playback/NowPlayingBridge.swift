@@ -1,5 +1,6 @@
-#if canImport(MediaPlayer)
+#if canImport(MediaPlayer) && canImport(UIKit)
 import Foundation
+import UIKit
 import MediaPlayer
 import AVFoundation
 import Combine

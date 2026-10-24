@@ -11,3 +11,8 @@ Package.resolved
 *.ipa
 *.dSYM.zip
 .DS_Store
+
+# VLCKit binary, fetched by Scripts/fetch-vlckit.sh
+vendor/
+Packages/ReelKit/Vendor/
+Reel/Info.plist

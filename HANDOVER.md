@@ -1,9 +1,10 @@
 # Reel — agent handover
 
-You are picking up an iOS/iPadOS media player that has been fully planned, prototyped and written,
-but **never compiled**. The previous agent worked in a Linux container with no Swift toolchain.
-Your first job is to get it building in Xcode on this Mac, then run the smoke test, then continue
-the phase plan. Everything you need is in this repo; this document is the map.
+You are picking up an iOS/iPadOS media player that has been fully planned, prototyped and written.
+It was first authored in a Linux container with no Swift toolchain; on 24 Oct 2026 it was brought to
+a **compiling, signed, device-installable** state on Paul's Mac (Xcode 26.6). The device smoke test
+(§4) has not been run. Your first job is that smoke test, then continue the phase plan.
+Everything you need is in this repo; this document is the map.
 
 Read in this order: this file → `PLAN.md` §6, §10, §11, §12 → `README.md` → the code.
 
@@ -33,6 +34,8 @@ PLAN.md                 Product plan + solution design. §11 = architecture, §1
 README.md               Human-facing build/run instructions.
 HANDOVER.md             This file.
 project.yml             XcodeGen spec → generates Reel.xcodeproj (gitignored).
+Scripts/fetch-vlckit.sh Downloads VideoLAN's MobileVLCKit 3.7.3 xcframework into Packages/ReelKit/Vendor (gitignored).
+Scripts/build-device.sh No-iCloud Debug build + install on the paired iPhone; restores Reel.entitlements afterwards (§3).
 prototype/index.html    Clickable HTML prototype of every screen. Open in a browser. The app UI follows it.
 
 Reel/                   SwiftUI app target
@@ -47,7 +50,8 @@ Reel/                   SwiftUI app target
   Views/Components/     ArtworkImage (+Palette placeholder), PosterCard (+ItemContextMenu), FilterBar, ItemGrid (+ItemRow, ItemDestination, itemNavigation())
   Views/OnboardingView.swift
   Resources/Assets.xcassets   AccentColor (amber #F0A33A), empty AppIcon
-  Reel.entitlements     CloudKit container + keychain group
+  Reel.entitlements     CloudKit container + keychain group (the real one)
+  Reel-NoiCloud.entitlements  Keychain group only; for device builds before the App ID has iCloud (§3.2)
 
 Packages/ReelKit/       ONE Swift package, SIX modules (keeps Xcode happy, lets pure modules test on any platform)
   Sources/MediaCore     Models.swift, FilenameParser.swift, Classifier.swift, ItemKey.swift, Formatting.swift   — pure Swift
@@ -55,6 +59,7 @@ Packages/ReelKit/       ONE Swift package, SIX modules (keeps Xcode happy, lets 
   Sources/MediaSources  MediaSource (protocol, SourceConfig, SourceFactory, withRetries), LocalSource,
                         WebDAVSource (+PropfindParser), SMBSource (#if canImport(AMSMB2)), CredentialStore, SourceDiscovery
   Sources/Playback      PlaybackState (protocol + PlaybackItem/Options), VLCPlaybackEngine, NowPlayingBridge
+  Vendor/               MobileVLCKit.xcframework + COPYING.txt (gitignored; binaryTarget declared only when present)
   Sources/Library       Models (SwiftData @Model classes + LibrarySchema), LibraryScanner (@ModelActor),
                         Matcher, LibraryStore (@MainActor façade), ImageLoader
   Sources/Sync          SyncEngine (CKSyncEngine delegate)
@@ -66,52 +71,66 @@ Module dependency graph: `MediaCore ← Metadata, MediaSources, Playback ← Lib
 
 ---
 
-## 3. Getting it to build (your first task)
+## 3. Build state (done 24 Oct 2026)
 
 ```sh
 cd <repo>
 brew install xcodegen            # if missing
+Scripts/fetch-vlckit.sh          # MobileVLCKit 3.7.3 → Packages/ReelKit/Vendor (gitignored, ~260 MB)
 xcodegen generate                # → Reel.xcodeproj
 open Reel.xcodeproj
 ```
 
-In Xcode: target **Reel** → Signing & Capabilities → set Team. Let SPM resolve. Build for a **device**
-(the simulator can't reach SMB shares on most networks and has no VideoToolbox).
+`project.yml` carries Paul's team `834D8P4J32` and bundle ID `uk.co.ketelle.reel` (same prefix as
+AiBrain / AudioStripper). Until the iCloud step in §3.2 is done, build a **no-iCloud dev build** from the
+command line with `Scripts/build-device.sh`. It signs with `Reel/Reel-NoiCloud.entitlements` (keychain
+group only), installs on the paired iPhone 17 Pro Max (`D83F0EFF-F81B-5BDF-ADC5-09FC08796658`) and then
+restores `Reel/Reel.entitlements`, because **every xcodebuild run empties that file** while the App ID lacks
+iCloud. This is what is on the phone now. Passing an empty `CODE_SIGN_ENTITLEMENTS=` is not enough; Xcode
+still derives the iCloud requirement from the target's file.
 
-### 3.1 Expected failure points, in order
+### 3.1 What was fixed to get here
 
-Work through these; each is a few lines. Don't restructure.
+1. **VLCKit.** `code.videolan.org/videolan/VLCKit-SPM` does not exist (401). There is no official SwiftPM
+   package for VLCKit 3.x. Replaced with VideoLAN's official **MobileVLCKit 3.7.3** binary, fetched by
+   `Scripts/fetch-vlckit.sh` (sha256-pinned, mirrors VR Desktop's `fetch-vlckit.sh`) and declared as a local
+   `binaryTarget` in `Package.swift` **only when the folder exists**, so the pure modules still build and
+   test without it. It is a dynamic framework (checked with `file`), so the LGPL route is intact. The
+   script strips `dSYMs` and the `DebugSymbolsPath` plist keys, otherwise Xcode rejects the xcframework.
+2. **AMSMB2** bumped `3.x → 4.x` (3.4.0's libsmb2 target compiles stray Makefiles under Xcode 26). Its
+   dependency is no longer iOS-conditional: `canImport(AMSMB2)` was true on macOS while the module wasn't
+   linked, breaking `swift test`. The 3.x async API the code uses compiled unchanged against 4.0.3.
+3. `Library/Models.swift` was missing `import MediaSources`.
+4. `Playback/NowPlayingBridge.swift` now requires `canImport(UIKit)` (it uses `UIImage`/`AVAudioSession`),
+   so macOS `swift test` builds.
+5. `FilenameParser.isDecimalContext` only keeps the dot for single digits (`5.1`, `DD5.1`), not
+   `S02E05.1080p` / `2022.2160p`. This was the cause of both parser test failures.
+6. VLC delegate methods take `Notification` (non-optional) in 3.7.3 headers.
+7. `extension String: Identifiable` replaced by `struct FolderPath` in `SourcesView.swift`.
 
-1. **VLCKit package resolution.** `Packages/ReelKit/Package.swift` has
-   `.package(url: "https://code.videolan.org/videolan/VLCKit-SPM.git", from: "3.6.0")` with product `VLCKit`.
-   This is a best-guess URL. If it fails: find the current official SPM URL/product in the VLCKit README
-   (code.videolan.org/videolan/VLCKit) or use the CocoaPods `MobileVLCKit` 3.x as a fallback.
-   `VLCPlaybackEngine.swift` already does `#if canImport(VLCKit) import VLCKit #else import MobileVLCKit`.
-   Whatever you pick: **dynamic xcframework, LGPL build.** Record the final URL in PLAN.md §11.10.
-2. **VLCKit 3.x API names** in `VLCPlaybackEngine.swift`: `audioTrackIndexes/Names`, `videoSubTitlesIndexes/Names`,
-   `currentVideoSubTitleDelay`, `currentAudioPlaybackDelay`, `addPlaybackSlave(_:type:enforce:)`,
-   `chapterDescriptions(ofTitle:)`, `VLCChapterDescriptionName/TimeOffset/Duration`, `VLCMediaPlayerState` cases.
-   Delegate methods take `Notification!`. Fix spellings with Xcode's fix-its.
-3. **AMSMB2 3.x async API** in `SMBSource.swift`: `SMB2Manager(url:credential:)`, `connectShare(name:)`,
-   `contentsOfDirectory(atPath:)`, `attributesOfItem(atPath:)`, `disconnectShare()`. Check attribute keys if listings are empty.
-4. **SwiftData `#Predicate`** in `LibraryStore.swift`, `LibraryScanner.swift`, `Matcher.swift`, `SyncEngine.swift`.
-   If the macro rejects an expression, fetch broader and filter in Swift.
-5. **`CKSyncEngine` delegate** in `SyncEngine.swift`: `handleEvent` and `nextRecordZoneChangeBatch` are `nonisolated`
-   and hop to `MainActor`. `RecordZoneChangeBatch(pendingChanges:recordProvider:)` is `async`.
-6. **Concurrency diagnostics.** `SWIFT_STRICT_CONCURRENCY = minimal` in `project.yml` deliberately. Don't raise it until it builds.
-7. **Small Swift-isms** the author couldn't compile-check: `switch` expressions, `if let x, cond` shorthand, `Layout` protocol
-   (`FlowLayout`), `UnevenRoundedRectangle`, `ContentUnavailableView` — all iOS 17 / Swift 5.9+. Should be fine.
-8. **`extension String: Identifiable`** in `SourcesView.swift` (used for `.sheet(item:)` with a folder path).
-   If it collides with anything, replace with a tiny `struct FolderPath: Identifiable`.
+The VLCKit 3.x API names, AMSMB2 async API, SwiftData `#Predicate`s, `CKSyncEngine` delegate and all
+the Swift-isms the original author couldn't compile-check were **correct as written**. The device build
+is warning-free.
 
-### 3.2 Run the unit tests
+### 3.2 Still needs Paul (interactive)
+
+- **iCloud / CloudKit entitlements.** No Apple ID is signed into Xcode on this Mac ("No Accounts"), so
+  signing with `Reel/Reel.entitlements` fails: the wildcard team profile lacks the iCloud capability and
+  the `iCloud.uk.co.ketelle.reel` container. Fix: Xcode → Settings → Accounts → sign in, open
+  `Reel.xcodeproj`, build once for the device. Xcode registers the App ID + container and creates
+  "iOS Team Provisioning Profile: uk.co.ketelle.reel", as it did for AiBrain. Beware: until then **every
+  xcodebuild run rewrites `Reel/Reel.entitlements` to an empty `<dict/>`**; `Scripts/build-device.sh`
+  restores it, otherwise `git checkout -- Reel/Reel.entitlements`. The no-iCloud build runs fine but
+  iCloud sync is unavailable; everything else in §4 can be tested.
+- **Launching on the phone** needs it unlocked (`devicectl` returned `Locked`).
+- A TMDb API key for the scan/match steps.
+
+### 3.3 Run the unit tests
 
 ```sh
 cd Packages/ReelKit && swift test --filter 'MediaCoreTests|MetadataTests'
 ```
-or Product → Test in Xcode. They must all pass before any device testing; they define the parser's contract.
-
----
+or Product → Test in Xcode. 27 tests, all passing as of this handover.
 
 ## 4. Device smoke test (your second task)
 

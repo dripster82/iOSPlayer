@@ -635,8 +635,8 @@ Every failure maps to one of a small set of user-facing cards, each with a recov
 
 | Package | Purpose | Licence |
 |---|---|---|
-| VLCKit | Playback | LGPL 2.1 |
-| AMSMB2 | SMB browsing | MIT |
+| MobileVLCKit 3.7.3 (VideoLAN binary, dynamic xcframework, fetched by `Scripts/fetch-vlckit.sh`; no SwiftPM package exists) | Playback | LGPL 2.1 |
+| AMSMB2 4.x | SMB browsing | MIT |
 | Nuke or own ImageLoader | Image caching | MIT |
 | swift-log | Logging | Apache 2.0 |
 | KeychainAccess | Keychain wrapper | MIT |

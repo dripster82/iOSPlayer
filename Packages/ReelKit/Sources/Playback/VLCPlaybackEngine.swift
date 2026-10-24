@@ -138,11 +138,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     // MARK: - VLCMediaPlayerDelegate
 
-    nonisolated public func mediaPlayerStateChanged(_ aNotification: Notification!) {
+    nonisolated public func mediaPlayerStateChanged(_ aNotification: Notification) {
         Task { @MainActor in self.handleStateChange() }
     }
 
-    nonisolated public func mediaPlayerTimeChanged(_ aNotification: Notification!) {
+    nonisolated public func mediaPlayerTimeChanged(_ aNotification: Notification) {
         Task { @MainActor in self.handleTimeChange() }
     }
 

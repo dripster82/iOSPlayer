@@ -62,7 +62,7 @@ struct SourceDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let source: SourceRecord
     @State private var confirmRemove = false
-    @State private var tagging: String?
+    @State private var tagging: FolderPath?
     @State private var editing = false
 
     var body: some View {
@@ -77,7 +77,7 @@ struct SourceDetailView: View {
 
             Section("Folders · tap to tag") {
                 ForEach(source.folderRules.sorted { $0.folderPath < $1.folderPath }, id: \.folderPath) { rule in
-                    Button { tagging = rule.folderPath } label: {
+                    Button { tagging = FolderPath(rule.folderPath) } label: {
                         HStack {
                             Image(systemName: "folder").foregroundStyle(.secondary)
                             Text(rule.folderPath.isEmpty ? "/" : rule.folderPath).foregroundStyle(.primary)
@@ -110,12 +110,17 @@ struct SourceDetailView: View {
         .confirmationDialog("Remove \(source.name)?", isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("Remove source and its library items", role: .destructive) { try? library.removeSource(source); dismiss() }
         } message: { Text("Watch history and favourites are kept. Files on the drive are not touched.") }
-        .sheet(item: $tagging) { folder in TagSheet(source: source, folder: folder) }
+        .sheet(item: $tagging) { folder in TagSheet(source: source, folder: folder.path) }
         .sheet(isPresented: $editing) { AddSourceView(editing: source) }
     }
 }
 
-extension String: Identifiable { public var id: String { self } }
+/// Wraps a relative folder path so it can drive `.sheet(item:)` without conforming `String` to `Identifiable`.
+struct FolderPath: Identifiable, Hashable {
+    let path: String
+    var id: String { path }
+    init(_ path: String) { self.path = path }
+}
 
 struct TagPill: View {
     let tag: FolderTag?
@@ -163,19 +168,19 @@ struct FileBrowserView: View {
     @State private var entries: [DirectoryEntry] = []
     @State private var loading = true
     @State private var error: String?
-    @State private var tagTarget: String?
+    @State private var tagTarget: FolderPath?
 
     var body: some View {
         List {
             if tagging {
-                Button { tagTarget = path } label: { Label("Tag this folder (\(path.isEmpty ? "/" : path))", systemImage: "tag") }
+                Button { tagTarget = FolderPath(path) } label: { Label("Tag this folder (\(path.isEmpty ? "/" : path))", systemImage: "tag") }
             }
             ForEach(entries, id: \.relativePath) { e in
                 if e.isDirectory {
                     NavigationLink { FileBrowserView(source: source, path: e.relativePath, tagging: tagging) } label: {
                         Label(e.name, systemImage: "folder").foregroundStyle(.primary)
                     }
-                    .swipeActions { Button("Tag") { tagTarget = e.relativePath }.tint(.accentColor) }
+                    .swipeActions { Button("Tag") { tagTarget = FolderPath(e.relativePath) }.tint(.accentColor) }
                 } else {
                     Button { play(e) } label: {
                         HStack {
@@ -199,7 +204,7 @@ struct FileBrowserView: View {
         .navigationTitle(path.isEmpty ? source.path.isEmpty ? source.name : (source.path as NSString).lastPathComponent : (path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .sheet(item: $tagTarget) { TagSheet(source: source, folder: $0) }
+        .sheet(item: $tagTarget) { TagSheet(source: source, folder: $0.path) }
     }
 
     private func load() async {

@@ -18,7 +18,7 @@ settings:
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""   # set your Team ID here or in Xcode > Signing & Capabilities
+    DEVELOPMENT_TEAM: 834D8P4J32   # Team "Paul Ketelle" (same as AiBrain)
     CODE_SIGN_STYLE: Automatic
     SWIFT_STRICT_CONCURRENCY: minimal
 
