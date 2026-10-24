@@ -188,6 +188,17 @@ struct FilmDetailView: View {
                         }.padding(.horizontal)
                     }
                 }
+                let universes = Universes.universes(studios: film.studios, keywords: film.keywords)
+                if !universes.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            Text("Part of").font(.subheadline).foregroundStyle(.secondary)
+                            ForEach(universes, id: \.self) { u in
+                                NavigationLink(value: LibraryRoute.universe(u)) { FilterBar.Chip(text: u, on: false) {} }.buttonStyle(.plain)
+                            }
+                        }.padding(.horizontal)
+                    }
+                }
                 if film.files.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack { Text("Versions").font(.headline); Spacer(); Text("Tap to choose").font(.caption).foregroundStyle(.secondary) }

@@ -86,18 +86,33 @@ public struct TMDbMovieDetail: Decodable, Sendable {
     public var credits: TMDbCredits?
     public var belongsToCollection: TMDbCollectionRef?
     public var imdbID: String?
+    public var productionCompanies: [TMDbCompany]?
+    public var keywords: TMDbKeywordList?
 
     public var year: Int? { releaseDate.flatMap { Int($0.prefix(4)) } }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, overview, runtime, genres, credits
+        case id, title, overview, runtime, genres, credits, keywords
         case posterPath = "poster_path"
         case backdropPath = "backdrop_path"
         case releaseDate = "release_date"
         case voteAverage = "vote_average"
         case belongsToCollection = "belongs_to_collection"
         case imdbID = "imdb_id"
+        case productionCompanies = "production_companies"
     }
+}
+
+public struct TMDbCompany: Decodable, Sendable, Hashable {
+    public var id: Int
+    public var name: String
+}
+
+public struct TMDbKeywordList: Decodable, Sendable, Hashable {
+    public struct Keyword: Decodable, Sendable, Hashable { public var id: Int; public var name: String }
+    public var keywords: [Keyword]?
+    public var results: [Keyword]?   // TV uses "results"
+    public var names: [String] { (keywords ?? results ?? []).map(\.name) }
 }
 
 /// One credit from a person's combined (film + TV) filmography.

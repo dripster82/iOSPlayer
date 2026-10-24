@@ -206,6 +206,9 @@ struct Matcher {
         item.collectionID = d.belongsToCollection?.id
         item.collectionName = d.belongsToCollection?.name
         item.collectionCheckedAt = Date()
+        item.studios = d.productionCompanies?.map(\.name) ?? []
+        item.keywords = d.keywords?.names ?? []
+        item.universeCheckedAt = Date()
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item

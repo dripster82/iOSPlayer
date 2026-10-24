@@ -99,7 +99,7 @@ public actor TMDbClient {
     }
 
     public func movie(id: Int) async throws -> TMDbMovieDetail {
-        try await get("movie/\(id)", [URLQueryItem(name: "append_to_response", value: "credits")], label: "film")
+        try await get("movie/\(id)", [URLQueryItem(name: "append_to_response", value: "credits,keywords")], label: "film")
     }
 
     public func show(id: Int) async throws -> TMDbShowDetail {

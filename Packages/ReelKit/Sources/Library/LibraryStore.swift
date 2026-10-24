@@ -356,6 +356,19 @@ public final class LibraryStore: ObservableObject {
         return out
     }
 
+    // MARK: - Universes
+
+    /// Every universe with at least two library films, biggest first.
+    public func universes() -> [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for f in items(kind: .film) { for u in Universes.universes(studios: f.studios, keywords: f.keywords) { counts[u, default: 0] += 1 } }
+        return counts.filter { $0.value >= 2 }.map { ($0.key, $0.value) }.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+    }
+
+    public func films(inUniverse name: String) -> [MediaItem] {
+        items(kind: .film).filter { Universes.universes(studios: $0.studios, keywords: $0.keywords).contains(name) }.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
+    }
+
     // MARK: - Film collections
 
     /// Library films in the same TMDb collection, oldest first, the given film excluded.
@@ -380,18 +393,21 @@ public final class LibraryStore: ObservableObject {
     /// a film page found no siblings. Run once per launch: one TMDb detail call per film, almost all
     /// of them served from the metadata cache that the original match filled.
     public func backfillCollections(tmdb: TMDbClient) async {
-        let pending = items(kind: .film, includeHidden: true).filter { $0.collectionCheckedAt == nil && $0.tmdbID != nil }
+        let pending = items(kind: .film, includeHidden: true).filter { ($0.collectionCheckedAt == nil || $0.universeCheckedAt == nil) && $0.tmdbID != nil }
         guard !pending.isEmpty else { return }
-        Diagnostics.log("library", "backfilling collections for \(pending.count) films")
+        Diagnostics.log("library", "backfilling collections and universes for \(pending.count) films")
         var found = 0
         for (n, film) in pending.enumerated() {
             if Task.isCancelled { break }
             if let d = try? await tmdb.movie(id: film.tmdbID!) {
                 film.collectionID = d.belongsToCollection?.id
                 film.collectionName = d.belongsToCollection?.name
-                if film.collectionID != nil { found += 1 }
+                film.studios = d.productionCompanies?.map(\.name) ?? []
+                film.keywords = d.keywords?.names ?? []
+                if film.collectionID != nil || !Universes.universes(studios: film.studios, keywords: film.keywords).isEmpty { found += 1 }
             }
             film.collectionCheckedAt = Date()
+            film.universeCheckedAt = Date()
             if n % 25 == 24 { try? context.save() }
         }
         try? context.save()

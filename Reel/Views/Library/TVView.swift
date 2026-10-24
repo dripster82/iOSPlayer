@@ -54,11 +54,13 @@ struct FilmsView: View {
     @State private var fixMatchTarget: MediaItem?
     @State private var all: [MediaItem] = []
     @State private var genres: [String] = []
+    @State private var universes: [(name: String, count: Int)] = []
 
     var body: some View {
         let shown = sorted(filtered(all))
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if !universes.isEmpty { UniversesRow(universes: universes) }
                 FilterBar(quick: $quick, genre: $genre, decade: $decade, showUHD: true, genres: genres, decades: Array(Set(all.compactMap { FilterBar.decade($0.year) })).sorted(by: >))
                 if shown.isEmpty {
                     ContentUnavailableView("No films match", systemImage: "film", description: Text("Try clearing a filter.")).padding(.top, 60)
@@ -68,7 +70,7 @@ struct FilmsView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("Films")
-        .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film) }
+        .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film); universes = library.universes() }
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
