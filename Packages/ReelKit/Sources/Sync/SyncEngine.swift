@@ -57,6 +57,13 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             engine = nil
             return
         }
+        // One-time full refetch after the source-convergence upgrade: Source records fetched by an older
+        // build were ignored, and CloudKit will not resend them without starting from a fresh state.
+        let refetchKey = "reel.sync.refetch.v1"
+        if !UserDefaults.standard.bool(forKey: refetchKey) {
+            UserDefaults.standard.removeObject(forKey: stateKey)
+            UserDefaults.standard.set(true, forKey: refetchKey)
+        }
         var serialization: CKSyncEngine.State.Serialization?
         if let data = UserDefaults.standard.data(forKey: stateKey) {
             serialization = try? JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
@@ -100,7 +107,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let old = f.syncKey { oldNames.append(old) }
             f.syncKey = nil
             f.pendingSync = true
-            f.updatedAt = Date()
+            // updatedAt is deliberately left alone: the other device's copy of the same file may be newer,
+            // and the save conflict that follows must let the genuinely newer state win.
         }
         source.id = newID
         source.pendingSync = false
