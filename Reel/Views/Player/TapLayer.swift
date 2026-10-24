@@ -77,12 +77,6 @@ struct GestureLayer: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-        /// A drag only starts once the finger has clearly moved, so it never steals a tap.
-        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard let pan = g as? UIPanGestureRecognizer, let v = pan.view else { return true }
-            let t = pan.translation(in: v)
-            return hypot(t.x, t.y) > 12
-        }
     }
 }
 

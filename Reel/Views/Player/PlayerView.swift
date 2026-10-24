@@ -107,7 +107,6 @@ struct PlayerContentView: View {
                 if abs(d.translation.width) > abs(d.translation.height) {
                     let delta = d.translation.width / d.size.width * min(engine.duration, 600)
                     scrubTime = max(0, min(engine.duration, engine.time + delta))
-                    showControls()
                 } else {
                     // A full-height drag spans the whole range, measured from where the level was.
                     let frac = -d.translation.height / d.size.height
@@ -268,7 +267,13 @@ struct PlayerContentView: View {
     private func hideControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false } }
     private func scheduleHide() {
         hideTask?.cancel()
-        hideTask = Task { try? await Task.sleep(for: .seconds(3)); if engine.status == .playing, sheet == nil, scrubTime == nil { hideControls() } }
+        hideTask = Task {
+            // A cancelled sleep throws, so `try?` alone would run on and hide the controls at once:
+            // every showControls cancelled the previous timer, which then hid what had just been shown.
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            if engine.status == .playing, sheet == nil, scrubTime == nil { hideControls() }
+        }
     }
     private func showLockHint() {}
 }
