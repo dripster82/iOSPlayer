@@ -36,6 +36,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var options = PlaybackOptions()
     private var tracksLoaded = false
     private var appliedStart = false
+    /// Once the viewer picks a subtitle track (or Off) in the sheet, the default rule stops interfering.
+    private var userChoseSubtitle = false
 
     public override init() {
         super.init()
@@ -56,6 +58,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         self.options = options
         tracksLoaded = false
         appliedStart = false
+        userChoseSubtitle = false
 
         let media = VLCMedia(url: item.url)
         media.addOption(":network-caching=\(options.networkCachingMS)")
@@ -69,7 +72,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             media.addOption(":avcodec-hw=none")
         }
         if let lang = options.preferredAudioLanguage { media.addOption(":audio-language=\(lang)") }
-        if let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
+        // Asking VLC for a subtitle language makes it switch that track on, so only do it when subtitles
+        // should be on by default; the preference is still used to pick a track when the user turns them on.
+        if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
         player.media = media
         status = .opening
         player.play()
@@ -103,6 +108,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func selectSubtitleTrack(_ id: Int?) {
+        userChoseSubtitle = true
+        applySubtitleTrack(id)
+    }
+
+    private func applySubtitleTrack(_ id: Int?) {
         player.currentVideoSubTitleIndex = Int32(id ?? -1)
         currentSubtitleTrack = id
     }
@@ -191,7 +201,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         case .stopped: if status != .idle { status = .paused }
         case .ended: status = .ended
         case .error: status = .failed("VLC couldn't play this file.")
-        case .esAdded: if !tracksLoaded { loadTracks() }
+        case .esAdded: loadTracks()   // subtitle streams often arrive after the audio ones
         @unknown default: break
         }
     }
@@ -239,9 +249,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             }
         }
 
-        if !options.subtitlesOnByDefault, currentSubtitleTrack != nil, !subtitleTracks.contains(where: { $0.id == currentSubtitleTrack && $0.isForced }) {
-            // Respect the user's "off by default" unless VLC picked a forced track.
-            selectSubtitleTrack(nil)
+        // VLC switches a subtitle track on whenever a default-flagged stream appears, which can be after
+        // the first tracks load. Until the viewer chooses, keep enforcing "off by default" (forced tracks excepted).
+        if !userChoseSubtitle, !options.subtitlesOnByDefault, let current = currentSubtitleTrack,
+           !subtitleTracks.contains(where: { $0.id == current && $0.isForced }) {
+            applySubtitleTrack(nil)
         }
         tracksLoaded = !audioTracks.isEmpty
     }
