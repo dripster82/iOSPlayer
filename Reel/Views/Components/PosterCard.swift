@@ -73,8 +73,12 @@ struct ItemContextMenu: ViewModifier {
                 Label(library.isFavourite(item.itemKey) ? "Remove from Favourites" : "Add to Favourites", systemImage: library.isFavourite(item.itemKey) ? "heart.slash" : "heart")
             }
             if item.kind != .show {
-                let watched = library.watchState(item.itemKey)?.watched == true
+                let state = library.watchState(item.itemKey)
+                let watched = state?.watched == true
                 Button { library.setWatched(!watched, itemKey: item.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "checkmark.circle") }
+                if state?.isInProgress == true {
+                    Button { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
+                }
             } else {
                 Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
             }

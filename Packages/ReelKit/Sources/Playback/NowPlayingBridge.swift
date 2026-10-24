@@ -36,9 +36,11 @@ public final class NowPlayingBridge {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        engine.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }.store(in: &cancellables)
+        // Once a second is plenty for the lock screen; per-tick updates are an IPC round trip each.
+        engine.objectWillChange
+            .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] _ in Task { @MainActor in self?.refresh() } }
+            .store(in: &cancellables)
     }
 
     private func refresh() {

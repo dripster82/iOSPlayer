@@ -72,3 +72,12 @@ public protocol PlaybackEngine: AnyObject, ObservableObject {
     func addExternalSubtitle(_ url: URL)
     func stop()
 }
+
+/// Playback position, published separately from the engine so that only the scrubber and clock
+/// redraw on every tick. Everything else observes the engine, which changes far less often.
+@MainActor
+public final class PlaybackClock: ObservableObject {
+    @Published public internal(set) var time: TimeInterval = 0
+    @Published public internal(set) var duration: TimeInterval = 0
+    public init() {}
+}

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import MediaCore
 import Library
 import Playback
@@ -27,6 +28,10 @@ struct PlayerContentView: View {
     @State private var upNextCountdown: Int?
     @State private var volumeOverlay: Double?
     @State private var brightnessOverlay: Double?
+    /// Coarse copy of the clock (1 Hz) for the few conditions that depend on position, so the whole
+    /// view is not rebuilt on every VLC tick. The scrubber observes the clock itself.
+    @State private var coarseTime: TimeInterval = 0
+    @State private var coarseDuration: TimeInterval = 0
 
     enum Sheet: Identifiable { case audio, subtitles, chapters, speed, more; var id: Int { hashValue } }
 
@@ -43,15 +48,20 @@ struct PlayerContentView: View {
                 if let v = volumeOverlay { verticalMeter(v, icon: "speaker.wave.2.fill").position(x: geo.size.width * 0.86, y: geo.size.height / 2) }
                 if let b = brightnessOverlay { verticalMeter(b, icon: "sun.max.fill").position(x: geo.size.width * 0.14, y: geo.size.height / 2) }
                 if locked { lockButton }
-                if let intro = engine.chapters.first(where: \.looksLikeIntro), engine.time >= intro.start, engine.time < intro.start + intro.duration, !locked {
+                if let intro = engine.chapters.first(where: \.looksLikeIntro), coarseTime >= intro.start, coarseTime < intro.start + intro.duration, !locked {
                     Button("Skip intro") { engine.seek(to: intro.start + intro.duration) }
                         .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
                 }
                 if controlsVisible && !locked { controls(size: geo.size) }
-                if let next = player.upNext, engine.duration > 0, engine.duration - engine.time < 20 || engine.status == .ended { upNextCard(next) }
+                if let next = player.upNext, coarseDuration > 0, coarseDuration - coarseTime < 20 || engine.status == .ended { upNextCard(next) }
                 if let err = player.loadError ?? failure { errorCard(err) }
             }
+        }
+        .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
+            let rounded = t.rounded()
+            if rounded != coarseTime { coarseTime = rounded }
+            if engine.clock.duration != coarseDuration { coarseDuration = engine.clock.duration }
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
@@ -143,12 +153,7 @@ struct PlayerContentView: View {
             }
             Spacer()
             VStack(spacing: 6) {
-                Scrubber(time: scrubTime ?? engine.time, duration: engine.duration, chapters: engine.chapters, preview: scrubTime) { scrubTime = $0 } onCommit: { engine.seek(to: $0); scrubTime = nil }
-                HStack {
-                    Text(MediaFormat.clock(scrubTime ?? engine.time)).monospacedDigit()
-                    Spacer()
-                    Text("−" + MediaFormat.clock(engine.duration - (scrubTime ?? engine.time))).monospacedDigit()
-                }.font(.caption).foregroundStyle(.white.opacity(0.8))
+                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime) { engine.seek(to: $0) }
                 HStack(spacing: 8) {
                     tag("\(engine.rate.formatted())×", on: engine.rate != 1) { sheet = .speed }
                     if !engine.chapters.isEmpty { tag("Chapters") { sheet = .chapters } }
@@ -230,7 +235,7 @@ struct PlayerContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Can't play this").font(.headline)
                 Text(message).font(.footnote).foregroundStyle(.white.opacity(0.75))
-                if engine.duration > 0 { Text("Your position at \(MediaFormat.clock(engine.time)) is saved.").font(.caption).foregroundStyle(.white.opacity(0.6)) }
+                if coarseDuration > 0 { Text("Your position at \(MediaFormat.clock(coarseTime)) is saved.").font(.caption).foregroundStyle(.white.opacity(0.6)) }
                 HStack {
                     if let item = player.current, player.loadError != nil || failure != nil {
                         Button("Retry") { player.loadError = nil; player.play(item, file: player.currentFile, settings: settings) }.buttonStyle(.borderedProminent)
@@ -261,6 +266,24 @@ struct PlayerContentView: View {
             while let c = upNextCountdown, c > 0 { try? await Task.sleep(for: .seconds(1)); if upNextCountdown != nil { upNextCountdown = c - 1 } }
             if upNextCountdown == 0 { upNextCountdown = nil; player.playNext(settings: settings) }
         }
+    }
+}
+
+/// The only part of the player that redraws on every clock tick.
+struct TimelineBar: View {
+    @ObservedObject var clock: PlaybackClock
+    let chapters: [Chapter]
+    @Binding var scrubTime: TimeInterval?
+    let onSeek: (TimeInterval) -> Void
+
+    var body: some View {
+        let shown = scrubTime ?? clock.time
+        Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
+        HStack {
+            Text(MediaFormat.clock(shown)).monospacedDigit()
+            Spacer()
+            Text("−" + MediaFormat.clock(clock.duration - shown)).monospacedDigit()
+        }.font(.caption).foregroundStyle(.white.opacity(0.8))
     }
 }
 

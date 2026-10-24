@@ -249,6 +249,17 @@ public final class LibraryStore: ObservableObject {
         try? context.save()
     }
 
+    /// Drops an item from Continue Watching: position back to zero, not marked watched.
+    public func clearProgress(itemKey: String) {
+        guard let ws = watchState(itemKey) else { return }
+        ws.position = 0
+        ws.watched = false
+        ws.updatedAt = Date()
+        ws.pendingSync = true
+        try? context.save()
+        objectWillChange.send()
+    }
+
     public func setWatched(_ watched: Bool, itemKey: String) {
         let ws = watchState(itemKey) ?? { let w = WatchState(itemKey: itemKey, deviceID: deviceID); context.insert(w); return w }()
         ws.watched = watched

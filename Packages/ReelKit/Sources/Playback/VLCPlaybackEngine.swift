@@ -17,8 +17,11 @@ import UIKit
 public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
 
     @Published public private(set) var status: PlaybackStatus = .idle
-    @Published public private(set) var time: TimeInterval = 0
-    @Published public private(set) var duration: TimeInterval = 0
+    /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
+    /// `duration` everywhere else.
+    public let clock = PlaybackClock()
+    public var time: TimeInterval { clock.time }
+    public var duration: TimeInterval { clock.duration }
     @Published public private(set) var rate: Float = 1
     @Published public private(set) var audioTracks: [MediaTrack] = []
     @Published public private(set) var subtitleTracks: [MediaTrack] = []
@@ -80,7 +83,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func seek(to seconds: TimeInterval) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
         player.time = VLCTime(int: Int32(clamped * 1000))
-        time = clamped
+        clock.time = clamped
     }
 
     public func skip(by seconds: TimeInterval) { seek(to: time + seconds) }
@@ -117,8 +120,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func stop() {
         if player.isPlaying || player.state != .stopped { player.stop() }
         status = .idle
-        time = 0
-        duration = 0
+        clock.time = 0
+        clock.duration = 0
         rate = 1
         audioTracks = []
         subtitleTracks = []
@@ -128,6 +131,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private var fillEnabled = false
+    private var appliedFill: (fill: Bool, width: Int, height: Int)?
 
     /// Fit letterboxes inside the drawable (VLC's default). Fill crops the picture to the drawable's
     /// aspect ratio so it covers the screen. Scaling was wrong here before: `scaleFactor` works in
@@ -140,12 +144,16 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Re-applies the current Fit/Fill choice. `VLCVideoView` calls it whenever the drawable is laid out.
     public func drawableDidLayout() { applyFill() }
 
+    /// Only touches VLC when the answer changes: every layout pass calls this, and reconfiguring the
+    /// video output each time made the whole player stutter.
     private func applyFill() {
+        let view = player.drawable as? PlatformView
+        let w = Int((view?.bounds.width ?? 0).rounded()), h = Int((view?.bounds.height ?? 0).rounded())
+        let wanted = (fill: fillEnabled && w > 0 && h > 0, width: w, height: h)
+        if let applied = appliedFill, applied.fill == wanted.fill, !wanted.fill || (applied.width == w && applied.height == h) { return }
+        appliedFill = wanted
         player.scaleFactor = 0
-        guard fillEnabled, let view = player.drawable as? PlatformView else { setCropGeometry(nil); return }
-        let w = Int(view.bounds.width.rounded()), h = Int(view.bounds.height.rounded())
-        guard w > 0, h > 0 else { setCropGeometry(nil); return }
-        setCropGeometry("\(w):\(h)")
+        setCropGeometry(wanted.fill ? "\(w):\(h)" : nil)
     }
 
     /// VLCKit exposes the crop filter as a C string that libvlc copies on set.
@@ -185,9 +193,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func handleTimeChange() {
-        time = TimeInterval(player.time.intValue) / 1000
-        if let length = player.media?.length.intValue, length > 0 { duration = TimeInterval(length) / 1000 }
-        if !tracksLoaded, time > 0.5 { loadTracks() }
+        // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
+        let now = TimeInterval(player.time.intValue) / 1000
+        if abs(now - clock.time) >= 0.2 { clock.time = now }
+        if let length = player.media?.length.intValue, length > 0 {
+            let seconds = TimeInterval(length) / 1000
+            if seconds != clock.duration { clock.duration = seconds }
+        }
+        if !tracksLoaded, now > 0.5 { loadTracks() }
         if status == .buffering { status = .playing }
     }
 
