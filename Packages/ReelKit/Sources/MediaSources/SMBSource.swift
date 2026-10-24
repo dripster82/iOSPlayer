@@ -80,6 +80,11 @@ public actor SMBSource: MediaSource {
         return url
     }
 
+    public func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws {
+        guard let client else { throw SourceError.unreachable(config.host) }
+        try await client.downloadItem(atPath: relativePath, to: destination, progress: { bytes, total in progress(bytes, total) })
+    }
+
     public func disconnect() async {
         try? await client?.disconnectShare()
         client = nil

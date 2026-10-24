@@ -44,7 +44,7 @@ final class PlayerCoordinator: ObservableObject {
     /// wait on the SMB pre-flight connect (seconds on a NAS, a minute if it has to be woken). Called by
     /// the player a minute before the end; harmless to call more than once.
     func prepareNext() {
-        guard let next = upNext, let file = library.preferredFile(next) else { return }
+        guard let next = upNext, DownloadManager.localURL(for: next.itemKey) == nil, let file = library.preferredFile(next) else { return }
         if let prepared, prepared.fileID == file.persistentModelID, Date().timeIntervalSince(prepared.at) < 600 { return }
         Task {
             do {
@@ -70,7 +70,10 @@ final class PlayerCoordinator: ObservableObject {
         Task {
             do {
                 let url: URL, subs: [URL]
-                if let prepared, prepared.fileID == file.persistentModelID, Date().timeIntervalSince(prepared.at) < 600 {
+                if let local = DownloadManager.localURL(for: item.itemKey) {
+                    (url, subs) = (local, [])
+                    Diagnostics.log("player", "using downloaded copy for \(item.title.prefix(40))")
+                } else if let prepared, prepared.fileID == file.persistentModelID, Date().timeIntervalSince(prepared.at) < 600 {
                     (url, subs) = (prepared.url, prepared.subs)
                     self.prepared = nil
                 } else {

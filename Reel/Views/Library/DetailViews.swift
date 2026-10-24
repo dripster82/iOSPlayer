@@ -51,6 +51,7 @@ struct HeroHeader: View {
 struct ItemMenuContent: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var downloads: DownloadManager
     @Environment(\.dismiss) private var dismiss
     let item: MediaItem
     @Binding var fixMatchTarget: MediaItem?
@@ -58,9 +59,20 @@ struct ItemMenuContent: View {
         if item.kind == .show {
             Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
             Button { item.episodes.forEach { library.setWatched(false, itemKey: $0.itemKey) } } label: { Label("Mark all unwatched", systemImage: "circle") }
+            let seasons = Array(Set(item.episodes.compactMap(\.seasonNumber))).sorted()
+            if !seasons.isEmpty {
+                Menu { ForEach(seasons, id: \.self) { s in Button("Season \(s)") { downloads.enqueue(season: s, of: item) } } } label: { Label("Download season", systemImage: "arrow.down.circle") }
+            }
         } else {
             let watched = library.watchState(item.itemKey)?.watched == true
             Button { library.setWatched(!watched, itemKey: item.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: "checkmark.circle") }
+            if downloads.isDownloaded(item.itemKey) {
+                Button(role: .destructive) { downloads.remove(item.itemKey) } label: { Label("Remove download", systemImage: "trash") }
+            } else if let e = downloads.entry(for: item.itemKey) {
+                Button { downloads.cancel(item.itemKey) } label: { Label(e.state == .downloading ? "Downloading \(Int(e.progress * 100))% · cancel" : "Queued · cancel", systemImage: "xmark.circle") }
+            } else {
+                Button { downloads.enqueue(item) } label: { Label("Download", systemImage: "arrow.down.circle") }
+            }
         }
         if settings.tmdb != nil { Button { fixMatchTarget = item } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") } }
         Menu("Add to collection") {
@@ -181,6 +193,7 @@ struct ShowDetailView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var player: PlayerCoordinator
+    @EnvironmentObject private var downloads: DownloadManager
     let show: MediaItem
     var initialSeason: Int? = nil
     @State private var season: Int?
@@ -238,12 +251,19 @@ struct ShowDetailView: View {
                         }.padding(.horizontal)
                     }
                     ForEach(episodes, id: \.itemKey) { ep in
-                        EpisodeRow(episode: ep, state: states[ep.itemKey]).padding(.horizontal)
+                        EpisodeRow(episode: ep, state: states[ep.itemKey], downloaded: downloads.isDownloaded(ep.itemKey), downloading: downloads.entry(for: ep.itemKey)?.progress).padding(.horizontal)
                             .onTapGesture { player.play(ep, settings: settings) }
                             .contextMenu {
                                 let watched = states[ep.itemKey]?.watched == true
                                 Button { library.setWatched(!watched, itemKey: ep.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: "checkmark.circle") }
                                 Button { player.play(ep, fromStart: true, settings: settings) } label: { Label("Play from start", systemImage: "gobackward") }
+                                if downloads.isDownloaded(ep.itemKey) {
+                                    Button(role: .destructive) { downloads.remove(ep.itemKey) } label: { Label("Remove download", systemImage: "trash") }
+                                } else if downloads.entry(for: ep.itemKey) != nil {
+                                    Button { downloads.cancel(ep.itemKey) } label: { Label("Cancel download", systemImage: "xmark.circle") }
+                                } else {
+                                    Button { downloads.enqueue(ep) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                                }
                             }
                     }
                 }
@@ -261,11 +281,18 @@ struct EpisodeRow: View {
     let episode: MediaItem
     /// Handed in by the show page, which fetches all of a show's states in one query.
     var state: WatchState? = nil
+    var downloaded = false
+    /// Progress 0…1 while a download is in flight.
+    var downloading: Double? = nil
     var body: some View {
         let ws = state
         HStack(alignment: .top, spacing: 12) {
             ArtworkImage(url: ArtworkURL.still(episode.stillPath), title: episode.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 120)
                 .overlay(alignment: .topLeading) { if ws?.watched == true { Image(systemName: "checkmark").font(.caption2.bold()).foregroundStyle(.black).padding(4).background(.green, in: Circle()).padding(6) } }
+                .overlay(alignment: .topTrailing) {
+                    if downloaded { Image(systemName: "arrow.down.circle.fill").font(.caption).foregroundStyle(.white, .blue).padding(6) }
+                    else if let p = downloading { ProgressView(value: p).progressViewStyle(.circular).controlSize(.mini).tint(.white).padding(6) }
+                }
                 .overlay(alignment: .bottom) {
                     if let p = ws?.progress, ws?.isInProgress == true {
                         GeometryReader { g in Rectangle().fill(.black.opacity(0.45)).overlay(alignment: .leading) { Rectangle().fill(Color.accentColor).frame(width: g.size.width * p) } }.frame(height: 4)

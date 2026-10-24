@@ -74,6 +74,31 @@ public actor WebDAVSource: MediaSource {
         return c.url!
     }
 
+    public func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws {
+        var req = URLRequest(url: resolve(relativePath, directory: false))
+        authorise(&req)
+        req.timeoutInterval = 60
+        let (bytes, response) = try await session.bytes(for: req)
+        guard let http = response as? HTTPURLResponse else { throw SourceError.unreachable(config.host) }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.authFailed }
+        guard (200..<300).contains(http.statusCode) else { throw SourceError.notFound(relativePath) }
+        let total = http.expectedContentLength
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+        var buffer = Data(); buffer.reserveCapacity(1 << 20)
+        var written: Int64 = 0
+        for try await byte in bytes {
+            buffer.append(byte)
+            if buffer.count >= 1 << 20 {
+                try handle.write(contentsOf: buffer); written += Int64(buffer.count); buffer.removeAll(keepingCapacity: true)
+                if !progress(written, total) { throw CancellationError() }
+            }
+        }
+        if !buffer.isEmpty { try handle.write(contentsOf: buffer); written += Int64(buffer.count) }
+        _ = progress(written, total > 0 ? total : written)
+    }
+
     public func disconnect() async { credentials = nil }
 
     // MARK: -

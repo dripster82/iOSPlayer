@@ -53,6 +53,14 @@ public actor LocalSource: MediaSource {
         try resolve(relativePath)
     }
 
+    public func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws {
+        let from = try resolve(relativePath)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: from, to: destination)
+        let size = Int64((try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        _ = progress(size, size)
+    }
+
     public func disconnect() async {
         if accessing { root?.stopAccessingSecurityScopedResource() }
         accessing = false

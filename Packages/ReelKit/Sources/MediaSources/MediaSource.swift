@@ -63,6 +63,10 @@ public protocol MediaSource: Actor {
     /// A URL VLC can open directly. Credentials may be embedded; never persist this value.
     func playbackURL(_ relativePath: String, credentials: Credentials?) async throws -> URL
 
+    /// Copies a file to `destination` for offline playback. `progress` gets (bytes so far, total)
+    /// and returns false to abort. Requires `connect` first.
+    func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws
+
     func disconnect() async
 }
 
@@ -98,6 +102,7 @@ public actor UnsupportedSource: MediaSource {
     public func list(_ relativePath: String) async throws -> [DirectoryEntry] { throw SourceError.unsupported(config.type.displayName) }
     public func stat(_ relativePath: String) async throws -> DirectoryEntry { throw SourceError.unsupported(config.type.displayName) }
     public func playbackURL(_ relativePath: String, credentials: Credentials?) async throws -> URL { throw SourceError.unsupported(config.type.displayName) }
+    public func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws { throw SourceError.unsupported(config.type.displayName) }
     public func disconnect() async {}
 }
 

@@ -4,6 +4,7 @@ import Library
 import Sync
 
 struct SettingsView: View {
+    @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
@@ -92,6 +93,7 @@ struct SettingsView: View {
                 }
                 LabeledContent("Artwork cache", value: MediaFormat.bytes(artworkSize))
                 Button("Clear artwork cache", role: .destructive) { Task { await ImageLoader.shared.clear(); artworkSize = 0 } }
+                NavigationLink { DownloadsView() } label: { LabeledContent("Downloads", value: MediaFormat.bytes(downloads.totalBytes)) }
             }
 
             Section("Appearance") {
