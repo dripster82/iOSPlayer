@@ -62,7 +62,12 @@ struct SettingsView: View {
                 }
                 if sync.isEnabled {
                     LabeledContent("Last synced", value: sync.lastSyncedAt?.formatted(.relative(presentation: .named)) ?? "Not yet")
-                    Button("Sync now") { Task { await sync.fetchNow(); sync.pushPendingChanges() } }
+                    let pending = sync.pendingCount
+                    if pending > 0 { LabeledContent("Waiting to upload", value: "\(pending)") }
+                    Button { Task { await sync.syncNow() } } label: {
+                        HStack { Text(sync.isSyncing ? "Syncing…" : "Sync now"); if sync.isSyncing { Spacer(); ProgressView().controlSize(.small) } }
+                    }.disabled(sync.isSyncing)
+                    if let summary = sync.lastSummary { Text(summary).font(.caption).foregroundStyle(.secondary) }
                 }
                 if let e = sync.lastError { Text(e).font(.caption).foregroundStyle(.red) }
             } header: { Text("iCloud") } footer: { Text("Source passwords travel only through iCloud Keychain, never through the app's iCloud data. Files-app folders stay on the device that added them.") }

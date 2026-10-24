@@ -28,7 +28,9 @@ public actor LibraryScanner {
 
     public typealias ProgressHandler = @Sendable (ScanProgress) -> Void
 
-    public func scan(sourceID: UUID, credentials: Credentials?, providers: MetadataProviders, progress: ProgressHandler? = nil) async throws {
+    /// Returns the CloudKit record names of files dropped because they sit outside the chosen folders.
+    @discardableResult
+    public func scan(sourceID: UUID, credentials: Credentials?, providers: MetadataProviders, progress: ProgressHandler? = nil) async throws -> [String] {
         guard let record = try fetchSource(sourceID) else { throw SourceError.notFound(sourceID.uuidString) }
         var report = ScanProgress(sourceID: sourceID, sourceName: record.name, filesSeen: 0, filesNew: 0, matched: 0, needsReview: 0, phase: .connecting)
         progress?(report)
@@ -89,6 +91,21 @@ public actor LibraryScanner {
             if report.filesSeen % 50 == 0 { progress?(report); try modelContext.save() }
         }
 
+        // Files outside every included root (rules changed, or a merged source record briefly had none)
+        // leave the library; the next device learns through the sync deletions.
+        var droppedKeys: [String] = []
+        if !roots.isEmpty {
+            let excluded = record.folderRules.filter { !$0.includeInScan }.map(\.folderPath)
+            func under(_ path: String, _ folders: [String]) -> Bool {
+                folders.contains { $0.isEmpty || path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+            }
+            for file in record.files where !under(file.relativePath, roots) || under(file.relativePath, excluded) {
+                droppedKeys.append(SyncKeys.file(sourceID: sourceID, relativePath: file.relativePath))
+                modelContext.delete(file)
+            }
+            if !droppedKeys.isEmpty { try modelContext.save() }
+        }
+
         // Files that vanished keep their records (the share may just be offline); mark the time instead.
         try modelContext.save()
         await source.disconnect()
@@ -127,6 +144,7 @@ public actor LibraryScanner {
         try modelContext.save()
         report.phase = .done
         progress?(report)
+        return droppedKeys
     }
 
     private func apply(_ c: Classification, to file: MediaFile) {

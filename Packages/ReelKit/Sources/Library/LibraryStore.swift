@@ -159,9 +159,10 @@ public final class LibraryStore: ObservableObject {
         let assertion = BackgroundAssertion(name: "Reel scan \(record.name)")
         scanTasks[id] = Task { [weak self] in
             do {
-                try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
+                let dropped = try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
                     Task { @MainActor [weak self] in self?.publishProgress(p) }
                 }
+                if !dropped.isEmpty { await MainActor.run { [weak self] in self?.syncHooks?.deleted(dropped) } }
             } catch is CancellationError {
                 // Expected when the background task expires or the user stops a scan.
             } catch {
