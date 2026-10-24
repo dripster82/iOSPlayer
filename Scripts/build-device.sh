@@ -38,6 +38,11 @@ for prof in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobilepr
   fi
 done
 echo "==> signing with $ENTITLEMENTS"
+if [[ "$ENTITLEMENTS" == Reel/Reel.entitlements ]] && ! grep -q "icloud-container-identifiers" Reel/Reel.entitlements; then
+  echo "✗ Reel/Reel.entitlements has lost its iCloud keys (Xcode's provisioning repair empties it)."
+  echo "  Restore it:  git checkout 3ba96b7 -- Reel/Reel.entitlements   (then commit)"
+  exit 1
+fi
 
 # Build for the generic iOS target: it doesn't need the device to be reachable and produces the same Debug-iphoneos app.
 set -o pipefail

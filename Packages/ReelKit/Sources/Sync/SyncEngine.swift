@@ -34,7 +34,24 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         if on { start(cloudContainerID: cloudContainerID) } else { engine = nil }
     }
 
+    /// `CKContainer(identifier:)` raises an Objective-C exception, uncatchable from Swift, when the app
+    /// is signed without that container. A build signed with the keychain-only entitlements (or a
+    /// gutted entitlements file) must not take the whole app down at launch, so check the embedded
+    /// provisioning profile first.
+    public static func buildSupportsCloudKit(containerID: String) -> Bool {
+        guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
+              let data = FileManager.default.contents(atPath: path) else { return false }
+        // The profile is CMS-wrapped but its plist payload is plain text inside.
+        return String(decoding: data, as: UTF8.self).contains(containerID)
+            || data.range(of: Data(containerID.utf8)) != nil
+    }
+
     private func start(cloudContainerID: String) {
+        guard Self.buildSupportsCloudKit(containerID: cloudContainerID) else {
+            lastError = "This build isn't signed for iCloud (\(cloudContainerID)). Sync is off until it is."
+            engine = nil
+            return
+        }
         var serialization: CKSyncEngine.State.Serialization?
         if let data = UserDefaults.standard.data(forKey: stateKey) {
             serialization = try? JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
