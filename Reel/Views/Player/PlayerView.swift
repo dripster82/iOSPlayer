@@ -303,6 +303,9 @@ struct TimedOverlays: View {
             }
             if let next = player.upNext, duration > 0, duration - now < 20 || engine.status == .ended { upNextCard(next) }
         }
+        .onChange(of: now) { _, t in
+            if duration > 0, duration - t < 60, duration - t > 0, player.upNext != nil { player.prepareNext() }
+        }
         .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
             let rounded = t.rounded()
             if rounded != now { now = rounded }

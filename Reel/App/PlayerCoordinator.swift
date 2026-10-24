@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import SwiftData
 import MediaCore
 import Library
 import Playback
@@ -36,6 +37,26 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
+    /// A playback URL resolved ahead of time for the next episode (see `prepareNext`).
+    private var prepared: (fileID: PersistentIdentifier, url: URL, subs: [URL], at: Date)?
+
+    /// Resolves the next episode's URL now, while this one is still playing, so the hand-over does not
+    /// wait on the SMB pre-flight connect (seconds on a NAS, a minute if it has to be woken). Called by
+    /// the player a minute before the end; harmless to call more than once.
+    func prepareNext() {
+        guard let next = upNext, let file = library.preferredFile(next) else { return }
+        if let prepared, prepared.fileID == file.persistentModelID, Date().timeIntervalSince(prepared.at) < 600 { return }
+        Task {
+            do {
+                let (url, subs) = try await library.playbackURL(for: file)
+                prepared = (file.persistentModelID, url, subs, Date())
+                Diagnostics.log("player", "prepared next: \(Diagnostics.safe(url))")
+            } catch {
+                Diagnostics.log("player", "could not prepare next: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func play(_ item: MediaItem, file: MediaFile? = nil, fromStart: Bool = false, settings: AppSettings) {
         guard let file = file ?? library.preferredFile(item) else { loadError = "No file for \(item.title)."; return }
         current = item
@@ -48,8 +69,14 @@ final class PlayerCoordinator: ObservableObject {
         loadError = nil
         Task {
             do {
-                let (url, subs) = try await library.playbackURL(for: file) { message in
-                    Task { @MainActor in self.loadingMessage = message }
+                let url: URL, subs: [URL]
+                if let prepared, prepared.fileID == file.persistentModelID, Date().timeIntervalSince(prepared.at) < 600 {
+                    (url, subs) = (prepared.url, prepared.subs)
+                    self.prepared = nil
+                } else {
+                    (url, subs) = try await library.playbackURL(for: file) { message in
+                        Task { @MainActor in self.loadingMessage = message }
+                    }
                 }
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
