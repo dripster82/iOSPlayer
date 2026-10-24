@@ -262,28 +262,53 @@ public final class LibraryStore: ObservableObject {
         watchStates().filter(\.isInProgress).compactMap { ws in item(ws.itemKey).map { ($0, ws) } }.prefix(limit).map { $0 }
     }
 
-    /// For each show with any watch activity, the first unwatched episode after the last watched one.
+    /// Episodes in viewing order. Specials (season 0) only take part when `includingSpecials`,
+    /// i.e. when the viewer is already inside season 0.
+    private func orderedEpisodes(of show: MediaItem, includingSpecials: Bool) -> [MediaItem] {
+        show.episodes
+            .filter { includingSpecials || ($0.seasonNumber ?? 0) > 0 }
+            .sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
+    }
+
+    /// The episode the viewer most recently played in this show, with when.
+    private func lastPlayed(in show: MediaItem, states: [String: WatchState]) -> (MediaItem, Date)? {
+        show.episodes.compactMap { ep -> (MediaItem, Date)? in
+            guard let ws = states[ep.itemKey], ws.watched || ws.isInProgress else { return nil }
+            return (ep, ws.lastPlayedAt ?? ws.updatedAt)
+        }.max { $0.1 < $1.1 }
+    }
+
+    /// The episode after the most recently played one, in season/episode order, crossing into the next
+    /// season when needed. Whether it was watched before is irrelevant: after S03E04 comes S03E05, and a
+    /// skipped S02E07 stays skipped. Nil when the last played episode was the show's final one.
+    public func episodeAfterLastPlayed(in show: MediaItem, states: [String: WatchState]? = nil) -> MediaItem? {
+        let states = states ?? Dictionary(uniqueKeysWithValues: watchStates().map { ($0.itemKey, $0) })
+        guard let (last, _) = lastPlayed(in: show, states: states) else { return nil }
+        return episodeAfter(last)
+    }
+
+    /// Next Up on Home: one entry per show with viewing history, most recently watched show first.
+    /// A show whose last played episode is still in progress belongs to Continue Watching instead.
     public func nextUp(limit: Int = 12) -> [MediaItem] {
-        var out: [MediaItem] = []
         let states = Dictionary(uniqueKeysWithValues: watchStates().map { ($0.itemKey, $0) })
+        var candidates: [(MediaItem, Date)] = []
         for show in items(kind: .show) {
-            let eps = show.episodes.sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
-            guard eps.contains(where: { states[$0.itemKey]?.watched == true || states[$0.itemKey]?.isInProgress == true }) else { continue }
-            if let next = eps.first(where: { let s = states[$0.itemKey]; return s?.watched != true && s?.isInProgress != true }) { out.append(next) }
-            if out.count >= limit { break }
+            guard let (last, when) = lastPlayed(in: show, states: states) else { continue }
+            if states[last.itemKey]?.isInProgress == true { continue }
+            if let next = episodeAfter(last) { candidates.append((next, when)) }
         }
-        return out
+        return candidates.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
-    /// First unwatched episode of a show, or the first episode.
+    /// The show page's Play button: the episode after the last played one, else the first episode.
     public func nextEpisode(of show: MediaItem) -> MediaItem? {
-        let eps = show.episodes.sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
-        return eps.first { watchState($0.itemKey)?.watched != true } ?? eps.first
+        episodeAfterLastPlayed(in: show) ?? orderedEpisodes(of: show, includingSpecials: false).first ?? orderedEpisodes(of: show, includingSpecials: true).first
     }
 
+    /// The episode following `episode` in season/episode order; specials only follow specials.
     public func episodeAfter(_ episode: MediaItem) -> MediaItem? {
         guard let show = episode.show else { return nil }
-        let eps = show.episodes.sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
+        let eps = orderedEpisodes(of: show, includingSpecials: (episode.seasonNumber ?? 0) == 0)
         guard let i = eps.firstIndex(where: { $0.itemKey == episode.itemKey }), i + 1 < eps.count else { return nil }
         return eps[i + 1]
     }
