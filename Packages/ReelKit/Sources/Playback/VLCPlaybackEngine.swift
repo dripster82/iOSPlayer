@@ -112,6 +112,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         setStatus(.opening)
         player.play()
         for sub in item.externalSubtitles { addExternalSubtitle(sub) }
+        startOpenWatchdog()
     }
 
     public func play() { player.play() }
@@ -130,6 +131,23 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var ignoreTicksUntil = Date.distantPast
     private var lastTickAt = Date.distantPast
     private var seekWatchdog: Task<Void, Never>?
+    private var openWatchdog: Task<Void, Never>?
+
+    /// libvlc never times out an open on its own: an SMB server that has gone away, or a Wi-Fi link that
+    /// dropped while the app was in the background, leaves the player "opening" indefinitely with the
+    /// spinner up and no way to retry. After 25 s without a frame, give up with a clear error instead.
+    private func startOpenWatchdog() {
+        openWatchdog?.cancel()
+        openWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(25))
+            guard let self, !Task.isCancelled, !self.hasPlayed else { return }
+            guard self.status == .opening || self.status == .buffering else { return }
+            let target = self.item?.url.host.map { "on \($0)" } ?? "the file"
+            self.stopRequested = true
+            self.player.stop()
+            self.setStatus(.failed("No response opening \(target) after 25 seconds. Check the server is on and reachable, then retry."))
+        }
+    }
 
     /// Seeking over SMB with libvlc 4 sometimes never comes back: the player sits in "buffering" and no
     /// time tick follows. If nothing has ticked a few seconds after a seek, try the seek another way;
@@ -199,6 +217,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func stop() {
         seekWatchdog?.cancel()
+        openWatchdog?.cancel()
         if player.state != .stopped {
             stopRequested = true
             player.stop()
@@ -320,6 +339,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         case .opening: setStatus(.opening)
         case .buffering: status = player.isPlaying ? .playing : .buffering
         case .playing:
+            openWatchdog?.cancel()
             setStatus(.playing)
             hasPlayed = true
             if !tracksLoaded { loadTracks() }
