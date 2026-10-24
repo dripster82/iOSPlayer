@@ -42,4 +42,9 @@ final class ClassifierTests: XCTestCase {
         guard case .episode(let p) = c else { return XCTFail("expected episode, got \(c)") }
         XCTAssertEqual(p.title, "Tokyo Underground")
     }
+
+    func testCreditlessOpeningsAndEndingsAreIgnored() {
+        XCTAssertEqual(Classifier.classify(relativePath: "Torrents/2 Sort/Sword Art Online/Sword Art Online Season 02 (2014)/Extra/[A&C] Sword Art Online S02OP02v2 [BDRip 1080p] [7696C1AE].mkv", folderTag: nil), .ignore)
+        XCTAssertEqual(Classifier.classify(relativePath: "Torrents/2 Sort/Tokyo Underground/(Hi10)_Tokyo_Underground_-_NCED_(480p)_(V-A).mkv", folderTag: nil), .ignore)
+    }
 }

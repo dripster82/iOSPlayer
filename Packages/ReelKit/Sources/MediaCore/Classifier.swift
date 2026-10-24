@@ -53,7 +53,10 @@ public enum Classifier {
     private static func isSampleOrExtra(_ lower: String) -> Bool {
         let name = lower.split(separator: "/").last.map(String.init) ?? lower
         if name.hasPrefix("sample") || name.contains("-sample.") || name.contains(".sample.") { return true }
-        if lower.contains("/extras/") || lower.contains("/featurettes/") || lower.contains("/trailers/") { return true }
+        if lower.contains("/extras/") || lower.contains("/extra/") || lower.contains("/featurettes/") || lower.contains("/trailers/") { return true }
+        // Anime creditless openings/endings: "S02OP01", "S03ED02v2", "NCOP", "NCED".
+        // Underscores are word characters, so spell out the boundaries instead of using \b.
+        if name.range(of: #"(?:^|[^a-z0-9])(?:s\d{1,2}(?:op|ed)\d{1,2}|nc(?:op|ed))(?:[^a-z0-9]|$)"#, options: .regularExpression) != nil { return true }
         // Raw disc structures: numbered .m2ts / .vob streams can't be matched to anything.
         if lower.contains("/bdmv/") || lower.contains("/video_ts/") || lower.contains("/certificate/") { return true }
         if name.hasSuffix("-trailer.mp4") || name.hasSuffix("-trailer.mkv") { return true }

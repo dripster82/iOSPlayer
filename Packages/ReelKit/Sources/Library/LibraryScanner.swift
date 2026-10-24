@@ -93,9 +93,9 @@ public actor LibraryScanner {
 
         report.phase = .classifying
         progress?(report)
-        // Review files without a guess kind came from an older build's matcher and would never be retried;
-        // re-parse them so the current parser and matcher get another go.
-        let pending = record.files.filter { ($0.classificationRaw == "pending" || ($0.classificationRaw == "review" && !$0.reviewed && $0.guessKindRaw == nil)) && !$0.ignored }
+        // Every unreviewed review file is re-parsed on each scan: it is local and cheap, and it means a parser
+        // improvement reaches files an older build gave up on, instead of retrying stale guesses.
+        let pending = record.files.filter { ($0.classificationRaw == "pending" || ($0.classificationRaw == "review" && !$0.reviewed)) && !$0.ignored }
         for file in pending {
             apply(Classifier.classify(relativePath: file.relativePath, folderTag: record.tag(for: file.relativePath)), to: file)
         }

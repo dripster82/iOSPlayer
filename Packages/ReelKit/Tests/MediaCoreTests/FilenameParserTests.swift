@@ -188,4 +188,45 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertEqual(r.season, 1)
         XCTAssertEqual(r.episode, 3)
     }
+
+    // MARK: - From the 311-file review list on 24 Oct
+
+    func testSeasonEpisodeFoldedIntoNumberUnderSeasonFolder() {
+        let r = p("Joshua/TV Shows/Spongebob Squarepants/SpongeBob SquarePants Season 2 (2000-2001)/201 Your Shoe's Untied.avi")
+        XCTAssertEqual(r.title, "SpongeBob SquarePants")
+        XCTAssertEqual(r.season, 2)
+        XCTAssertEqual(r.episode, 1)
+        XCTAssertNil(r.year, "a season folder's year is not the show's first-air year")
+    }
+
+    func testFourDigitFoldedNumber() {
+        let r = p("Shows/Show Season 10 (2019-2020)/1007 Title.mkv")
+        XCTAssertEqual(r.season, 10)
+        XCTAssertEqual(r.episode, 7)
+    }
+
+    func testYearRangeUsesFirstYear() {
+        let r = p("Joshua/TV Shows/Spongebob Squarepants/SpongeBob SquarePants Season 1 (1999-2000)/SpongeBob SquarePants - 1x03 - Tea at the Treedome.avi")
+        XCTAssertEqual(r.title, "SpongeBob SquarePants")
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 3)
+        XCTAssertNil(r.year)
+        let open = p("Shows/Something Season 8 (2011-Present)/801 Pilot.mkv")
+        XCTAssertEqual(open.season, 8)
+        XCTAssertEqual(open.episode, 1)
+        let film = p("Films/Some Film (1999-2000).mkv")
+        XCTAssertEqual(film.year, 1999)
+    }
+
+    func testDashInFilmTitleDoesNotTruncate() {
+        let r = p("Films/Star Wars Episode V - The Empire Strikes Back (1980).mp4")
+        XCTAssertEqual(r.title, "Star Wars Episode V The Empire Strikes Back")
+        XCTAssertEqual(r.year, 1980)
+    }
+
+    func testBracketedQualityTokensAreStripped() {
+        let r = p("No Game No Life Zero/No Game No Life Zero (BDRip Dual Audio 1080p).mkv")
+        XCTAssertEqual(r.title, "No Game No Life Zero")
+        XCTAssertTrue(r.quality.contains("1080p"))
+    }
 }

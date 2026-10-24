@@ -62,6 +62,8 @@ public enum FilenameParser {
     // "[Group] Title", "(Hi10) Title" — a leading bracketed release group, never a "(2019)" year.
     private static let leadingGroupPattern = try! NSRegularExpression(pattern: #"^\s*[\[(]([^\]\)]{1,40})[\]\)]\s*"#)
     private static let yearPattern = try! NSRegularExpression(pattern: #"(?<![\dA-Za-z])((?:19|20)\d{2})(?![\dA-Za-z])"#)
+    // "(1999-2000)", "(2011-Present)", "2009–2011": a run of years is the first year.
+    private static let yearRangePattern = try! NSRegularExpression(pattern: #"(?i)(?<![\dA-Za-z])((?:19|20)\d{2})\s*[-–]\s*((?:19|20)\d{2}|present|ongoing|\?)(?![\dA-Za-z])"#)
 
     /// Tags that end the title and are kept as quality hints.
     private static let qualityTokens: [String] = [
@@ -97,14 +99,17 @@ public enum FilenameParser {
             result.year = stripped.year
         }
 
-        // 2. Season folder + bare episode number ("Season 2/05 - Title.mkv", "OVA/01 - Title.mkv").
+        // 2. Season folder + bare episode number ("Season 2/05 - Title.mkv", "OVA/01 - Title.mkv",
+        //    "SpongeBob SquarePants Season 2 (2000-2001)/201 Your Shoe's Untied.avi" where 201 = S2E01).
         if result.episode == nil, let parent = parents.last,
-           let season = seasonNumber(ofFolder: parent),
+           let season = seasonNumber(ofFolder: parent) ?? splitSeason(fromName: stripYear(parent).text).season,
            let epMatch = bareEpisodePattern.firstMatch(in: stem, range: fullRange(stem)),
-           let episode = Int(substring(stem, epMatch.range(at: 1))) {
+           let number = Int(substring(stem, epMatch.range(at: 1))) {
+            let digits = substring(stem, epMatch.range(at: 1))
+            // "201" / "1001": the season is folded into the number; peel it off when it agrees with the folder.
+            if digits.count >= 3, number / 100 == season { result.episode = number % 100 } else { result.episode = number }
             result.season = season
-            result.episode = episode
-            result.title = ""  // show title comes from the grandparent folder
+            result.title = ""  // show title comes from the folder
         }
 
         // 2b. Anime / fansub shapes: "Title - 01", "Title Ep01", "OVA 01 - Title", "Episode 0 Title".
@@ -134,7 +139,9 @@ public enum FilenameParser {
                 let split = splitSeason(fromName: stripped.text)
                 result.folderTitle = clean(splitQuality(clean(split.text)).0)
                 if result.title.isEmpty { result.title = result.folderTitle ?? "" }
-                if result.year == nil { result.year = stripped.year }
+                // "Archer (2009)" dates the show; "SpongeBob Season 7 (2009-2011)" dates the season, which
+                // would make a year-filtered search miss a show that started in 1999.
+                if result.year == nil, split.season == nil { result.year = stripped.year }
             }
         }
 
@@ -226,6 +233,16 @@ public enum FilenameParser {
     }
 
     private static func stripYear(_ text: String) -> (text: String, year: Int?) {
+        // Collapse a year range to its first year before the single-year logic runs.
+        if let range = yearRangePattern.firstMatch(in: text, range: fullRange(text)) {
+            let first = substring(text, range.range(at: 1))
+            let second = substring(text, range.range(at: 2))
+            // "Blade Runner 2049 - 2017" is a title and a year, not a range: ranges run forwards.
+            if Int(second).map({ $0 >= (Int(first) ?? 0) }) ?? true {
+                let collapsed = (text as NSString).replacingCharacters(in: range.range, with: first)
+                return stripYear(collapsed)
+            }
+        }
         let matches = yearPattern.matches(in: text, range: fullRange(text))
         // Prefer the last plausible year so "2001 A Space Odyssey 1968" keeps the title.
         for m in matches.reversed() {
@@ -255,7 +272,9 @@ public enum FilenameParser {
         var quality: [String] = []
         var hitQuality = false
         for tok in tokens {
-            let lower = tok.lowercased()
+            // "(BDRip" / "1080p]" still count as quality tags; a bare "-" between title words is just punctuation.
+            let lower = tok.trimmingCharacters(in: Self.brackets).lowercased()
+            if lower.isEmpty || lower == "-" { continue }
             if qualityTokens.contains(lower) || isReleaseGroup(tok) {
                 hitQuality = true
                 if qualityTokens.contains(lower) { quality.append(lower) }
@@ -267,13 +286,15 @@ public enum FilenameParser {
         return (title.joined(separator: " "), quality)
     }
 
+    private static let brackets = CharacterSet(charactersIn: "()[]{}")
+
     private static func qualityTags(in text: String) -> [String] {
-        tokenize(text).map { $0.lowercased() }.filter { qualityTokens.contains($0) }
+        tokenize(text).map { $0.trimmingCharacters(in: Self.brackets).lowercased() }.filter { qualityTokens.contains($0) }
     }
 
     private static func isReleaseGroup(_ token: String) -> Bool {
-        // "-GROUP" suffix style, or bracketed tags like [YTS] / [rarbg]
-        token.hasPrefix("-") || (token.hasPrefix("[") && token.hasSuffix("]"))
+        // "-GROUP" suffix style, or bracketed tags like [YTS] / [rarbg]. A lone "-" is punctuation.
+        (token.hasPrefix("-") && token.count > 1) || (token.hasPrefix("[") && token.hasSuffix("]"))
     }
 
     private static func tokenize(_ text: String) -> [String] {

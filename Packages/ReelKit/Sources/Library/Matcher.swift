@@ -74,7 +74,7 @@ struct Matcher {
                 if let forced = override?.forcedTMDbID { movieID = forced; confidence = .manual }
                 else if let animeFilm = await resolveAnimeFilm(parsed) { movieID = animeFilm }
                 else {
-                    let results = try await tmdb.searchMovies(query: parsed.title, year: parsed.year)
+                    let results = try await searchMoviesShortening(parsed)
                     let d = MatchScorer.decideMovie(results, parsed: parsed)
                     guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
                     movieID = pick.id
@@ -97,7 +97,9 @@ struct Matcher {
         var words = parsed.title.split(separator: " ").map(String.init)
         var query = parsed.title
         while true {
-            let results = try await tmdb.searchShows(query: query, year: parsed.year)
+            var results = try await tmdb.searchShows(query: query, year: parsed.year)
+            // A year taken from a folder may be a season's year, not the show's: retry unfiltered.
+            if results.isEmpty, parsed.year != nil { results = try await tmdb.searchShows(query: query, year: nil) }
             if !results.isEmpty || words.count <= 2 { return results }
             words.removeLast()
             query = words.joined(separator: " ")
@@ -161,6 +163,19 @@ struct Matcher {
             if let found = try? await tmdb.findShow(tvdbID: series.id) { return found.id }
         }
         return nil
+    }
+
+    /// "South Park The Movie (1999)" finds nothing; "South Park" with the year finds Bigger, Longer & Uncut.
+    private func searchMoviesShortening(_ parsed: ParsedName) async throws -> [TMDbMovieSummary] {
+        var words = parsed.title.split(separator: " ").map(String.init)
+        var query = parsed.title
+        while true {
+            var results = try await tmdb.searchMovies(query: query, year: parsed.year)
+            if results.isEmpty, parsed.year != nil { results = try await tmdb.searchMovies(query: query, year: nil) }
+            if !results.isEmpty || words.count <= 2 { return results }
+            words.removeLast()
+            query = words.joined(separator: " ")
+        }
     }
 
     private func markReview(_ file: MediaFile) -> Outcome {
