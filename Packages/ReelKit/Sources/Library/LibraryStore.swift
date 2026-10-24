@@ -369,6 +369,13 @@ public final class LibraryStore: ObservableObject {
         items(kind: .film).filter { Universes.universes(studios: $0.studios, keywords: $0.keywords).contains(name) }.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
     }
 
+    /// TMDb film collections (series) with at least two library films, biggest first.
+    public func filmCollections() -> [(id: Int, name: String, count: Int)] {
+        var counts: [Int: (String, Int)] = [:]
+        for f in items(kind: .film) { if let id = f.collectionID { counts[id] = (f.collectionName ?? counts[id]?.0 ?? "Collection", (counts[id]?.1 ?? 0) + 1) } }
+        return counts.filter { $0.value.1 >= 2 }.map { ($0.key, $0.value.0, $0.value.1) }.sorted { $0.2 != $1.2 ? $0.2 > $1.2 : $0.1 < $1.1 }
+    }
+
     // MARK: - Film collections
 
     /// Library films in the same TMDb collection, oldest first, the given film excluded.

@@ -1,6 +1,7 @@
 import SwiftUI
 import MediaCore
 import Library
+import Metadata
 
 struct TVView: View {
     @EnvironmentObject private var library: LibraryStore
@@ -44,6 +45,17 @@ struct TVView: View {
     private func decades(_ items: [MediaItem]) -> [String] { Array(Set(items.compactMap { FilterBar.decade($0.year) })).sorted(by: >) }
 }
 
+private func row(_ title: String, _ subtitle: String, poster: String?) -> some View {
+    HStack(spacing: 12) {
+        if let poster, let url = ArtworkURL.poster(poster) {
+            ArtworkImage(url: url, title: title, aspect: 1, cornerRadius: 8).frame(width: 44, height: 44)
+        } else {
+            ArtworkImage.Placeholder(title: title).frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        VStack(alignment: .leading) { Text(title).font(.headline); Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+    }
+}
+
 struct FilmsView: View {
     @EnvironmentObject private var library: LibraryStore
     enum Sort: String, CaseIterable { case title = "Title", year = "Year, newest first", rating = "Rating", runtime = "Runtime", added = "Date added" }
@@ -54,13 +66,11 @@ struct FilmsView: View {
     @State private var fixMatchTarget: MediaItem?
     @State private var all: [MediaItem] = []
     @State private var genres: [String] = []
-    @State private var universes: [(name: String, count: Int)] = []
 
     var body: some View {
         let shown = sorted(filtered(all))
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if !universes.isEmpty { UniversesRow(universes: universes) }
                 FilterBar(quick: $quick, genre: $genre, decade: $decade, showUHD: true, genres: genres, decades: Array(Set(all.compactMap { FilterBar.decade($0.year) })).sorted(by: >))
                 if shown.isEmpty {
                     ContentUnavailableView("No films match", systemImage: "film", description: Text("Try clearing a filter.")).padding(.top, 60)
@@ -70,7 +80,7 @@ struct FilmsView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("Films")
-        .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film); universes = library.universes() }
+        .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film) }
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
@@ -129,19 +139,34 @@ struct CollectionsView: View {
     @State private var adding = false
     @State private var fixMatchTarget: MediaItem?
     @State private var collections: [MediaCollection] = []
+    @State private var universes: [(name: String, count: Int)] = []
+    @State private var series: [(id: Int, name: String, count: Int)] = []
     var body: some View {
         List {
-            ForEach(collections, id: \.id) { c in
-                NavigationLink(value: LibraryRoute.collection(c.id)) {
-                    HStack {
-                        ArtworkImage.Placeholder(title: c.name).frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
-                        VStack(alignment: .leading) { Text(c.name).font(.headline); Text("\(c.itemKeys.count) items").font(.caption).foregroundStyle(.secondary) }
+            Section {
+                ForEach(collections, id: \.id) { c in
+                    NavigationLink(value: LibraryRoute.collection(c.id)) {
+                        row(c.name, "\(c.itemKeys.count) items", poster: nil)
                     }
                 }
+                if collections.isEmpty { Text("Tap + to make one, then add titles from their menu.").font(.footnote).foregroundStyle(.secondary) }
+            } header: { Text("My collections") }
+            if !universes.isEmpty {
+                Section {
+                    ForEach(universes, id: \.name) { u in
+                        NavigationLink(value: LibraryRoute.universe(u.name)) { row(u.name, "\(u.count) films", poster: library.films(inUniverse: u.name).first?.posterPath) }
+                    }
+                } header: { Text("Universes") } footer: { Text("Studios and franchises, from TMDb's companies and keywords. A universe appears once two of its films are in the library.") }
+            }
+            if !series.isEmpty {
+                Section {
+                    ForEach(series, id: \.id) { s in
+                        NavigationLink(value: LibraryRoute.filmCollection(s.id)) { row(s.name, "\(s.count) films", poster: library.films(inCollection: s.id, excluding: "").first?.posterPath) }
+                    }
+                } header: { Text("Film series") } footer: { Text("TMDb's collections: sequels and trilogies with two or more films here.") }
             }
         }
-        .overlay { if collections.isEmpty { ContentUnavailableView("No collections", systemImage: "rectangle.stack", description: Text("Group films and shows however you like.")) } }
-        .refreshFromLibrary { collections = library.collections() }
+        .refreshFromLibrary { collections = library.collections(); universes = library.universes(); series = library.filmCollections() }
         .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
