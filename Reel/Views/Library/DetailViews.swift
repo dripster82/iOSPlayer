@@ -128,6 +128,8 @@ struct FilmDetailView: View {
     let film: MediaItem
     @State private var fixMatchTarget: MediaItem?
     @State private var chosenFile: MediaFile?
+    /// Films TMDb lists in the same collection that are not in the library, by title and year.
+    @State private var missingFromCollection: [String] = []
 
     var body: some View {
         let ws = library.watchState(film.itemKey)
@@ -152,6 +154,18 @@ struct FilmDetailView: View {
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = film.overview { Text(o).font(.subheadline).padding(.horizontal) }
                 CastRow(names: film.cast).padding(.horizontal)
+                if let cid = film.collectionID {
+                    let others = library.films(inCollection: cid, excluding: film.itemKey)
+                    if !others.isEmpty {
+                        ItemRow(title: film.collectionName ?? "Collection", items: others, subtitle: { $0.year.map(String.init) ?? "" }, fixMatchTarget: $fixMatchTarget)
+                    }
+                    if !missingFromCollection.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if others.isEmpty { Text(film.collectionName ?? "Collection").font(.headline) }
+                            Text("Not in your library: " + missingFromCollection.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.horizontal)
+                    }
+                }
                 if film.files.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack { Text("Versions").font(.headline); Spacer(); Text("Tap to choose").font(.caption).foregroundStyle(.secondary) }
@@ -184,6 +198,15 @@ struct FilmDetailView: View {
         .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
+        .task(id: film.itemKey) {
+            guard let tmdb = settings.tmdb else { return }
+            await library.ensureCollection(for: film, tmdb: tmdb)
+            guard let cid = film.collectionID, let detail = try? await tmdb.collection(id: cid) else { return }
+            let have = Set(library.items(kind: .film).compactMap(\.tmdbID))
+            missingFromCollection = detail.parts.filter { !have.contains($0.id) && $0.releaseDate.map { !$0.isEmpty } == true }
+                .sorted { ($0.releaseDate ?? "") < ($1.releaseDate ?? "") }
+                .map { $0.title + ($0.releaseDate.map { " (\($0.prefix(4)))" } ?? "") }
+        }
     }
 }
 

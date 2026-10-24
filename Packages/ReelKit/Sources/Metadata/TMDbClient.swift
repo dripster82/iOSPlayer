@@ -81,6 +81,11 @@ public actor TMDbClient {
 
     // MARK: - Details
 
+    /// A film collection (sequels, a trilogy) and every film TMDb lists in it.
+    public func collection(id: Int) async throws -> TMDbCollectionDetail {
+        try await get("collection/\(id)", [], label: "collection")
+    }
+
     public func movie(id: Int) async throws -> TMDbMovieDetail {
         try await get("movie/\(id)", [URLQueryItem(name: "append_to_response", value: "credits")], label: "film")
     }

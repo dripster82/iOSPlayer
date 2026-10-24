@@ -100,6 +100,15 @@ public struct TMDbMovieDetail: Decodable, Sendable {
     }
 }
 
+public struct TMDbCollectionDetail: Decodable, Sendable, Hashable {
+    public var id: Int
+    public var name: String
+    public var overview: String?
+    public var posterPath: String?
+    public var parts: [TMDbMovieSummary]
+    enum CodingKeys: String, CodingKey { case id, name, overview, parts; case posterPath = "poster_path" }
+}
+
 public struct TMDbCollectionRef: Decodable, Sendable, Hashable {
     public var id: Int
     public var name: String

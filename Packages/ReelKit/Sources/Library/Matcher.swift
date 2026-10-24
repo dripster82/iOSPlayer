@@ -200,6 +200,9 @@ struct Matcher {
         item.runtimeMinutes = d.runtime
         item.genres = d.genres?.map(\.name) ?? []
         item.cast = d.credits?.cast.prefix(12).map(\.name) ?? []
+        item.collectionID = d.belongsToCollection?.id
+        item.collectionName = d.belongsToCollection?.name
+        item.collectionCheckedAt = Date()
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item

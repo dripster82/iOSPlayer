@@ -317,6 +317,26 @@ public final class LibraryStore: ObservableObject {
         return o
     }
 
+    // MARK: - Film collections
+
+    /// Library films in the same TMDb collection, oldest first, the given film excluded.
+    public func films(inCollection id: Int, excluding key: String) -> [MediaItem] {
+        items(kind: .film).filter { $0.collectionID == id && $0.itemKey != key }.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
+    }
+
+    /// Films matched before collections were recorded have no collection yet; fill it in from TMDb
+    /// the first time their page opens.
+    public func ensureCollection(for film: MediaItem, tmdb: TMDbClient) async {
+        guard film.kind == .film, film.collectionCheckedAt == nil, let id = film.tmdbID else { return }
+        if let d = try? await tmdb.movie(id: id) {
+            film.collectionID = d.belongsToCollection?.id
+            film.collectionName = d.belongsToCollection?.name
+        }
+        film.collectionCheckedAt = Date()
+        try? context.save()
+        if film.collectionID != nil { objectWillChange.send() }
+    }
+
     // MARK: - Extra artwork
 
     /// Fills in fanart.tv logo and background for an item the first time its detail screen opens

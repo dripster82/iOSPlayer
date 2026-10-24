@@ -160,6 +160,10 @@ public final class MediaItem {
     public var logoURL: String? = nil
     public var extraBackdropURL: String? = nil
     public var extraArtCheckedAt: Date? = nil
+    /// TMDb's film collection ("Spider-Man Collection"); films in one list on the film page.
+    public var collectionID: Int? = nil
+    public var collectionName: String? = nil
+    public var collectionCheckedAt: Date? = nil
 
     // Episode fields
     public var seasonNumber: Int?
