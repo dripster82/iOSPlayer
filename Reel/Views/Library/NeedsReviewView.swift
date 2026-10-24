@@ -7,7 +7,23 @@ struct NeedsReviewView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
     @State private var fixing: MediaFile?
+    @State private var fixingFolder: ReviewFolder?
     @State private var busy: UUID?
+    @State private var busyFolder: String?
+
+    /// One folder's review items, so a decision can be applied to all of them at once: a season of
+    /// a show the matcher could not name is usually 10–25 files that all want the same answer.
+    struct ReviewFolder: Identifiable {
+        var path: String
+        var files: [MediaFile]
+        var id: String { path }
+        var name: String { path.isEmpty ? "/" : path }
+    }
+
+    private func folders(_ files: [MediaFile]) -> [ReviewFolder] {
+        let grouped = Dictionary(grouping: files) { ($0.relativePath as NSString).deletingLastPathComponent }
+        return grouped.keys.sorted().map { ReviewFolder(path: $0, files: grouped[$0]!) }
+    }
 
     var body: some View {
         let files = library.filesNeedingReview()
@@ -15,10 +31,11 @@ struct NeedsReviewView: View {
             if files.isEmpty {
                 ContentUnavailableView("All clear", systemImage: "checkmark.seal", description: Text("Files the app can't match confidently will appear here. Nothing is changed on your drive."))
             } else {
+                ForEach(folders(files)) { folder in
                 Section {
-                    ForEach(files, id: \.id) { f in
+                    ForEach(folder.files, id: \.id) { f in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(f.relativePath).font(.footnote.weight(.semibold))
+                            Text((f.relativePath as NSString).lastPathComponent).font(.footnote.weight(.semibold))
                             Text("Best guess: \(guess(f))").font(.caption).foregroundStyle(f.guessTitle == nil ? .red : .yellow)
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
@@ -30,15 +47,49 @@ struct NeedsReviewView: View {
                                 }.controlSize(.small)
                             }
                         }
-                        .opacity(busy == f.id ? 0.5 : 1)
+                        .opacity(busy == f.id || busyFolder == folder.path ? 0.5 : 1)
+                    }
+                } header: {
+                    HStack {
+                        Text(folder.name).lineLimit(1).truncationMode(.head)
+                        Spacer()
+                        if folder.files.count > 1 {
+                            Menu {
+                                Button("Accept all \(folder.files.count)") { resolveAll(folder, kind: nil) }
+                                Button("Fix match for all…") { fixingFolder = folder }
+                                Button("Treat all as TV") { resolveAll(folder, kind: .episode) }
+                                Button("Treat all as Film") { resolveAll(folder, kind: .film) }
+                                Button("Ignore all", role: .destructive) { try? library.ignoreFiles(folder.files) }
+                            } label: { Label("All \(folder.files.count)", systemImage: "checkmark.circle").font(.caption) }
+                        }
                     }
                 } footer: {
-                    Text("\(files.count) file\(files.count == 1 ? "" : "s"). Choices are saved in the app and synced; files are never renamed.")
+                    if folder.id == folders(files).last?.id {
+                        Text("\(files.count) file\(files.count == 1 ? "" : "s"). Choices are saved in the app and synced; files are never renamed.")
+                    }
+                }
                 }
             }
         }
         .navigationTitle("Needs Review")
         .sheet(item: $fixing) { FixMatchView(file: $0) }
+        .sheet(item: $fixingFolder) { FixMatchView(files: $0.files) }
+    }
+
+    /// `kind` nil accepts each file's own guess (TV when it has a season number, film otherwise).
+    private func resolveAll(_ folder: ReviewFolder, kind: MediaKind?) {
+        guard let tmdb = settings.tmdb else { library.lastError = "Add a TMDb API key in Settings first."; return }
+        busyFolder = folder.path
+        Task {
+            if let kind {
+                try? await library.resolveReview(folder.files, as: kind, tmdbID: nil, tmdb: tmdb)
+            } else {
+                let tv = folder.files.filter { $0.guessSeason != nil }, film = folder.files.filter { $0.guessSeason == nil }
+                if !tv.isEmpty { try? await library.resolveReview(tv, as: .episode, tmdbID: nil, tmdb: tmdb) }
+                if !film.isEmpty { try? await library.resolveReview(film, as: .film, tmdbID: nil, tmdb: tmdb) }
+            }
+            busyFolder = nil
+        }
     }
 
     private func guess(_ f: MediaFile) -> String {
@@ -61,6 +112,8 @@ struct FixMatchView: View {
     @Environment(\.dismiss) private var dismiss
     var item: MediaItem? = nil
     var file: MediaFile? = nil
+    /// A whole folder from Needs Review: the chosen result is applied to every file.
+    var files: [MediaFile] = []
 
     @State private var query = ""
     @State private var year = ""
@@ -94,9 +147,10 @@ struct FixMatchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .onAppear {
-                query = item?.title ?? file?.guessTitle ?? ""
-                year = (item?.year ?? file?.guessYear).map(String.init) ?? ""
-                kind = (item?.kind == .show || file?.guessSeason != nil) ? .show : .film
+                let sample = file ?? files.first
+                query = item?.title ?? sample?.guessTitle ?? ""
+                year = (item?.year ?? sample?.guessYear).map(String.init) ?? ""
+                kind = (item?.kind == .show || sample?.guessSeason != nil) ? .show : .film
                 if !query.isEmpty { search() }
             }
         }
@@ -121,6 +175,7 @@ struct FixMatchView: View {
             do {
                 if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb) }
                 else if let file { try await library.resolveReview(file, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
+                else if !files.isEmpty { try await library.resolveReview(files, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }

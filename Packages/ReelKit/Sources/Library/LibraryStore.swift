@@ -251,6 +251,35 @@ public final class LibraryStore: ObservableObject {
         notifySync()
     }
 
+    /// Same decision for a whole folder of review items: one TMDb lookup per file, one save, one sync.
+    public func resolveReview(_ files: [MediaFile], as kind: MediaKind?, tmdbID: Int?, tmdb: TMDbClient) async throws {
+        let matcher = Matcher(context: context, tmdb: tmdb)
+        for file in files {
+            let o = override(for: file)
+            o.forcedKindRaw = kind?.rawValue
+            o.forcedTMDbID = tmdbID
+            o.updatedAt = Date(); o.pendingSync = true
+            file.reviewed = true
+            file.classificationRaw = kind == .episode ? "episode" : "film"
+            file.pendingSync = true; file.updatedAt = Date()
+        }
+        try context.save()
+        for file in files { _ = await matcher.match(file) }
+        try context.save()
+        Diagnostics.log("library", "review: \(files.count) files set to \(kind?.rawValue ?? "auto")\(tmdbID.map { " tmdb \($0)" } ?? "")")
+        notifySync()
+    }
+
+    public func ignoreFiles(_ files: [MediaFile]) throws {
+        for file in files {
+            file.ignored = true
+            file.pendingSync = true; file.updatedAt = Date()
+            let o = override(for: file); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true
+        }
+        try context.save()
+        notifySync()
+    }
+
     public func ignoreFile(_ file: MediaFile) throws {
         file.ignored = true
         file.pendingSync = true; file.updatedAt = Date()
