@@ -392,6 +392,24 @@ public final class LibraryStore: ObservableObject {
         notifySync(); objectWillChange.send()
     }
 
+    // MARK: - Group artwork (universes, film series)
+
+    public func groupArtwork(for groupID: String) -> GroupArtwork? {
+        var d = FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == groupID }); d.fetchLimit = 1
+        return (try? context.fetch(d).first).flatMap { $0.isEmpty ? nil : $0 }
+    }
+    public func allGroupArtwork() -> [String: GroupArtwork] {
+        Dictionary(((try? context.fetch(FetchDescriptor<GroupArtwork>())) ?? []).filter { !$0.isEmpty }.map { ($0.groupID, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+    /// nil url and empty collage clears the pick (the row stays, as a tombstone the other device honours).
+    public func setGroupArtwork(url: String?, collage: [String], for groupID: String) {
+        let g = (try? context.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == groupID })).first) ?? { let x = GroupArtwork(groupID: groupID); context.insert(x); return x }()
+        g.url = url; g.collageURLs = Array(collage.prefix(4))
+        g.updatedAt = Date(); g.pendingSync = true
+        try? context.save()
+        notifySync(); objectWillChange.send()
+    }
+
     // MARK: - Universes
 
     /// Everything the Collections screen needs in one pass over the films: universes and TMDb series

@@ -243,6 +243,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         for f in (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("fav|" + f.itemKey)) }
         for o in (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("override|" + o.fileKey)) }
         for c in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("collection|" + c.id.uuidString)) }
+        for g in (try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.groupArt(g.groupID))) }
         for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.pendingSync }))) ?? [] where s.type != .local { ids.append(recordID(SyncKeys.source(s.id))) }
         for i in (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.item(i.itemKey))) }
         for f in (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? [] {
@@ -403,6 +404,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case "collection": return UUID(uuidString: key).flatMap { u in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == u })).first)?.updatedAt }
         case "source": return UUID(uuidString: key).flatMap { u in (try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == u })).first)?.updatedAt }
         case "item": return (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first)?.updatedAt
+        case "groupart": return (try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == key })).first)?.updatedAt
         case "file":
             let name = id.recordName
             return (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == name })).first)?.updatedAt
@@ -423,6 +425,11 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             guard let f = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
             let r = baseRecord("Favourite", id)
             r["itemKey"] = f.itemKey; r["createdAt"] = f.createdAt; r["deletedAt"] = f.deletedAt; r["updatedAt"] = f.updatedAt
+            return r
+        case "groupart":
+            guard let g = try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == key })).first else { return nil }
+            let r = baseRecord("GroupArtwork", id)
+            r["groupID"] = g.groupID; r["url"] = g.url; r["collageURLs"] = Self.list(g.collageURLs); r["updatedAt"] = g.updatedAt
             return r
         case "override":
             guard let o = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first else { return nil }
@@ -498,6 +505,13 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             f.createdAt = (r["createdAt"] as? Date) ?? f.createdAt
             f.deletedAt = r["deletedAt"] as? Date
             f.updatedAt = remoteUpdated; f.pendingSync = false
+        case "GroupArtwork":
+            guard let key = r["groupID"] as? String else { return }
+            let g = (try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == key })).first) ?? { let x = GroupArtwork(groupID: key); x.updatedAt = .distantPast; x.pendingSync = false; ctx.insert(x); return x }()
+            guard remoteUpdated > g.updatedAt else { return }
+            g.url = r["url"] as? String
+            g.collageURLs = (r["collageURLs"] as? [String]) ?? []
+            g.updatedAt = remoteUpdated; g.pendingSync = false
         case "ItemOverride":
             guard let key = r["fileKey"] as? String else { return }
             let o = (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first) ?? { let x = ItemOverride(fileKey: key); x.updatedAt = .distantPast; x.pendingSync = false; ctx.insert(x); return x }()
@@ -660,6 +674,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case "watch": if let x = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "fav": if let x = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "override": if let x = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first { x.pendingSync = false }
+        case "groupart": if let x = try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == key })).first { x.pendingSync = false }
         case "collection": if let uuid = UUID(uuidString: key), let x = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { x.pendingSync = false }
         case "source": if let uuid = UUID(uuidString: key), let x = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first { x.pendingSync = false }
         case "item": if let x = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }

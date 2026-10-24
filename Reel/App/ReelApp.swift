@@ -14,7 +14,7 @@ struct ReelApp: App {
     @StateObject private var sync: SyncEngine
     @StateObject private var player: PlayerCoordinator
     @StateObject private var downloads: DownloadManager
-    @StateObject private var groupArt = GroupArtStore()
+    @StateObject private var groupArt: GroupArtStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -32,6 +32,7 @@ struct ReelApp: App {
         _sync = StateObject(wrappedValue: sync)
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
         _downloads = StateObject(wrappedValue: DownloadManager(library: store))
+        _groupArt = StateObject(wrappedValue: GroupArtStore(library: store))
         // Every local write pushes straight away, so putting one device down and picking up another just works.
         store.syncHooks = SyncHooks(changed: { [weak sync] in sync?.pushPendingChanges() },
                                     deleted: { [weak sync] keys in sync?.deleteRecords(named: keys) })

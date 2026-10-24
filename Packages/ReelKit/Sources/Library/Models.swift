@@ -333,11 +333,32 @@ public final class SyncRecordMeta {
     }
 }
 
+/// Artwork the user picked for a universe or film series. Those groups are computed from the films,
+/// not stored, so the pick is keyed by the group's id ("u:Marvel", "s:<tmdb collection id>").
+@Model
+public final class GroupArtwork {
+    @Attribute(.unique) public var groupID: String
+    /// One picture (logo, poster or backdrop URL) for the card, or nil for a collage.
+    public var url: String?
+    /// Up to four poster URLs for the collage; empty means the group's first four films.
+    public var collageURLs: [String]
+    public var updatedAt: Date
+    public var pendingSync: Bool
+
+    public init(groupID: String) {
+        self.groupID = groupID
+        collageURLs = []
+        updatedAt = Date()
+        pendingSync = true
+    }
+    public var isEmpty: Bool { url == nil && collageURLs.isEmpty }
+}
+
 public enum LibrarySchema {
     public static let models: [any PersistentModel.Type] = [
         SourceRecord.self, FolderRule.self, MediaFile.self, MediaItem.self,
         WatchState.self, Favourite.self, ItemOverride.self, MediaCollection.self,
-        SyncRecordMeta.self,
+        SyncRecordMeta.self, GroupArtwork.self,
     ]
 
     public static func container(inMemory: Bool = false) throws -> ModelContainer {

@@ -1,24 +1,39 @@
 import Foundation
 import SwiftUI
+import Library
 
-/// Artwork the user picked for a universe or film series. Those groups are computed, not stored,
-/// so their choices live here, keyed by the group's id. Per device; nothing to sync them through yet.
+/// Artwork picks for universes and film series. Backed by `GroupArtwork` rows in the library (so
+/// they sync); this object exists so views get a change signal and a simple API. The first launch
+/// after the move imports the picks the previous build kept in UserDefaults.
+@MainActor
 final class GroupArtStore: ObservableObject {
     struct Art: Codable, Equatable {
-        /// A single picture (logo, poster or backdrop URL) to use as the card, or nil for a collage.
         var url: String?
-        /// Up to four poster URLs for the collage; empty means the group's first four films.
         var collage: [String] = []
         var isEmpty: Bool { url == nil && collage.isEmpty }
     }
-    private let key = "reel.groupArt"
-    @Published private(set) var all: [String: Art]
+    private let library: LibraryStore
+    @Published private(set) var version = 0
 
-    init() { all = (UserDefaults.standard.data(forKey: "reel.groupArt")).flatMap { try? JSONDecoder().decode([String: Art].self, from: $0) } ?? [:] }
+    init(library: LibraryStore) {
+        self.library = library
+        importLegacy()
+    }
 
-    func art(for id: String) -> Art? { all[id] }
+    func art(for id: String) -> Art? {
+        library.groupArtwork(for: id).map { Art(url: $0.url, collage: $0.collageURLs) }
+    }
     func set(_ art: Art?, for id: String) {
-        if let art, !art.isEmpty { all[id] = art } else { all.removeValue(forKey: id) }
-        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: key) }
+        library.setGroupArtwork(url: art?.url, collage: art?.collage ?? [], for: id)
+        version += 1
+    }
+
+    private func importLegacy() {
+        let key = "reel.groupArt"
+        guard let data = UserDefaults.standard.data(forKey: key), let old = try? JSONDecoder().decode([String: Art].self, from: data) else { return }
+        for (id, art) in old where !art.isEmpty && library.groupArtwork(for: id) == nil {
+            library.setGroupArtwork(url: art.url, collage: art.collage, for: id)
+        }
+        UserDefaults.standard.removeObject(forKey: key)
     }
 }

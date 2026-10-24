@@ -171,7 +171,7 @@ struct CollectionsView: View {
             }.padding(.vertical)
         }
         .refreshFromLibrary { rebuild() }
-        .onReceive(groupArt.$all) { _ in rebuild() }
+        .onReceive(groupArt.$version) { _ in rebuild() }
         .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
