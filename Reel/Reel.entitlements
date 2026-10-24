@@ -14,5 +14,7 @@
 	<array>
 		<string>$(AppIdentifierPrefix)uk.co.ketelle.reel</string>
 	</array>
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

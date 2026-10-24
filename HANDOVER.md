@@ -116,7 +116,11 @@ is warning-free.
 
 ### 3.2 Still needs Paul (interactive)
 
-- **iCloud / CloudKit entitlements.** No Apple ID is signed into Xcode on this Mac ("No Accounts"), so
+- **iCloud / CloudKit entitlements — DONE 24 Oct, afternoon.** Paul signed into Xcode and ran Reel on the
+  iPad once; "iOS Team Provisioning Profile: uk.co.ketelle.reel" now exists with iCloud, keychain and
+  `aps-environment` (CloudKit pushes), and includes both the iPhone and the iPad. `Scripts/build-device.sh`
+  detects that profile and signs with the real `Reel/Reel.entitlements`. The paragraph below is history.
+- **(historical) iCloud / CloudKit entitlements.** No Apple ID is signed into Xcode on this Mac ("No Accounts"), so
   signing with `Reel/Reel.entitlements` fails: the wildcard team profile lacks the iCloud capability and
   the `iCloud.uk.co.ketelle.reel` container. Fix: Xcode → Settings → Accounts → sign in, open
   `Reel.xcodeproj`, build once for the device. Xcode registers the App ID + container and creates
@@ -124,7 +128,7 @@ is warning-free.
   xcodebuild run rewrites `Reel/Reel.entitlements` to an empty `<dict/>`**; `Scripts/build-device.sh`
   restores it, otherwise `git checkout -- Reel/Reel.entitlements`. The no-iCloud build runs fine but
   iCloud sync is unavailable; everything else in §4 can be tested.
-- **Launching on the phone** needs it unlocked (`devicectl` returned `Locked`).
+- **Launching on the phone** needs it unlocked (`devicectl` returned `Locked`). iPad: `DA605DF8-5248-5E92-A5E5-D4DF7E97DC87`.
 - A TMDb API key for the scan/match steps.
 
 ### 3.3 Run the unit tests

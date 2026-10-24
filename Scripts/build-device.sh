@@ -19,7 +19,8 @@ cd "$ROOT"
 [[ -d Packages/ReelKit/Vendor/MobileVLCKit.xcframework ]] || Scripts/fetch-vlckit.sh
 [[ -d Reel.xcodeproj ]] || xcodegen generate
 
-restore() { git checkout -- Reel/Reel.entitlements 2>/dev/null || true; }
+# Only the keychain-only build makes Xcode empty Reel.entitlements; restore it afterwards in that case.
+restore() { [[ "${ENTITLEMENTS:-}" == Reel/Reel-NoiCloud.entitlements ]] && git checkout -- Reel/Reel.entitlements 2>/dev/null || true; }
 trap restore EXIT
 
 if ! xcrun devicectl list devices --timeout 10 2>/dev/null | grep -Eq "$DEVICE.*(available|connected)"; then
@@ -28,11 +29,21 @@ if ! xcrun devicectl list devices --timeout 10 2>/dev/null | grep -Eq "$DEVICE.*
   exit 1
 fi
 
+# Once Xcode (signed in) has created the app-specific profile, the real entitlements (iCloud, keychain)
+# sign fine; before that only the keychain-only file does.
+ENTITLEMENTS=Reel/Reel-NoiCloud.entitlements
+for prof in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobileprovision; do
+  if security cms -D -i "$prof" 2>/dev/null | grep -q "<string>iOS Team Provisioning Profile: uk.co.ketelle.reel</string>"; then
+    ENTITLEMENTS=Reel/Reel.entitlements; break
+  fi
+done
+echo "==> signing with $ENTITLEMENTS"
+
 # Build for the generic iOS target: it doesn't need the device to be reachable and produces the same Debug-iphoneos app.
 set -o pipefail
 xcodebuild build -project Reel.xcodeproj -scheme Reel \
   -destination "generic/platform=iOS" -derivedDataPath "$DD" \
-  CODE_SIGN_ENTITLEMENTS=Reel/Reel-NoiCloud.entitlements \
+  CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS" \
   | grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)"
 
 APP="$DD/Build/Products/Debug-iphoneos/Reel.app"
