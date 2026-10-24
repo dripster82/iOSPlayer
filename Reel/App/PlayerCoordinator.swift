@@ -125,7 +125,7 @@ final class PlayerCoordinator: ObservableObject {
     func flushProgress() { saveProgress() }
 
     private func saveProgress(markWatched: Bool = false) {
-        guard let item = current, engine.duration > 0 else { return }
+        guard let item = current, engine.duration > 0, !engine.resumePending || markWatched else { return }
         library.recordProgress(itemKey: item.itemKey, position: markWatched ? engine.duration : engine.time, duration: engine.duration)
     }
 

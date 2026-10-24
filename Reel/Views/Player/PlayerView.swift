@@ -99,17 +99,20 @@ struct PlayerContentView: View {
 
     private func gestureLayer(size: CGSize) -> some View {
         Color.clear.contentShape(Rectangle())
-            .gesture(
+            // A single tap acts at once (no waiting to rule out a double tap). A double tap then skips and
+            // puts the controls back the way they were before the first tap.
+            .gesture(TapGesture().onEnded {
+                if locked { withAnimation { showLockHint() } } else { controlsVisible ? hideControls() : showControls() }
+            })
+            .simultaneousGesture(
                 SpatialTapGesture(count: 2).onEnded { v in
                     guard !locked else { return }
                     let left = v.location.x < size.width / 2
                     engine.skip(by: left ? -Double(settings.skipInterval) : Double(settings.skipInterval))
                     skipFlash = (left, UUID())
+                    controlsVisible ? hideControls() : showControls()   // undo the first tap's toggle
                     Task { try? await Task.sleep(for: .milliseconds(600)); if skipFlash?.left == left { skipFlash = nil } }
                 }
-                .exclusively(before: TapGesture().onEnded {
-                    if locked { withAnimation { showLockHint() } } else { controlsVisible ? hideControls() : showControls() }
-                })
             )
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.4).sequenced(before: DragGesture(minimumDistance: 0)).onChanged { v in
@@ -180,7 +183,9 @@ struct PlayerContentView: View {
         }
         .padding(.horizontal, 28).padding(.vertical, 18)
         .foregroundStyle(.white)
-        .background(LinearGradient(colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+        // The gradient is decoration: touches on empty areas must reach the gesture layer underneath so
+        // tapping hides the controls and double-tap skip works while they are showing.
+        .background(LinearGradient(colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom).ignoresSafeArea().allowsHitTesting(false))
         .transition(.opacity)
     }
 

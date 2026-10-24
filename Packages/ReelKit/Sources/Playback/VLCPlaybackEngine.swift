@@ -28,6 +28,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     @Published public private(set) var subtitleDelay: TimeInterval = 0
     @Published public private(set) var audioDelay: TimeInterval = 0
 
+    /// True until playback has actually reached the requested resume point (within 5 s). While true,
+    /// nothing should save progress: a save at 0:11 would overwrite the real position with the start.
+    public var resumePending: Bool {
+        guard let item, item.startAt > 0 else { return false }
+        return clock.time < item.startAt - 5
+    }
+
     /// True once VLC's video output has offered a Picture in Picture controller for the current media.
     @Published public private(set) var canStartPictureInPicture = false
     /// True while the system PiP window is showing the video.
@@ -95,6 +102,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // Asking VLC for a subtitle language makes it switch that track on, so only do it when subtitles
         // should be on by default; the preference is still used to pick a track when the user turns them on.
         if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
+        // libvlc 4 ignores a time set before the media is playing and seekable, so a resume is asked for
+        // as a media option, which VLC honours when it opens the stream. The first-tick seek stays as a
+        // fallback for streams that start at zero regardless.
+        if item.startAt > 0 { media.addOption(":start-time=\(Int(item.startAt))") }
         player.media = media
         status = .opening
         player.play()
@@ -310,10 +321,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         let now = TimeInterval(player.time.intValue) / 1000
         // VLCKit does not always report a distinct .playing state (opening → buffering → ticks), so the
         // resume seek must also be applied here, on the first tick, or playback starts from zero.
-        if !appliedStart, let start = item?.startAt, start > 0, now >= 0 {
+        if !appliedStart, let start = item?.startAt, start > 0, now > 1 {
             appliedStart = true
-            seek(to: start)
-            return
+            if now < start - 5 { seek(to: start); return }   // start-time option was ignored: seek now
         }
         if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }

@@ -5,15 +5,39 @@ import VLCKit
 /// Hosts the UIView VLC renders into, and tells the engine when its size changes so Fill stays correct.
 struct VLCVideoView: UIViewRepresentable {
     let engine: VLCPlaybackEngine
-    func makeUIView(context: Context) -> VLCDrawableView {
+
+    /// One drawable per engine for the life of the app. VLCKit 4 attaches its video output to the
+    /// drawable it had when the media opened; giving it a fresh view for every player screen left the
+    /// second video playing audio into a view that no longer existed. The host view is re-parented into
+    /// each new player screen instead.
+    private static var hosts: [ObjectIdentifier: VLCDrawableView] = [:]
+
+    static func host(for engine: VLCPlaybackEngine) -> VLCDrawableView {
+        if let existing = hosts[ObjectIdentifier(engine)] { return existing }
         let v = VLCDrawableView()
         v.backgroundColor = .black
         v.engine = engine
         v.onLayout = { [weak engine] in engine?.drawableDidLayout() }
         engine.drawable = v
+        hosts[ObjectIdentifier(engine)] = v
         return v
     }
-    func updateUIView(_ uiView: VLCDrawableView, context: Context) {}
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .black
+        let host = Self.host(for: engine)
+        host.removeFromSuperview()
+        host.frame = container.bounds
+        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(host)
+        return container
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        // Keep the host alive (and VLC's output attached); it is re-parented by the next player screen.
+        uiView.subviews.forEach { $0.removeFromSuperview() }
+    }
 }
 
 /// A plain UIView is a valid VLC drawable; conforming to `VLCPictureInPictureDrawable` as well makes
