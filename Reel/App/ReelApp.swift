@@ -6,6 +6,7 @@ import Metadata
 
 @main
 struct ReelApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettings
     @StateObject private var library: LibraryStore
     @StateObject private var sync: SyncEngine
@@ -24,8 +25,12 @@ struct ReelApp: App {
         let settings = AppSettings()
         _settings = StateObject(wrappedValue: settings)
         _library = StateObject(wrappedValue: store)
-        _sync = StateObject(wrappedValue: SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID))
+        let sync = SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID)
+        _sync = StateObject(wrappedValue: sync)
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
+        // Every local write pushes straight away, so putting one device down and picking up another just works.
+        store.syncHooks = SyncHooks(changed: { [weak sync] in sync?.pushPendingChanges() },
+                                    deleted: { [weak sync] keys in sync?.deleteRecords(named: keys) })
         // Must happen before launch finishes, so here rather than in a view.
         BackgroundScans.register(library: store, settings: settings)
     }
@@ -49,8 +54,14 @@ struct ReelApp: App {
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { await ImageLoader.shared.enforceLimit() }
+                .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in
+                    Task { await sync.fetchNow() }
+                }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { scanForNewMediaIfDue() }
+                    if phase == .active {
+                        Task { await sync.fetchNow(); sync.pushPendingChanges() }
+                        scanForNewMediaIfDue()
+                    }
                     guard phase == .background else { return }
                     // Finish an interrupted scan or match soon; otherwise refresh daily (PLAN §11.3).
                     let pending = library.isScanning || library.unmatchedFileCount() > 0

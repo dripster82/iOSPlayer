@@ -33,7 +33,14 @@ targets:
       - package: ReelKit
         products: [MediaCore, Metadata, MediaSources, Playback, Library, Sync]
     entitlements:
+      # XcodeGen REWRITES this file from `properties` on every `xcodegen generate`; an entry with only a
+      # path produces an empty dict and a build signed without iCloud. Keep the keys here.
       path: Reel/Reel.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers: [iCloud.uk.co.ketelle.reel]
+        com.apple.developer.icloud-services: [CloudKit]
+        keychain-access-groups: [$(AppIdentifierPrefix)uk.co.ketelle.reel]
+        aps-environment: development
     info:
       path: Reel/Info.plist
       properties:
@@ -41,7 +48,7 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        UIBackgroundModes: [audio, processing]
+        UIBackgroundModes: [audio, processing, remote-notification]
         BGTaskSchedulerPermittedIdentifiers: [uk.co.ketelle.reel.scan]
         NSLocalNetworkUsageDescription: Reel looks for NAS shares and media servers on your network so you can add them as sources.
         NSBonjourServices: [_smb._tcp, _webdav._tcp, _webdavs._tcp, _afpovertcp._tcp]

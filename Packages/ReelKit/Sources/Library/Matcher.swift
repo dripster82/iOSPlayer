@@ -67,6 +67,7 @@ struct Matcher {
                 let episodeItem = try await upsertEpisode(show: show, season: season, episode: episode)
                 file.item = episodeItem
                 file.classificationRaw = confidence == .autoLow ? "episode-low" : "episode"
+                file.pendingSync = true; file.updatedAt = Date()
                 return .matched
             case .film:
                 let movieID: Int
@@ -83,6 +84,7 @@ struct Matcher {
                 let film = try await upsertFilm(id: movieID, confidence: confidence)
                 file.item = film
                 file.classificationRaw = "film"
+                file.pendingSync = true; file.updatedAt = Date()
                 return .matched
             }
         } catch {
@@ -180,6 +182,7 @@ struct Matcher {
 
     private func markReview(_ file: MediaFile) -> Outcome {
         file.classificationRaw = "review"
+        file.pendingSync = true; file.updatedAt = Date()
         return .review
     }
 
@@ -197,6 +200,7 @@ struct Matcher {
         item.runtimeMinutes = d.runtime
         item.genres = d.genres?.map(\.name) ?? []
         item.cast = d.credits?.cast.prefix(12).map(\.name) ?? []
+        item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
     }
@@ -214,6 +218,7 @@ struct Matcher {
         item.genres = d.genres?.map(\.name) ?? []
         item.cast = d.credits?.cast.prefix(12).map(\.name) ?? []
         item.seasonCount = d.numberOfSeasons ?? d.seasons?.filter { $0.seasonNumber > 0 }.count
+        item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
     }
@@ -236,6 +241,7 @@ struct Matcher {
             item.rating = d.voteAverage
             item.airDate = d.airDate.flatMap { ISO8601Day.date($0) }
         }
+        item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
     }

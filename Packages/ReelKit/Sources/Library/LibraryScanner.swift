@@ -76,10 +76,12 @@ public actor LibraryScanner {
                         file.modified = v.modified
                         file.classificationRaw = "pending"
                         file.item = nil
+                        file.pendingSync = true; file.updatedAt = Date()
                     }
                 } else {
                     let file = MediaFile(relativePath: v.relativePath, size: v.size ?? 0, modified: v.modified, source: record)
                     file.sidecars = sidecars
+                    file.pendingSync = true; file.updatedAt = Date()
                     modelContext.insert(file)
                     report.filesNew += 1
                 }
@@ -128,6 +130,7 @@ public actor LibraryScanner {
     }
 
     private func apply(_ c: Classification, to file: MediaFile) {
+        file.pendingSync = true; file.updatedAt = Date()
         switch c {
         case .episode(let p):
             file.classificationRaw = "episode"; file.guessKindRaw = nil; fill(file, p)

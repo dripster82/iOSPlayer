@@ -39,8 +39,8 @@ for prof in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobilepr
 done
 echo "==> signing with $ENTITLEMENTS"
 if [[ "$ENTITLEMENTS" == Reel/Reel.entitlements ]] && ! grep -q "icloud-container-identifiers" Reel/Reel.entitlements; then
-  echo "✗ Reel/Reel.entitlements has lost its iCloud keys (Xcode's provisioning repair empties it)."
-  echo "  Restore it:  git checkout 3ba96b7 -- Reel/Reel.entitlements   (then commit)"
+  echo "✗ Reel/Reel.entitlements has lost its iCloud keys."
+  echo "  XcodeGen rewrites it from the 'entitlements.properties' block in project.yml; check that block, then 'xcodegen generate'."
   exit 1
 fi
 

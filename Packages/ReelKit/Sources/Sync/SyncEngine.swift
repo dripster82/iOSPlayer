@@ -3,11 +3,17 @@ import Foundation
 import CloudKit
 import SwiftData
 import MediaCore
+import MediaSources
 import Library
 
-/// CloudKit sync of watch state, favourites, overrides and collections via CKSyncEngine (iOS 17).
-/// One private zone, "Library". Latest `updatedAt` wins; watched-flag rule from PLAN.md §10.4.
-/// Source credentials and file paths are never synced.
+/// CloudKit sync via CKSyncEngine (iOS 17). One private zone, "Library". Latest `updatedAt` wins.
+///
+/// What syncs (PLAN.md §10, revised 24 Oct 2026):
+/// - watch state, favourites, overrides, collections (the original set);
+/// - sources (everything except the password, which travels through iCloud Keychain);
+/// - the scanned library itself: items and files, keyed deterministically so two devices scanning
+///   the same share converge on the same records instead of duplicating them.
+/// Files-app (local) sources are device-specific and stay local.
 @MainActor
 public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate {
 
@@ -20,6 +26,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     private let zoneID = CKRecordZone.ID(zoneName: "Library", ownerName: CKCurrentUserDefaultName)
     private let stateKey = "reel.cksync.state"
     private let enabledKey = "reel.sync.enabled"
+    private var ctx: ModelContext { container.mainContext }
 
     public init(container: ModelContainer, cloudContainerID: String) {
         self.container = container
@@ -31,7 +38,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     public func setEnabled(_ on: Bool, cloudContainerID: String) {
         isEnabled = on
         UserDefaults.standard.set(on, forKey: enabledKey)
-        if on { start(cloudContainerID: cloudContainerID) } else { engine = nil }
+        if on { start(cloudContainerID: cloudContainerID); markEverythingPending(); pushPendingChanges() } else { engine = nil }
     }
 
     /// `CKContainer(identifier:)` raises an Objective-C exception, uncatchable from Swift, when the app
@@ -41,9 +48,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     public static func buildSupportsCloudKit(containerID: String) -> Bool {
         guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
               let data = FileManager.default.contents(atPath: path) else { return false }
-        // The profile is CMS-wrapped but its plist payload is plain text inside.
-        return String(decoding: data, as: UTF8.self).contains(containerID)
-            || data.range(of: Data(containerID.utf8)) != nil
+        return data.range(of: Data(containerID.utf8)) != nil
     }
 
     private func start(cloudContainerID: String) {
@@ -62,17 +67,41 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         pushPendingChanges()
     }
 
-    /// Call after any local write that set `pendingSync`.
+    /// First enable on a device with an existing library: everything it has should go up.
+    private func markEverythingPending() {
+        for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? [] where s.type != .local { s.pendingSync = true }
+        for i in (try? ctx.fetch(FetchDescriptor<MediaItem>())) ?? [] { i.pendingSync = true }
+        for f in (try? ctx.fetch(FetchDescriptor<MediaFile>())) ?? [] where f.source?.type != .local { f.pendingSync = true }
+        try? ctx.save()
+    }
+
+    // MARK: - Pushing
+
+    /// Call after any local write that set `pendingSync`. Cheap when nothing is pending.
     public func pushPendingChanges() {
         guard let engine else { return }
-        let ctx = container.mainContext
         var ids: [CKRecord.ID] = []
-        for ws in (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("watch", ws.itemKey)) }
-        for f in (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("fav", f.itemKey)) }
-        for o in (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("override", o.fileKey)) }
-        for c in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("collection", c.id.uuidString)) }
+        for ws in (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("watch|" + ws.itemKey)) }
+        for f in (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("fav|" + f.itemKey)) }
+        for o in (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("override|" + o.fileKey)) }
+        for c in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("collection|" + c.id.uuidString)) }
+        for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.pendingSync }))) ?? [] where s.type != .local { ids.append(recordID(SyncKeys.source(s.id))) }
+        for i in (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.item(i.itemKey))) }
+        for f in (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? [] {
+            guard let source = f.source, source.type != .local else { f.pendingSync = false; continue }
+            let key = SyncKeys.file(sourceID: source.id, relativePath: f.relativePath)
+            if f.syncKey != key { f.syncKey = key }
+            ids.append(recordID(key))
+        }
+        try? ctx.save()
         guard !ids.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: ids.map { .saveRecord($0) })
+    }
+
+    /// Local deletions (by record name) to mirror in CloudKit.
+    public func deleteRecords(named names: [String]) {
+        guard let engine, !names.isEmpty else { return }
+        engine.state.add(pendingRecordZoneChanges: names.map { .deleteRecord(recordID($0)) })
     }
 
     public func fetchNow() async {
@@ -105,12 +134,24 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case .fetchedRecordZoneChanges(let e):
             for mod in e.modifications { apply(mod.record) }
             for del in e.deletions { applyDeletion(del.recordID) }
-            try? container.mainContext.save()
+            reconcileLinks()
+            try? ctx.save()
             lastSyncedAt = Date()
         case .sentRecordZoneChanges(let e):
             for saved in e.savedRecords { clearPending(saved.recordID) }
-            for failed in e.failedRecordSaves { lastError = failed.error.localizedDescription }
-            try? container.mainContext.save()
+            for failed in e.failedRecordSaves {
+                // Another device saved the same key first: take theirs, it is the same thing anyway.
+                if failed.error.code == .serverRecordChanged, let server = failed.error.serverRecord {
+                    apply(server); clearPending(failed.record.recordID)
+                } else if failed.error.code == .unknownItem {
+                    clearPending(failed.record.recordID)
+                } else {
+                    lastError = failed.error.localizedDescription
+                }
+            }
+            // A delete for something already gone is success as far as we are concerned.
+            reconcileLinks()
+            try? ctx.save()
             lastSyncedAt = Date()
         case .fetchedDatabaseChanges, .sentDatabaseChanges, .willFetchChanges, .didFetchChanges, .willSendChanges, .didSendChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges:
             break
@@ -118,47 +159,77 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         }
     }
 
-    // MARK: - Record mapping
+    // MARK: - Record building
 
-    private func recordID(_ type: String, _ key: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: "\(type)|\(key)", zoneID: zoneID)
+    private func recordID(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: zoneID) }
+
+    private func split(_ id: CKRecord.ID) -> (String, String)? {
+        let parts = id.recordName.split(separator: "|", maxSplits: 1).map(String.init)
+        return parts.count == 2 ? (parts[0], parts[1]) : nil
     }
 
     private func record(for id: CKRecord.ID) -> CKRecord? {
-        let parts = id.recordName.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return nil }
-        let ctx = container.mainContext
-        switch parts[0] {
+        guard let (type, key) = split(id) else { return nil }
+        switch type {
         case "watch":
-            let key = parts[1]
             guard let ws = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
             let r = CKRecord(recordType: "WatchState", recordID: id)
             r["itemKey"] = ws.itemKey; r["watched"] = ws.watched ? 1 : 0; r["position"] = ws.position; r["duration"] = ws.duration
             r["updatedAt"] = ws.updatedAt; r["deviceID"] = ws.deviceID; r["lastPlayedAt"] = ws.lastPlayedAt
             return r
         case "fav":
-            let key = parts[1]
             guard let f = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
             let r = CKRecord(recordType: "Favourite", recordID: id)
             r["itemKey"] = f.itemKey; r["createdAt"] = f.createdAt; r["deletedAt"] = f.deletedAt; r["updatedAt"] = f.updatedAt
             return r
         case "override":
-            let key = parts[1]
             guard let o = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first else { return nil }
             let r = CKRecord(recordType: "ItemOverride", recordID: id)
             r["fileKey"] = o.fileKey; r["forcedTMDbID"] = o.forcedTMDbID; r["forcedKind"] = o.forcedKindRaw; r["hidden"] = o.hidden ? 1 : 0; r["updatedAt"] = o.updatedAt
             return r
         case "collection":
-            guard let uuid = UUID(uuidString: parts[1]), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first else { return nil }
+            guard let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first else { return nil }
             let r = CKRecord(recordType: "Collection", recordID: id)
             r["name"] = c.name; r["itemKeys"] = c.itemKeys; r["updatedAt"] = c.updatedAt
+            return r
+        case "source":
+            guard let uuid = UUID(uuidString: key), let s = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first, s.type != .local else { return nil }
+            let r = CKRecord(recordType: "Source", recordID: id)
+            r["name"] = s.name; r["type"] = s.typeRaw; r["host"] = s.host; r["port"] = s.port; r["path"] = s.path
+            r["useTLS"] = s.useTLS ? 1 : 0; r["username"] = s.username; r["hidden"] = s.hiddenFromLibrary ? 1 : 0
+            r["folderRules"] = s.folderRules.map { "\($0.folderPath)|\($0.tagRaw)" }
+            r["updatedAt"] = s.updatedAt ?? Date()
+            return r
+        case "item":
+            guard let i = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
+            let r = CKRecord(recordType: "Item", recordID: id)
+            r["itemKey"] = i.itemKey; r["kind"] = i.kindRaw; r["tmdbID"] = i.tmdbID; r["title"] = i.title; r["year"] = i.year
+            r["overview"] = i.overview; r["posterPath"] = i.posterPath; r["backdropPath"] = i.backdropPath; r["stillPath"] = i.stillPath
+            r["rating"] = i.rating; r["runtimeMinutes"] = i.runtimeMinutes; r["genres"] = i.genres; r["cast"] = i.cast
+            r["confidence"] = i.confidenceRaw; r["addedAt"] = i.addedAt; r["hidden"] = i.hidden ? 1 : 0
+            r["seasonNumber"] = i.seasonNumber; r["episodeNumber"] = i.episodeNumber; r["airDate"] = i.airDate
+            r["showKey"] = i.show?.itemKey ?? i.showKeyHint; r["seasonCount"] = i.seasonCount
+            r["updatedAt"] = i.updatedAt ?? Date()
+            return r
+        case "file":
+            guard let f = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == key })).first, let source = f.source, source.type != .local else { return nil }
+            let r = CKRecord(recordType: "File", recordID: id)
+            r["sourceID"] = source.id.uuidString; r["relativePath"] = f.relativePath; r["size"] = f.size; r["modified"] = f.modified
+            r["duration"] = f.duration; r["videoCodec"] = f.videoCodec; r["resolution"] = f.resolution
+            r["audioSummary"] = f.audioSummary; r["subtitleSummary"] = f.subtitleSummary
+            r["sidecars"] = f.sidecars; r["qualityTags"] = f.qualityTags; r["classification"] = f.classificationRaw
+            r["guessTitle"] = f.guessTitle; r["guessYear"] = f.guessYear; r["guessSeason"] = f.guessSeason; r["guessEpisode"] = f.guessEpisode; r["guessKind"] = f.guessKindRaw
+            r["reviewed"] = f.reviewed ? 1 : 0; r["ignored"] = f.ignored ? 1 : 0
+            r["itemKey"] = f.item?.itemKey ?? f.itemKeyHint; r["addedAt"] = f.addedAt; r["lastSeenAt"] = f.lastSeenAt
+            r["updatedAt"] = f.updatedAt ?? Date()
             return r
         default: return nil
         }
     }
 
+    // MARK: - Applying remote records
+
     private func apply(_ r: CKRecord) {
-        let ctx = container.mainContext
         let remoteUpdated = (r["updatedAt"] as? Date) ?? .distantPast
         switch r.recordType {
         case "WatchState":
@@ -187,34 +258,120 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             o.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             o.updatedAt = remoteUpdated; o.pendingSync = false
         case "Collection":
-            let name = r.recordID.recordName.split(separator: "|", maxSplits: 1).map(String.init)
-            guard name.count == 2, let uuid = UUID(uuidString: name[1]) else { return }
+            guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key) else { return }
             let c = (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first) ?? { let x = MediaCollection(name: ""); x.id = uuid; ctx.insert(x); return x }()
             guard remoteUpdated > c.updatedAt else { return }
             c.name = (r["name"] as? String) ?? c.name
             c.itemKeys = (r["itemKeys"] as? [String]) ?? c.itemKeys
             c.updatedAt = remoteUpdated; c.pendingSync = false
+        case "Source":
+            guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key),
+                  let typeRaw = r["type"] as? String, let type = SourceType(rawValue: typeRaw), type != .local else { return }
+            let existing = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first
+            if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
+            let config = SourceConfig(id: uuid, name: (r["name"] as? String) ?? "Source", type: type, host: (r["host"] as? String) ?? "",
+                                      port: r["port"] as? Int, path: (r["path"] as? String) ?? "", useTLS: ((r["useTLS"] as? Int) ?? 1) == 1, username: r["username"] as? String)
+            let s = existing ?? { let x = SourceRecord(config: config); ctx.insert(x); return x }()
+            s.name = config.name; s.typeRaw = config.type.rawValue; s.host = config.host; s.port = config.port; s.path = config.path
+            s.useTLS = config.useTLS; s.username = config.username
+            s.hiddenFromLibrary = ((r["hidden"] as? Int) ?? 0) == 1
+            let rules = (r["folderRules"] as? [String]) ?? []
+            for rule in s.folderRules { ctx.delete(rule) }
+            s.folderRules = rules.compactMap { line in
+                let parts = line.split(separator: "|", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let tag = FolderTag(rawValue: parts[1]) else { return nil }
+                let fr = FolderRule(folderPath: parts[0], tag: tag, includeInScan: tag != .excluded); fr.source = s; return fr
+            }
+            s.updatedAt = remoteUpdated; s.pendingSync = false
+        case "Item":
+            guard let key = r["itemKey"] as? String, let kindRaw = r["kind"] as? String, let kind = MediaKind(rawValue: kindRaw) else { return }
+            let existing = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first
+            if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
+            let i = existing ?? {
+                let x = MediaItem(itemKey: key, kind: kind, title: (r["title"] as? String) ?? "", confidence: .autoHigh); ctx.insert(x); return x
+            }()
+            i.kindRaw = kindRaw; i.tmdbID = r["tmdbID"] as? Int; i.title = (r["title"] as? String) ?? i.title
+            i.sortTitle = MediaItem.makeSortTitle(i.title)
+            i.year = r["year"] as? Int; i.overview = r["overview"] as? String
+            i.posterPath = r["posterPath"] as? String; i.backdropPath = r["backdropPath"] as? String; i.stillPath = r["stillPath"] as? String
+            i.rating = r["rating"] as? Double; i.runtimeMinutes = r["runtimeMinutes"] as? Int
+            i.genres = (r["genres"] as? [String]) ?? []; i.cast = (r["cast"] as? [String]) ?? []
+            i.confidenceRaw = (r["confidence"] as? String) ?? i.confidenceRaw
+            i.addedAt = (r["addedAt"] as? Date) ?? i.addedAt; i.hidden = ((r["hidden"] as? Int) ?? 0) == 1
+            i.seasonNumber = r["seasonNumber"] as? Int; i.episodeNumber = r["episodeNumber"] as? Int; i.airDate = r["airDate"] as? Date
+            i.seasonCount = r["seasonCount"] as? Int
+            i.showKeyHint = r["showKey"] as? String
+            i.updatedAt = remoteUpdated; i.pendingSync = false
+        case "File":
+            guard let sid = (r["sourceID"] as? String).flatMap(UUID.init(uuidString:)), let path = r["relativePath"] as? String else { return }
+            guard let source = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == sid })).first else { return } // source arrives first or never
+            let existing = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.relativePath == path && $0.source?.id == sid })).first
+            if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
+            let f = existing ?? {
+                let x = MediaFile(relativePath: path, size: (r["size"] as? Int64) ?? 0, modified: r["modified"] as? Date, source: source); ctx.insert(x); return x
+            }()
+            f.size = (r["size"] as? Int64) ?? f.size; f.modified = r["modified"] as? Date
+            f.duration = r["duration"] as? Double; f.videoCodec = r["videoCodec"] as? String; f.resolution = r["resolution"] as? String
+            f.audioSummary = r["audioSummary"] as? String; f.subtitleSummary = r["subtitleSummary"] as? String
+            f.sidecars = (r["sidecars"] as? [String]) ?? []; f.qualityTags = (r["qualityTags"] as? [String]) ?? []
+            f.classificationRaw = (r["classification"] as? String) ?? f.classificationRaw
+            f.guessTitle = r["guessTitle"] as? String; f.guessYear = r["guessYear"] as? Int; f.guessSeason = r["guessSeason"] as? Int
+            f.guessEpisode = r["guessEpisode"] as? Int; f.guessKindRaw = r["guessKind"] as? String
+            f.reviewed = ((r["reviewed"] as? Int) ?? 0) == 1; f.ignored = ((r["ignored"] as? Int) ?? 0) == 1
+            f.addedAt = (r["addedAt"] as? Date) ?? f.addedAt; f.lastSeenAt = (r["lastSeenAt"] as? Date) ?? f.lastSeenAt
+            f.itemKeyHint = r["itemKey"] as? String
+            f.syncKey = r.recordID.recordName
+            f.updatedAt = remoteUpdated; f.pendingSync = false
         default: break
         }
     }
 
+    /// Records arrive in no particular order, so relationships are resolved from the key hints once
+    /// both sides exist. Cheap: only rows whose link is still missing are fetched.
+    private func reconcileLinks() {
+        let orphanFiles = (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.itemKeyHint != nil && $0.item == nil }))) ?? []
+        for f in orphanFiles {
+            guard let key = f.itemKeyHint, let item = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first else { continue }
+            f.item = item
+        }
+        let orphanEpisodes = (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.showKeyHint != nil && $0.show == nil }))) ?? []
+        for e in orphanEpisodes {
+            guard let key = e.showKeyHint, let show = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first else { continue }
+            e.show = show
+        }
+    }
+
     private func applyDeletion(_ id: CKRecord.ID) {
-        let parts = id.recordName.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2, parts[0] == "collection", let uuid = UUID(uuidString: parts[1]) else { return }
-        let ctx = container.mainContext
-        if let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { ctx.delete(c) }
+        guard let (type, key) = split(id) else { return }
+        switch type {
+        case "collection":
+            if let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { ctx.delete(c) }
+        case "source":
+            if let uuid = UUID(uuidString: key), let s = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first {
+                CredentialStore.shared.remove(for: uuid)
+                ctx.delete(s)
+            }
+        case "item":
+            if let i = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first { ctx.delete(i) }
+        case "file":
+            let name = id.recordName
+            if let f = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == name })).first { ctx.delete(f) }
+        default: break
+        }
     }
 
     private func clearPending(_ id: CKRecord.ID) {
-        let parts = id.recordName.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return }
-        let ctx = container.mainContext
-        let key = parts[1]
-        switch parts[0] {
+        guard let (type, key) = split(id) else { return }
+        switch type {
         case "watch": if let x = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "fav": if let x = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "override": if let x = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first { x.pendingSync = false }
         case "collection": if let uuid = UUID(uuidString: key), let x = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { x.pendingSync = false }
+        case "source": if let uuid = UUID(uuidString: key), let x = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first { x.pendingSync = false }
+        case "item": if let x = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
+        case "file":
+            let name = id.recordName
+            if let x = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == name })).first { x.pendingSync = false }
         default: break
         }
     }

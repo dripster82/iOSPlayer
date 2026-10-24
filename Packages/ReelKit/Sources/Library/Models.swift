@@ -19,6 +19,9 @@ public final class SourceRecord {
     public var statusRaw: String
     public var lastScan: Date?
     public var hiddenFromLibrary: Bool
+    /// Sync bookkeeping (PLAN §10): the definition syncs, the password goes through iCloud Keychain.
+    public var pendingSync: Bool = false
+    public var updatedAt: Date? = nil
     @Relationship(deleteRule: .cascade, inverse: \FolderRule.source) public var folderRules: [FolderRule]
     @Relationship(deleteRule: .cascade, inverse: \MediaFile.source) public var files: [MediaFile]
 
@@ -92,6 +95,12 @@ public final class MediaFile {
     public var guessEpisode: Int?
     /// "film" / "episode": the classifier's best guess for a review file, so the matcher can still try it.
     public var guessKindRaw: String?
+    /// Sync bookkeeping. `syncKey` is the CloudKit record name (a hash of source id + path, since record
+    /// names are capped at 255 characters); `itemKeyHint` links the file to its item once that item arrives.
+    public var pendingSync: Bool = false
+    public var updatedAt: Date? = nil
+    public var syncKey: String? = nil
+    public var itemKeyHint: String? = nil
     public var reviewed: Bool
     public var ignored: Bool
     public var addedAt: Date
@@ -138,6 +147,10 @@ public final class MediaItem {
     public var confidenceRaw: String
     public var addedAt: Date
     public var hidden: Bool
+    /// Sync bookkeeping. `showKeyHint` links an episode to its show once that record arrives.
+    public var pendingSync: Bool = false
+    public var updatedAt: Date? = nil
+    public var showKeyHint: String? = nil
 
     // Episode fields
     public var seasonNumber: Int?
@@ -175,7 +188,7 @@ public final class MediaItem {
         return MediaFormat.episodeCode(season: s, episode: e)
     }
 
-    static func makeSortTitle(_ title: String) -> String {
+    public static func makeSortTitle(_ title: String) -> String {
         let lower = title.lowercased()
         for article in ["the ", "a ", "an "] where lower.hasPrefix(article) { return String(lower.dropFirst(article.count)) }
         return lower

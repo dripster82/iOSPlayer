@@ -120,6 +120,9 @@ is warning-free.
   iPad once; "iOS Team Provisioning Profile: uk.co.ketelle.reel" now exists with iCloud, keychain and
   `aps-environment` (CloudKit pushes), and includes both the iPhone and the iPad. `Scripts/build-device.sh`
   detects that profile and signs with the real `Reel/Reel.entitlements`. The paragraph below is history.
+  **The entitlements file is generated**: XcodeGen rewrites `Reel/Reel.entitlements` from the
+  `entitlements.properties` block in `project.yml` on every `xcodegen generate` (that, not Xcode, is what
+  kept emptying it). Edit the keys in `project.yml`, never the plist.
 - **(historical) iCloud / CloudKit entitlements.** No Apple ID is signed into Xcode on this Mac ("No Accounts"), so
   signing with `Reel/Reel.entitlements` fails: the wildcard team profile lacks the iCloud capability and
   the `iCloud.uk.co.ketelle.reel` container. Fix: Xcode → Settings → Accounts → sign in, open
@@ -187,8 +190,13 @@ Progress is reported via a `@Sendable` closure to `LibraryStore.scanProgress`.
 (marks watched at ≥95%). `PlayerView` is a thin wrapper around `PlayerContentView(engine:)` so the engine is an `@ObservedObject`.
 
 **Sync.** `SyncEngine` keeps one private CloudKit zone `Library`. Rows with `pendingSync == true` are pushed;
-`updatedAt` latest-wins on fetch; `Favourite.deletedAt` is a tombstone. Call `sync.pushPendingChanges()` after writes
-(Settings → Sync now does both directions; wiring automatic pushes after each `LibraryStore` write is an open item).
+`updatedAt` latest-wins on fetch; `Favourite.deletedAt` is a tombstone. Since 24 Oct (afternoon) the whole library
+syncs, not just watch state: `Source` (minus password), `Item` and `File` records with deterministic names
+(`SyncKeys`), so two devices scanning the same share converge; `serverRecordChanged` conflicts take the server copy.
+`LibraryStore.syncHooks` (set in `ReelApp.init`) pushes after every write and mirrors deletions; the app fetches on
+foreground and on CloudKit silent pushes (`AppDelegate`, `remote-notification` background mode). Relationships are
+restored from `itemKeyHint` / `showKeyHint` once both records exist. Source passwords sync via iCloud Keychain
+(`CredentialStore` marks items `synchronizable`). Files-app (local) sources never sync.
 
 **Settings.** `AppSettings` uses `@Published` + `didSet → UserDefaults`, not `@AppStorage`, because `@AppStorage`
 doesn't notify an `ObservableObject`'s subscribers. Keep that pattern.
@@ -212,7 +220,7 @@ doesn't notify an `ObservableObject`'s subscribers. Keep that pattern.
 ## 7. Open items, in phase order (PLAN.md §7)
 
 Phase 2 remainder
-- [ ] Wire `sync.pushPendingChanges()` after `LibraryStore` writes (currently only on Settings → Sync now and on enable).
+- [x] Automatic push after writes + fetch on foreground/push (24 Oct). Library-wide sync (sources, items, files) too.
 - [x] Background scanning (24 Oct): `LibraryStore.scan` holds a `beginBackgroundTask` assertion so a scan
       survives leaving the app for a few minutes, and `Reel/App/BackgroundScans.swift` schedules a
       `BGProcessingTask` (`uk.co.ketelle.reel.scan`) on every background transition: 60 s later if work is

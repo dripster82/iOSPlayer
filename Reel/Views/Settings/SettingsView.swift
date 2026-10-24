@@ -58,14 +58,14 @@ struct SettingsView: View {
 
             Section {
                 Toggle(isOn: Binding(get: { sync.isEnabled }, set: { sync.setEnabled($0, cloudContainerID: AppSettings.cloudContainerID) })) {
-                    VStack(alignment: .leading) { Text("Sync watch state and favourites"); Text("Uses your Apple ID. Nothing to sign in to.").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Text("Sync library across your devices"); Text("Sources, the scanned library, watch progress, favourites and fixes. Uses your Apple ID; nothing to sign in to.").font(.caption).foregroundStyle(.secondary) }
                 }
                 if sync.isEnabled {
                     LabeledContent("Last synced", value: sync.lastSyncedAt?.formatted(.relative(presentation: .named)) ?? "Not yet")
                     Button("Sync now") { Task { await sync.fetchNow(); sync.pushPendingChanges() } }
                 }
                 if let e = sync.lastError { Text(e).font(.caption).foregroundStyle(.red) }
-            } header: { Text("iCloud") } footer: { Text("Source passwords and file paths are never synced.") }
+            } header: { Text("iCloud") } footer: { Text("Source passwords travel only through iCloud Keychain, never through the app's iCloud data. Files-app folders stay on the device that added them.") }
 
             Section("Storage") {
                 Picker("Artwork cache limit", selection: $settings.artworkLimitBytes) {

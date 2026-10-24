@@ -631,6 +631,13 @@ Every failure maps to one of a small set of user-facing cards, each with a recov
 - **Sync tests:** two simulators against the CloudKit development environment; assert convergence for watched, resume, and favourite.
 - **UI tests:** snapshot tests for each screen on iPhone 15 and iPad Pro 12.9, light and dark.
 
+### 10.x Sync scope revision (24 Oct 2026)
+
+Decided by the owner: the scanned library syncs as well, so a second device does not repeat the scan and
+matching. `Source` records carry everything except the password (iCloud Keychain carries that, end-to-end
+encrypted, outside the app's CloudKit container); `Item` and `File` records use deterministic names so
+devices converge; Files-app sources stay device-local. Credentials and playback URLs are still never in CloudKit.
+
 ### 11.10 Dependencies
 
 | Package | Purpose | Licence |

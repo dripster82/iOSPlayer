@@ -18,6 +18,9 @@ public final class LibraryStore: ObservableObject {
 
     @Published public private(set) var scanProgress: [UUID: ScanProgress] = [:]
     @Published public var lastError: String?
+    /// Set by the app once the sync engine exists. Every write that marks rows `pendingSync` calls `changed`.
+    public var syncHooks: SyncHooks?
+    private func notifySync() { syncHooks?.changed() }
     private var scanTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(container: ModelContainer) {
@@ -41,17 +44,35 @@ public final class LibraryStore: ObservableObject {
             rule.source = record
             record.folderRules.append(rule)
         }
+        record.pendingSync = true; record.updatedAt = Date()
         context.insert(record)
         try context.save()
         if let credentials { try CredentialStore.shared.save(credentials, for: config.id) }
+        notifySync()
         return record
     }
 
     public func removeSource(_ record: SourceRecord) throws {
         scanTasks[record.id]?.cancel()
         CredentialStore.shared.remove(for: record.id)
-        context.delete(record)
+        let sourceID = record.id
+        var deleted = [SyncKeys.source(sourceID)]
+        var touched: [MediaItem] = []
+        for f in record.files {
+            deleted.append(SyncKeys.file(sourceID: sourceID, relativePath: f.relativePath))
+            if let item = f.item { touched.append(item) }
+        }
+        context.delete(record)   // cascades to files and folder rules
         try context.save()
+        // Items left with no files (from any source) go too, including shows emptied of episodes.
+        for item in touched where !item.isDeleted && item.files.isEmpty {
+            deleted.append(SyncKeys.item(item.itemKey))
+            let show = item.show
+            context.delete(item)
+            if let show, show.episodes.allSatisfy(\.isDeleted) { deleted.append(SyncKeys.item(show.itemKey)); context.delete(show) }
+        }
+        try context.save()
+        syncHooks?.deleted(deleted)
     }
 
     public func setTag(_ tag: FolderTag?, folder: String, on record: SourceRecord) throws {
@@ -63,6 +84,9 @@ public final class LibraryStore: ObservableObject {
             record.folderRules.append(rule)
         }
         try context.save()
+        record.pendingSync = true; record.updatedAt = Date()
+        try context.save()
+        notifySync()
         // Excluding a folder should empty it from the library now, not just skip it on the next scan.
         if tag == .excluded { purgeInBackground(folder, sourceID: record.id) }
     }
@@ -72,7 +96,9 @@ public final class LibraryStore: ObservableObject {
     /// included root.
     public func removeFolder(_ folder: String, from record: SourceRecord) throws {
         if let existing = record.folderRules.first(where: { $0.folderPath == folder }) { context.delete(existing) }
+        record.pendingSync = true; record.updatedAt = Date()
         try context.save()
+        notifySync()
         purgeInBackground(folder, sourceID: record.id)
     }
 
@@ -95,11 +121,13 @@ public final class LibraryStore: ObservableObject {
         purging.insert(folder)
         let maintenance = LibraryMaintenance(modelContainer: container)
         Task { [weak self] in
-            do { try await maintenance.purgeFiles(under: folder, sourceID: sourceID) }
+            var deleted: [String] = []
+            do { deleted = try await maintenance.purgeFiles(under: folder, sourceID: sourceID) }
             catch { await MainActor.run { [weak self] in self?.lastError = error.localizedDescription } }
             await MainActor.run { [weak self] in
                 self?.purging.remove(folder)
                 self?.objectWillChange.send()
+                if !deleted.isEmpty { self?.syncHooks?.deleted(deleted) }
             }
         }
     }
@@ -141,6 +169,7 @@ public final class LibraryStore: ObservableObject {
                 self?.scanTasks[id] = nil
                 self?.objectWillChange.send()
                 assertion.end()
+                self?.notifySync()
             }
         }
     }
@@ -187,8 +216,10 @@ public final class LibraryStore: ObservableObject {
 
     public func hide(_ item: MediaItem) throws {
         item.hidden = true
+        item.pendingSync = true; item.updatedAt = Date()
         for f in item.files { let o = override(for: f); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true }
         try context.save()
+        notifySync()
     }
 
     // MARK: - Review and fix match
@@ -200,16 +231,20 @@ public final class LibraryStore: ObservableObject {
         o.updatedAt = Date(); o.pendingSync = true
         file.reviewed = true
         file.classificationRaw = kind == .episode ? "episode" : "film"
+        file.pendingSync = true; file.updatedAt = Date()
         try context.save()
         let matcher = Matcher(context: context, tmdb: tmdb)
         _ = await matcher.match(file)
         try context.save()
+        notifySync()
     }
 
     public func ignoreFile(_ file: MediaFile) throws {
         file.ignored = true
+        file.pendingSync = true; file.updatedAt = Date()
         let o = override(for: file); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true
         try context.save()
+        notifySync()
     }
 
     /// Re-points every file of an item at a different TMDb entry. Used by Fix Match.
@@ -222,11 +257,14 @@ public final class LibraryStore: ObservableObject {
             o.updatedAt = Date(); o.pendingSync = true
             f.item = nil
         }
-        if item.files.isEmpty, item.kind != .show { context.delete(item) }
+        var deleted: [String] = []
+        if item.files.isEmpty, item.kind != .show { deleted.append(SyncKeys.item(item.itemKey)); context.delete(item) }
         try context.save()
         let matcher = Matcher(context: context, tmdb: tmdb)
         for f in files { _ = await matcher.match(f) }
         try context.save()
+        if !deleted.isEmpty { syncHooks?.deleted(deleted) }
+        notifySync()
     }
 
     private func override(for file: MediaFile) -> ItemOverride {
@@ -259,6 +297,7 @@ public final class LibraryStore: ObservableObject {
         ws.pendingSync = true
         if duration > 0, position / duration >= 0.95 { ws.watched = true }
         try? context.save()
+        notifySync()
     }
 
     /// Drops an item from Continue Watching: position back to zero, not marked watched.
@@ -270,6 +309,7 @@ public final class LibraryStore: ObservableObject {
         ws.pendingSync = true
         try? context.save()
         objectWillChange.send()
+        notifySync()
     }
 
     public func setWatched(_ watched: Bool, itemKey: String) {
@@ -278,6 +318,7 @@ public final class LibraryStore: ObservableObject {
         if !watched { ws.position = 0 }
         ws.updatedAt = Date(); ws.pendingSync = true
         try? context.save()
+        notifySync()
     }
 
     /// Episodes in progress plus films in progress, most recent first.
@@ -364,6 +405,7 @@ public final class LibraryStore: ObservableObject {
         }
         try? context.save()
         objectWillChange.send()
+        notifySync()
     }
 
     private func favourite(_ key: String) -> Favourite? {
@@ -377,12 +419,13 @@ public final class LibraryStore: ObservableObject {
         (try? context.fetch(FetchDescriptor<MediaCollection>(sortBy: [SortDescriptor(\.name)]))) ?? []
     }
 
-    public func addCollection(named name: String) { context.insert(MediaCollection(name: name)); try? context.save() }
+    public func addCollection(named name: String) { context.insert(MediaCollection(name: name)); try? context.save(); notifySync() }
 
     public func toggle(_ key: String, in collection: MediaCollection) {
         if let i = collection.itemKeys.firstIndex(of: key) { collection.itemKeys.remove(at: i) } else { collection.itemKeys.append(key) }
         collection.updatedAt = Date(); collection.pendingSync = true
         try? context.save()
+        notifySync()
     }
 
     // MARK: - Playback URL

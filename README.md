@@ -86,7 +86,7 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | Sources: Local (bookmarks), WebDAV, SMB (AMSMB2) | Done |
 | Discovery (Bonjour SMB/WebDAV) | Done |
 | Scanner (incremental), matcher, SwiftData schema | Done |
-| iCloud sync (CKSyncEngine) for watch state, favourites, overrides, collections | Done |
+| iCloud sync (CKSyncEngine): sources, scanned library, watch state, favourites, overrides, collections; passwords via iCloud Keychain | Done |
 | VLCKit engine: tracks, subtitles, delays, chapters, rate | Done |
 | Player UI: gestures, scrubber, sheets, Up Next, error card, lock | Done |
 | Home, TV, Films (genre/year/sort filters), detail pages, Search, Favourites, Collections, History | Done |
