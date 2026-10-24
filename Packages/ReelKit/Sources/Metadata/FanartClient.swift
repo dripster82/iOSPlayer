@@ -10,8 +10,11 @@ public struct FanartArt: Sendable, Hashable {
     public var logoURL: String?
     public var clearArtURL: String?
     public var backgroundURLs: [String]
-    public init(logoURL: String? = nil, clearArtURL: String? = nil, backgroundURLs: [String] = []) {
-        self.logoURL = logoURL; self.clearArtURL = clearArtURL; self.backgroundURLs = backgroundURLs
+    /// Every candidate, for the artwork picker (the single fields above are the automatic choice).
+    public var logoURLs: [String] = []
+    public var posterURLs: [String] = []
+    public init(logoURL: String? = nil, clearArtURL: String? = nil, backgroundURLs: [String] = [], logoURLs: [String] = [], posterURLs: [String] = []) {
+        self.logoURL = logoURL; self.clearArtURL = clearArtURL; self.backgroundURLs = backgroundURLs; self.logoURLs = logoURLs; self.posterURLs = posterURLs
     }
     public var isEmpty: Bool { logoURL == nil && clearArtURL == nil && backgroundURLs.isEmpty }
 }
@@ -47,22 +50,24 @@ public actor FanartClient {
     /// Shows are keyed by TheTVDB id (fanart.tv's convention), which TMDb's external ids supply.
     public func show(tvdbID: Int) async throws -> FanartArt {
         let r: ShowResponse = try await get("tv/\(tvdbID)")
-        return FanartArt(logoURL: pick(r.hdtvlogo, r.clearlogo), clearArtURL: pick(r.hdclearart, r.clearart), backgroundURLs: all(r.showbackground))
+        return FanartArt(logoURL: pick(r.hdtvlogo, r.clearlogo), clearArtURL: pick(r.hdclearart, r.clearart), backgroundURLs: all(r.showbackground),
+                         logoURLs: all(r.hdtvlogo, limit: 10) + all(r.clearlogo, limit: 10), posterURLs: all(r.tvposter, limit: 10))
     }
 
     public func movie(tmdbID: Int) async throws -> FanartArt {
         let r: MovieResponse = try await get("movies/\(tmdbID)")
-        return FanartArt(logoURL: pick(r.hdmovielogo, r.movielogo), clearArtURL: pick(r.hdmovieclearart, r.movieart), backgroundURLs: all(r.moviebackground))
+        return FanartArt(logoURL: pick(r.hdmovielogo, r.movielogo), clearArtURL: pick(r.hdmovieclearart, r.movieart), backgroundURLs: all(r.moviebackground),
+                         logoURLs: all(r.hdmovielogo, limit: 10) + all(r.movielogo, limit: 10), posterURLs: all(r.movieposter, limit: 10))
     }
 
     // MARK: - Plumbing
 
     struct Image: Decodable { var url: String; var lang: String?; var likes: String? }
     private struct ShowResponse: Decodable {
-        var hdtvlogo: [Image]?; var clearlogo: [Image]?; var hdclearart: [Image]?; var clearart: [Image]?; var showbackground: [Image]?
+        var hdtvlogo: [Image]?; var clearlogo: [Image]?; var hdclearart: [Image]?; var clearart: [Image]?; var showbackground: [Image]?; var tvposter: [Image]?
     }
     private struct MovieResponse: Decodable {
-        var hdmovielogo: [Image]?; var movielogo: [Image]?; var hdmovieclearart: [Image]?; var movieart: [Image]?; var moviebackground: [Image]?
+        var hdmovielogo: [Image]?; var movielogo: [Image]?; var hdmovieclearart: [Image]?; var movieart: [Image]?; var moviebackground: [Image]?; var movieposter: [Image]?
     }
 
     /// The most liked image in the user's language, else a language-neutral one ("00"), else any;
@@ -77,8 +82,8 @@ public actor FanartClient {
         }
         return nil
     }
-    private func all(_ set: [Image]?) -> [String] {
-        (set ?? []).sorted { (Int($0.likes ?? "") ?? 0) > (Int($1.likes ?? "") ?? 0) }.prefix(5).map(\.url)
+    private func all(_ set: [Image]?, limit: Int = 5) -> [String] {
+        (set ?? []).sorted { (Int($0.likes ?? "") ?? 0) > (Int($1.likes ?? "") ?? 0) }.prefix(limit).map(\.url)
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {

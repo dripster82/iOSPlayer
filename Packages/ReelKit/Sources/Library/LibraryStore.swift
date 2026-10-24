@@ -357,6 +357,27 @@ public final class LibraryStore: ObservableObject {
         return out
     }
 
+    // MARK: - Artwork overrides
+
+    public enum ArtworkSlot { case poster, backdrop, logo }
+    public func setArtwork(_ url: String?, slot: ArtworkSlot, for item: MediaItem) {
+        switch slot {
+        case .poster: item.posterOverrideURL = url
+        case .backdrop: item.backdropOverrideURL = url
+        case .logo: item.logoOverrideURL = url
+        }
+        item.updatedAt = Date(); item.pendingSync = true
+        try? context.save()
+        Diagnostics.log("artwork", "\(item.title.prefix(40)) \(slot): \(url.map { Diagnostics.safe(URL(string: $0)!) } ?? "automatic")")
+        notifySync(); objectWillChange.send()
+    }
+    public func setArtwork(_ url: String?, for collection: MediaCollection) {
+        collection.artworkURL = url
+        collection.updatedAt = Date(); collection.pendingSync = true
+        try? context.save()
+        notifySync(); objectWillChange.send()
+    }
+
     // MARK: - Universes
 
     /// Everything the Collections screen needs in one pass over the films: universes and TMDb series

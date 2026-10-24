@@ -165,6 +165,10 @@ public final class MediaItem {
     public var collectionName: String? = nil
     public var collectionCheckedAt: Date? = nil
     /// TMDb production companies and keywords; `Universes` turns them into Marvel, Pixar, Star Wars…
+    /// Artwork the user picked in Edit artwork (absolute URLs, any source); nil means automatic.
+    public var posterOverrideURL: String? = nil
+    public var backdropOverrideURL: String? = nil
+    public var logoOverrideURL: String? = nil
     public var studios: [String] = []
     /// TMDb logo paths parallel to `studios` ("" when none), for the Collections icons.
     public var studioLogos: [String] = []
@@ -302,6 +306,8 @@ public final class MediaCollection {
     public var itemKeys: [String]
     public var updatedAt: Date
     public var pendingSync: Bool
+    /// Cover picked in Edit artwork (absolute URL); nil means a mosaic of its titles.
+    public var artworkURL: String? = nil
 
     public init(name: String) {
         id = UUID()

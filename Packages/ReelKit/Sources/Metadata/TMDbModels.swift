@@ -103,6 +103,23 @@ public struct TMDbMovieDetail: Decodable, Sendable {
     }
 }
 
+/// One image from TMDb's images endpoint; `filePath` goes through `ArtworkURL`.
+public struct TMDbImage: Decodable, Sendable, Hashable, Identifiable {
+    public var filePath: String
+    public var language: String?
+    public var voteAverage: Double?
+    public var width: Int?
+    public var height: Int?
+    public var id: String { filePath }
+    enum CodingKeys: String, CodingKey { case filePath = "file_path", language = "iso_639_1", voteAverage = "vote_average", width, height }
+}
+
+public struct TMDbImages: Decodable, Sendable {
+    public var posters: [TMDbImage]?
+    public var backdrops: [TMDbImage]?
+    public var logos: [TMDbImage]?
+}
+
 public struct TMDbCompany: Decodable, Sendable, Hashable {
     public var id: Int
     public var name: String

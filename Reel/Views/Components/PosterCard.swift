@@ -13,7 +13,7 @@ struct PosterCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topTrailing) {
-                ArtworkImage(url: wide ? (ArtworkURL.still(item.stillPath) ?? ArtworkURL.backdrop(item.backdropPath, size: .small) ?? ArtworkURL.poster(item.posterPath)) : ArtworkURL.poster(item.posterPath), title: item.title, aspect: wide ? 16 / 9 : 2 / 3)
+                ArtworkImage(url: wide ? (ArtworkURL.still(item.stillPath) ?? item.backdropURL(size: .small) ?? item.posterURL) : item.posterURL, title: item.title, aspect: wide ? 16 / 9 : 2 / 3)
                     .overlay(alignment: .bottom) {
                         if let p = progress {
                             GeometryReader { g in
@@ -66,6 +66,7 @@ struct ItemContextMenu: ViewModifier {
     @EnvironmentObject private var settings: AppSettings
     let item: MediaItem
     @Binding var fixMatchTarget: MediaItem?
+    @State private var artworkTarget: MediaItem?
 
     func body(content: Content) -> some View {
         content.contextMenu {
@@ -93,9 +94,13 @@ struct ItemContextMenu: ViewModifier {
                     }
                 }
             }
+            if item.kind != .episode, settings.tmdb != nil {
+                Button { artworkTarget = item } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
+            }
             Divider()
             Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
         }
+        .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
     }
 }
 

@@ -11,17 +11,17 @@ struct HeroHeader: View {
     let subtitle: String
     @Binding var fixMatchTarget: MediaItem?
 
-    /// TMDb's backdrop, or fanart.tv's when TMDb has none.
-    private var backdropURL: URL? { ArtworkURL.backdrop(item.backdropPath) ?? item.extraBackdropURL.flatMap(URL.init) }
+    private var backdropURL: URL? { item.backdropURL }
+    @State private var editingArtwork = false
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             ArtworkImage(url: backdropURL, title: item.title + " backdrop", aspect: 16 / 9, cornerRadius: 0)
                 .overlay { LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .init(x: 0.5, y: 0.3), endPoint: .bottom) }
             HStack(alignment: .bottom, spacing: 14) {
-                ArtworkImage(url: ArtworkURL.poster(item.posterPath, size: .detail), title: item.title).frame(width: 96).shadow(radius: 12)
+                ArtworkImage(url: item.posterURL(size: .detail), title: item.title).frame(width: 96).shadow(radius: 12)
                 VStack(alignment: .leading, spacing: 4) {
-                    if let logo = item.logoURL.flatMap(URL.init) {
+                    if let logo = item.titleLogoURL {
                         // The show's own logo from fanart.tv in place of the typed title, as on a TV box.
                         AsyncImage(url: logo) { image in
                             image.resizable().scaledToFit().frame(maxWidth: 220, maxHeight: 64, alignment: .leading).shadow(radius: 6)
@@ -43,9 +43,13 @@ struct HeroHeader: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { library.toggleFavourite(item.itemKey) } label: { Image(systemName: library.isFavourite(item.itemKey) ? "heart.fill" : "heart") }
-                Menu { ItemMenuContent(item: item, fixMatchTarget: $fixMatchTarget) } label: { Image(systemName: "ellipsis.circle") }
+                Menu {
+                    ItemMenuContent(item: item, fixMatchTarget: $fixMatchTarget)
+                    if settings.tmdb != nil { Button { editingArtwork = true } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") } }
+                } label: { Image(systemName: "ellipsis.circle") }
             }
         }
+        .sheet(isPresented: $editingArtwork) { ArtworkPickerView(target: .item(item)) }
     }
 }
 

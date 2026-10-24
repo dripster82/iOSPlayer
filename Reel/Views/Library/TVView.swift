@@ -151,7 +151,10 @@ struct CollectionsView: View {
         var subtitle: String
         var route: LibraryRoute
         var icon: CollectionIcon.Kind
+        /// Set for the user's own collections, whose cover can be edited.
+        var collection: MediaCollection? = nil
     }
+    @State private var editingCollection: MediaCollection?
 
     var body: some View {
         ScrollView {
@@ -169,6 +172,7 @@ struct CollectionsView: View {
         .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
+        .sheet(item: $editingCollection) { ArtworkPickerView(target: .collection($0)) }
         .alert("New collection", isPresented: $adding) {
             TextField("Name", text: $newName)
             Button("Create") { if !newName.isEmpty { library.addCollection(named: newName) }; newName = "" }
@@ -179,7 +183,7 @@ struct CollectionsView: View {
     private func rebuild() {
         mine = library.collections().map { c in
             Card(id: "c:\(c.id)", title: c.name, subtitle: "\(c.itemKeys.count) items", route: .collection(c.id),
-                 icon: .mosaic(c.itemKeys.compactMap { library.item($0)?.posterPath }))
+                 icon: c.artworkURL.flatMap(URL.init).map { .url($0) } ?? .mosaic(c.itemKeys.compactMap { library.item($0)?.posterPath }), collection: c)
         }
         let index = library.groupIndex()
         universes = index.universes.map { g in
@@ -205,6 +209,12 @@ struct CollectionsView: View {
                             Text(card.subtitle).font(.caption2).foregroundStyle(.secondary)
                         }
                     }.buttonStyle(.plain)
+                    .contextMenu {
+                        if let c = card.collection {
+                            Button { editingCollection = c } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
+                            if c.artworkURL != nil { Button { library.setArtwork(nil, for: c) } label: { Label("Use automatic cover", systemImage: "arrow.uturn.backward") } }
+                        }
+                    }
                 }
             }.padding(.horizontal)
             if let footer { Text(footer).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
@@ -215,7 +225,7 @@ struct CollectionsView: View {
 /// The picture for a grouping card: a studio logo, the series' own poster, or a mosaic of up to four
 /// of its posters, in that order of preference, with the initial as the last resort.
 struct CollectionIcon: View {
-    enum Kind { case logo(String), titleLogo(URL), poster(String), mosaic([String]) }
+    enum Kind { case logo(String), titleLogo(URL), poster(String), url(URL), mosaic([String]) }
     let kind: Kind
     let title: String
     var body: some View {
@@ -240,6 +250,8 @@ struct CollectionIcon: View {
                 }.aspectRatio(2 / 3, contentMode: .fit)
             case .poster(let path):
                 ArtworkImage(url: ArtworkURL.poster(path), title: title, aspect: 2 / 3, cornerRadius: 10)
+            case .url(let url):
+                ArtworkImage(url: url, title: title, aspect: 2 / 3, cornerRadius: 10)
             case .mosaic(let posters):
                 let tiles = Array(posters.prefix(4))
                 if tiles.isEmpty {

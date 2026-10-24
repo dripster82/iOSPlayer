@@ -432,7 +432,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case "collection":
             guard let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first else { return nil }
             let r = baseRecord("Collection", id)
-            r["name"] = c.name; r["itemKeys"] = Self.list(c.itemKeys); r["updatedAt"] = c.updatedAt
+            r["name"] = c.name; r["itemKeys"] = Self.list(c.itemKeys); r["updatedAt"] = c.updatedAt; r["artworkURL"] = c.artworkURL
             return r
         case "source":
             guard let uuid = UUID(uuidString: key), let s = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first, s.type != .local else { return nil }
@@ -451,6 +451,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             r["rating"] = i.rating; r["runtimeMinutes"] = i.runtimeMinutes; r["genres"] = Self.list(i.genres); r["cast"] = Self.list(i.cast); r["castProfiles"] = Self.list(i.castProfiles); r["castIDs"] = i.castIDs
             r["studios"] = Self.list(i.studios); r["keywords"] = Self.list(i.keywords)
             r["studioLogos"] = Self.list(i.studioLogos); r["collectionPosterPath"] = i.collectionPosterPath
+            r["posterOverrideURL"] = i.posterOverrideURL; r["backdropOverrideURL"] = i.backdropOverrideURL; r["logoOverrideURL"] = i.logoOverrideURL
             r["confidence"] = i.confidenceRaw; r["addedAt"] = i.addedAt; r["hidden"] = i.hidden ? 1 : 0
             r["seasonNumber"] = i.seasonNumber; r["episodeNumber"] = i.episodeNumber; r["airDate"] = i.airDate
             r["showKey"] = i.show?.itemKey ?? i.showKeyHint; r["seasonCount"] = i.seasonCount
@@ -511,6 +512,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             guard remoteUpdated > c.updatedAt else { return }
             c.name = (r["name"] as? String) ?? c.name
             c.itemKeys = (r["itemKeys"] as? [String]) ?? c.itemKeys
+            c.artworkURL = r["artworkURL"] as? String
             c.updatedAt = remoteUpdated; c.pendingSync = false
         case "Source":
             guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key),
@@ -579,6 +581,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let k = r["keywords"] as? [String] { i.keywords = k }
             if let l = r["studioLogos"] as? [String], l.count == i.studios.count { i.studioLogos = l }
             if let cp = r["collectionPosterPath"] as? String { i.collectionPosterPath = cp }
+            i.posterOverrideURL = r["posterOverrideURL"] as? String; i.backdropOverrideURL = r["backdropOverrideURL"] as? String; i.logoOverrideURL = r["logoOverrideURL"] as? String
             i.confidenceRaw = (r["confidence"] as? String) ?? i.confidenceRaw
             i.addedAt = (r["addedAt"] as? Date) ?? i.addedAt; i.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             i.seasonNumber = r["seasonNumber"] as? Int; i.episodeNumber = r["episodeNumber"] as? Int; i.airDate = r["airDate"] as? Date

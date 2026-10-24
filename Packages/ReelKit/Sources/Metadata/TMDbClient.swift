@@ -81,6 +81,21 @@ public actor TMDbClient {
 
     // MARK: - Details
 
+    /// Every poster, backdrop and logo TMDb holds for a film or show, in the user's language and
+    /// language-neutral, best voted first.
+    public func images(id: Int, isShow: Bool) async throws -> TMDbImages {
+        let lang = String(language.prefix(2))
+        var imgs: TMDbImages = try await get("\(isShow ? "tv" : "movie")/\(id)/images", [URLQueryItem(name: "include_image_language", value: "\(lang),null,en")], label: "images")
+        func rank(_ a: [TMDbImage]?) -> [TMDbImage] {
+            (a ?? []).sorted { l, r in
+                let lp = l.language == lang ? 0 : (l.language == nil ? 1 : 2), rp = r.language == lang ? 0 : (r.language == nil ? 1 : 2)
+                return lp != rp ? lp < rp : (l.voteAverage ?? 0) > (r.voteAverage ?? 0)
+            }
+        }
+        imgs.posters = rank(imgs.posters); imgs.backdrops = rank(imgs.backdrops); imgs.logos = rank(imgs.logos)
+        return imgs
+    }
+
     /// Everything a person acted in, films and TV together. Crew credits are left out.
     public func personCredits(id: Int) async throws -> [TMDbPersonCredit] {
         let credits: TMDbPersonCredits = try await get("person/\(id)/combined_credits", [], label: "person credits")
