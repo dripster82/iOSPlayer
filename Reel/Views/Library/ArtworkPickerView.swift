@@ -11,8 +11,9 @@ struct ArtworkPickerView: View {
     enum Target {
         case item(MediaItem)
         case collection(MediaCollection)
-        /// `id` is the key in `GroupArtStore`; `logos` are TMDb studio logo paths.
-        case group(id: String, name: String, films: [MediaItem], logos: [String])
+        /// `id` is the key in `GroupArtStore`; `logos` are TMDb studio logo paths; `collectionID` is
+        /// the TMDb collection for a film series, whose own posters and backdrops are offered first.
+        case group(id: String, name: String, films: [MediaItem], logos: [String], collectionID: Int?)
     }
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
@@ -30,6 +31,10 @@ struct ArtworkPickerView: View {
     @State private var tmdb: [Slot: [Candidate]] = [:]
     @State private var fanart: [Slot: [Candidate]] = [:]
     @State private var titles: [TitleRow] = []
+    /// TMDb's images for the collection itself (film series only).
+    @State private var collectionPosters: [Candidate] = []
+    @State private var collectionBackdrops: [Candidate] = []
+    @State private var showFilmImages = false
     @State private var loading = true
     @State private var error: String?
 
@@ -45,8 +50,6 @@ struct ArtworkPickerView: View {
                     }
                     if case .item = target {
                         Picker("", selection: $slot) { ForEach(Slot.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
-                    } else if case .group = target, mode == .single {
-                        Picker("", selection: $slot) { ForEach(Slot.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
                     }
                     if mode == .single { currentRow }
                     if loading { HStack { ProgressView(); Text("Fetching artwork…").font(.footnote).foregroundStyle(.secondary) }.padding(.horizontal) }
@@ -60,14 +63,26 @@ struct ArtworkPickerView: View {
                     case .collection:
                         if titles.isEmpty, !loading { Text("This collection has no titles yet. Add films or shows from their menu, then come back.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
                         ForEach(titles) { row in section(row.item.title, row.candidates) }
-                    case .group(_, _, _, let logos):
-                        if mode == .single, slot == .logo {
-                            section("Studio logos", logos.compactMap { ArtworkURL.logo($0, size: .medium) }.map { Candidate(url: $0, source: "tmdb") })
-                            section("Title logos", titles.flatMap { $0.item.titleLogoURL.map { [Candidate(url: $0, source: "fanart")] } ?? [] })
-                        } else if mode == .single, slot == .backdrop {
-                            section("Backdrops", titles.compactMap { $0.item.backdropURL(size: .small) }.map { Candidate(url: $0, source: "tmdb") })
+                    case .group(_, _, _, let logos, let collectionID):
+                        if mode == .single {
+                            // The group's own identity first: logos, then the collection's own art.
+                            let studio = logos.compactMap { ArtworkURL.logo($0, size: .medium) }.map { Candidate(url: $0, source: "tmdb") }
+                            let titleLogos = titles.flatMap { $0.item.titleLogoURL.map { [Candidate(url: $0, source: "fanart")] } ?? [] }
+                            if !studio.isEmpty || !titleLogos.isEmpty || collectionID == nil {
+                                section("Logos", studio + titleLogos, aspect: 16 / 9, logoPanel: true)
+                            }
+                            if collectionID != nil {
+                                section("Collection posters", collectionPosters, aspect: 2 / 3)
+                                section("Collection backdrops", collectionBackdrops, aspect: 16 / 9)
+                            }
+                            DisclosureGroup(isExpanded: $showFilmImages) {
+                                section("Film backdrops", titles.compactMap { $0.item.backdropURL(size: .small) }.map { Candidate(url: $0, source: "tmdb") }, aspect: 16 / 9)
+                                ForEach(titles) { row in section(row.item.title, row.candidates, aspect: 2 / 3) }
+                            } label: {
+                                Text("Individual film images").font(.headline)
+                            }.padding(.horizontal)
                         } else {
-                            ForEach(titles) { row in section(row.item.title, row.candidates) }
+                            ForEach(titles) { row in section(row.item.title, row.candidates, aspect: 2 / 3) }
                         }
                     }
                 }.padding(.vertical)
@@ -96,26 +111,29 @@ struct ArtworkPickerView: View {
         }.padding(.horizontal)
     }
 
-    private var slotAspect: CGFloat { switch slot { case .poster: 2 / 3; case .backdrop: 16 / 9; case .logo: 16 / 9 } }
+    private var slotAspect: CGFloat {
+        if case .group = target { return 2 / 3 }
+        switch slot { case .poster: return 2 / 3; case .backdrop: return 16 / 9; case .logo: return 16 / 9 }
+    }
 
     private var currentURL: URL? {
         switch target {
         case .collection(let c): return c.artworkURL.flatMap(URL.init)
-        case .group(let id, _, _, _): return groupArt.art(for: id)?.url.flatMap(URL.init)
+        case .group(let id, _, _, _, _): return groupArt.art(for: id)?.url.flatMap(URL.init)
         case .item(let i): switch slot { case .poster: return i.posterURL(size: .detail); case .backdrop: return i.backdropURL; case .logo: return i.titleLogoURL }
         }
     }
     private var hasOverride: Bool {
         switch target {
         case .collection(let c): return c.artworkURL != nil
-        case .group(let id, _, _, _): return groupArt.art(for: id)?.url != nil
+        case .group(let id, _, _, _, _): return groupArt.art(for: id)?.url != nil
         case .item(let i): switch slot { case .poster: return i.posterOverrideURL != nil; case .backdrop: return i.backdropOverrideURL != nil; case .logo: return i.logoOverrideURL != nil }
         }
     }
     private var collage: [String] {
         switch target {
         case .collection(let c): return c.collageURLs
-        case .group(let id, _, _, _): return groupArt.art(for: id)?.collage ?? []
+        case .group(let id, _, _, _, _): return groupArt.art(for: id)?.collage ?? []
         case .item: return []
         }
     }
@@ -129,7 +147,7 @@ struct ArtworkPickerView: View {
     private func setOverride(_ url: URL?) {
         switch target {
         case .collection(let c): library.setArtwork(url?.absoluteString, for: c)
-        case .group(let id, _, _, _): groupArt.set(url.map { GroupArtStore.Art(url: $0.absoluteString) }, for: id)
+        case .group(let id, _, _, _, _): groupArt.set(url.map { GroupArtStore.Art(url: $0.absoluteString) }, for: id)
         case .item(let i):
             let s: LibraryStore.ArtworkSlot = slot == .poster ? .poster : slot == .backdrop ? .backdrop : .logo
             library.setArtwork(url?.absoluteString, slot: s, for: i)
@@ -142,23 +160,25 @@ struct ArtworkPickerView: View {
         else { return }
         switch target {
         case .collection(let c): library.setCollage(urls, for: c)
-        case .group(let id, _, _, _): groupArt.set(GroupArtStore.Art(url: nil, collage: urls), for: id)
+        case .group(let id, _, _, _, _): groupArt.set(GroupArtStore.Art(url: nil, collage: urls), for: id)
         case .item: break
         }
     }
 
     // MARK: - Sections
 
-    private func section(_ title: String, _ candidates: [Candidate]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func section(_ title: String, _ candidates: [Candidate], aspect: CGFloat? = nil, logoPanel: Bool? = nil) -> some View {
+        let shape = mode == .collage ? 2 / 3 : (aspect ?? slotAspect)
+        let panel = logoPanel ?? (slot == .logo && mode == .single)
+        return VStack(alignment: .leading, spacing: 8) {
             Text("\(title) · \(candidates.count)").font(.headline).padding(.horizontal)
             if candidates.isEmpty, !loading { Text("Nothing here.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: slot == .poster || mode == .collage ? 100 : 150), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: shape < 1 ? 100 : 150), spacing: 10)], spacing: 10) {
                 ForEach(candidates) { c in
                     Button { choose(c.url) } label: {
                         ZStack(alignment: .topTrailing) {
-                            if slot == .logo, mode == .single { RoundedRectangle(cornerRadius: 8).fill(c.source == "fanart" ? Color(white: 0.12) : Color.white) }
-                            ArtworkImage(url: c.url, title: "artwork", aspect: mode == .collage ? 2 / 3 : slotAspect, cornerRadius: 8)
+                            if panel, mode == .single { RoundedRectangle(cornerRadius: 8).fill(c.source == "fanart" ? Color(white: 0.12) : Color.white) }
+                            ArtworkImage(url: c.url, title: "artwork", aspect: shape, cornerRadius: 8)
                                 .overlay { if isCurrent(c.url) { RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 3) } }
                             if mode == .collage, let n = collage.firstIndex(of: c.url.absoluteString) {
                                 Text("\(n + 1)").font(.caption.bold()).foregroundStyle(.white).padding(6).background(Color.accentColor, in: Circle()).padding(6)
@@ -195,7 +215,11 @@ struct ArtworkPickerView: View {
             }
         case .collection(let c):
             await loadTitles(c.itemKeys.compactMap { library.item($0) })
-        case .group(_, _, let films, _):
+        case .group(_, _, let films, _, let collectionID):
+            if let collectionID, let client = settings.tmdb, let imgs = try? await client.collectionImages(id: collectionID) {
+                collectionPosters = (imgs.posters ?? []).prefix(30).compactMap { ArtworkURL.poster($0.filePath, size: .detail) }.map { Candidate(url: $0, source: "tmdb") }
+                collectionBackdrops = (imgs.backdrops ?? []).prefix(30).compactMap { ArtworkURL.backdrop($0.filePath, size: .small) }.map { Candidate(url: $0, source: "tmdb") }
+            }
             await loadTitles(films)
         }
         loading = false

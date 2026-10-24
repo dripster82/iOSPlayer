@@ -96,6 +96,15 @@ public actor TMDbClient {
         return imgs
     }
 
+    /// Posters and backdrops TMDb holds for a film collection itself (not its films).
+    public func collectionImages(id: Int) async throws -> TMDbImages {
+        let lang = String(language.prefix(2))
+        var imgs: TMDbImages = try await get("collection/\(id)/images", [URLQueryItem(name: "include_image_language", value: "\(lang),null,en")], label: "collection images")
+        let rank: ([TMDbImage]?) -> [TMDbImage] = { ($0 ?? []).sorted { ($0.voteAverage ?? 0) > ($1.voteAverage ?? 0) } }
+        imgs.posters = rank(imgs.posters); imgs.backdrops = rank(imgs.backdrops)
+        return imgs
+    }
+
     /// Everything a person acted in, films and TV together. Crew credits are left out.
     public func personCredits(id: Int) async throws -> [TMDbPersonCredit] {
         let credits: TMDbPersonCredits = try await get("person/\(id)/combined_credits", [], label: "person credits")

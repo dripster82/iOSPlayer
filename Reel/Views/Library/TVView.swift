@@ -197,13 +197,13 @@ struct CollectionsView: View {
             let automatic: CollectionIcon.Kind = ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!)
                 : g.fanartLogoURL.flatMap(URL.init).map { .titleLogo($0) } ?? .mosaicURLs(g.films.compactMap(\.posterURL))
             return Card(id: id, title: g.name, subtitle: "\(g.films.count) films", route: .universe(g.name), icon: custom(id) ?? automatic,
-                        editTarget: .group(id: id, name: g.name, films: g.films, logos: g.logoPaths), hasCustomArt: groupArt.art(for: id) != nil)
+                        editTarget: .group(id: id, name: g.name, films: g.films, logos: g.logoPaths, collectionID: nil), hasCustomArt: groupArt.art(for: id) != nil)
         }
         series = index.series.map { s in
             let id = "s:\(s.id)"
             let automatic: CollectionIcon.Kind = s.group.posterPath.map { .poster($0) } ?? .mosaicURLs(s.group.films.compactMap(\.posterURL))
             return Card(id: id, title: s.group.name, subtitle: "\(s.group.films.count) films", route: .filmCollection(s.id), icon: custom(id) ?? automatic,
-                        editTarget: .group(id: id, name: s.group.name, films: s.group.films, logos: []), hasCustomArt: groupArt.art(for: id) != nil)
+                        editTarget: .group(id: id, name: s.group.name, films: s.group.films, logos: [], collectionID: s.id), hasCustomArt: groupArt.art(for: id) != nil)
         }
     }
 
@@ -242,7 +242,7 @@ struct CollectionsView: View {
     private func resetArt(_ card: Card) {
         switch card.editTarget {
         case .collection(let c): library.setArtwork(nil, for: c); library.setCollage([], for: c)
-        case .group(let id, _, _, _): groupArt.set(nil, for: id)
+        case .group(let id, _, _, _, _): groupArt.set(nil, for: id)
         case .item: break
         }
     }
