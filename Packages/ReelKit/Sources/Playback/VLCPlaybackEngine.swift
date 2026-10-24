@@ -33,8 +33,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// nothing should save progress: a save at 0:11 would overwrite the real position with the start.
     public var resumePending: Bool {
         guard let item, item.startAt > 0 else { return false }
-        return clock.time < item.startAt - 5
+        return !resumeConfirmed
     }
+    private var resumeConfirmed = false
+    private var resumeAttempts = 0
+    private var lastResumeAttempt = Date.distantPast
 
     /// True once VLC's video output has offered a Picture in Picture controller for the current media.
     @Published public private(set) var canStartPictureInPicture = false
@@ -84,6 +87,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         self.options = options
         tracksLoaded = false
         appliedStart = false
+        resumeConfirmed = false
+        resumeAttempts = 0
         userChoseSubtitle = false
         stopRequested = false
         hasPlayed = false
@@ -103,10 +108,6 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // Asking VLC for a subtitle language makes it switch that track on, so only do it when subtitles
         // should be on by default; the preference is still used to pick a track when the user turns them on.
         if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
-        // libvlc 4 ignores a time set before the media is playing and seekable, so a resume is asked for
-        // as a media option, which VLC honours when it opens the stream. The first-tick seek stays as a
-        // fallback for streams that start at zero regardless.
-        if item.startAt > 0 { media.addOption(":start-time=\(Int(item.startAt))") }
         player.media = media
         setStatus(.opening)
         player.play()
@@ -296,10 +297,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             setStatus(.playing)
             hasPlayed = true
             if !tracksLoaded { loadTracks() }
-            if !appliedStart, let start = item?.startAt, start > 0 {
-                appliedStart = true
-                seek(to: start)
-            }
+            attemptResumeIfNeeded(now: time)
         case .paused: setStatus(.paused)
         case .stopping, .stopped:
             // VLC 4 has no "ended" state: a stream that runs out goes stopping → stopped on its own.
@@ -317,15 +315,33 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
     }
 
+    /// Resume by seeking once the stream is actually playing and seekable (libvlc 4 drops earlier seeks).
+    /// Confirmed when a tick lands near the target; retried a few times with different mechanisms;
+    /// after that we give up and accept that the viewer is watching from the start. Returns true when a
+    /// seek was just issued, so the caller skips this tick.
+    @discardableResult
+    private func attemptResumeIfNeeded(now: TimeInterval) -> Bool {
+        guard let item, item.startAt > 0, !resumeConfirmed else { return false }
+        let start = item.startAt
+        if now >= start - 5 { resumeConfirmed = true; return false }
+        guard player.isSeekable, now > 0.3, Date().timeIntervalSince(lastResumeAttempt) > 1.2 else { return false }
+        lastResumeAttempt = Date()
+        resumeAttempts += 1
+        switch resumeAttempts {
+        case 1: player.time = VLCTime(int: Int32(start * 1000))
+        case 2: if duration > 0 { player.position = start / duration } else { player.time = VLCTime(int: Int32(start * 1000)) }
+        case 3: player.jump(withOffset: Int32((start - now) * 1000))
+        default: resumeConfirmed = true; return false   // give up: progress saves resume, from wherever we are
+        }
+        clock.time = start
+        ignoreTicksUntil = Date().addingTimeInterval(0.6)
+        return true
+    }
+
     private func handleTimeChange() {
         // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
         let now = TimeInterval(player.time.intValue) / 1000
-        // VLCKit does not always report a distinct .playing state (opening → buffering → ticks), so the
-        // resume seek must also be applied here, on the first tick, or playback starts from zero.
-        if !appliedStart, let start = item?.startAt, start > 0, now > 1 {
-            appliedStart = true
-            if now < start - 5 { seek(to: start); return }   // start-time option was ignored: seek now
-        }
+        if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
         if let length = player.media?.length.intValue, length > 0 {
