@@ -74,6 +74,7 @@ final class PlayerCoordinator: ObservableObject {
         let item = MediaItem(itemKey: key, kind: .film, title: name, confidence: .unmatched)
         current = item
         currentFile = nil
+        externalURL = url
         upNext = nil
         isPresented = true
         isLoading = true
@@ -93,6 +94,15 @@ final class PlayerCoordinator: ObservableObject {
         isLoading = false
     }
     private var externalScopedURL: URL?
+    private var externalURL: URL?
+
+    /// Plays the current item again from scratch: a fresh VLC input and, for network sources, a fresh
+    /// connection. Used by the error card after a failed or timed-out open.
+    func retry(settings: AppSettings) {
+        loadError = nil
+        if let externalURL, currentFile == nil { playExternal(externalURL, title: current?.title, settings: settings) }
+        else if let current { play(current, file: currentFile, settings: settings) }
+    }
 
     /// Plays a file that isn't in the library (file browser).
     func playFile(_ file: MediaFile, settings: AppSettings) {
@@ -119,6 +129,7 @@ final class PlayerCoordinator: ObservableObject {
         isPresented = false
         current = nil
         currentFile = nil
+        externalURL = nil
     }
 
     // MARK: -

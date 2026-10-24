@@ -24,8 +24,9 @@ public actor SMBSource: MediaSource {
         self.credentials = credentials
         let cred: URLCredential? = credentials.map { URLCredential(user: $0.username, password: $0.password, persistence: .forSession) }
         guard let manager = SMB2Manager(url: serverURL, credential: cred) else { throw SourceError.unreachable(config.host) }
-        manager.timeout = 15
-        try await withRetries {
+        // Two tries of 10 s: a NAS that has gone to sleep should read as unreachable in ~20 s, not 50.
+        manager.timeout = 10
+        try await withRetries(2) {
             do {
                 try await manager.connectShare(name: self.config.path)
             } catch let e as NSError {

@@ -109,6 +109,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // should be on by default; the preference is still used to pick a track when the user turns them on.
         if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
         player.media = media
+        loadedAt = Date()
         setStatus(.opening)
         player.play()
         for sub in item.externalSubtitles { addExternalSubtitle(sub) }
@@ -130,22 +131,27 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     private var ignoreTicksUntil = Date.distantPast
     private var lastTickAt = Date.distantPast
+    private var loadedAt = Date.distantPast
     private var seekWatchdog: Task<Void, Never>?
     private var openWatchdog: Task<Void, Never>?
 
     /// libvlc never times out an open on its own: an SMB server that has gone away, or a Wi-Fi link that
-    /// dropped while the app was in the background, leaves the player "opening" indefinitely with the
-    /// spinner up and no way to retry. After 25 s without a frame, give up with a clear error instead.
+    /// dropped while the app was in the background, leaves the input thread blocked in the network with
+    /// the spinner up and no way to retry. VLC even reports "buffering/playing" while blocked, so the
+    /// test is whether a single position tick has arrived since the load, not the state. After 20 s
+    /// without one, stop (which interrupts the blocked open) and report which host did not answer.
     private func startOpenWatchdog() {
         openWatchdog?.cancel()
+        let issuedAt = Date()
         openWatchdog = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(25))
-            guard let self, !Task.isCancelled, !self.hasPlayed else { return }
-            guard self.status == .opening || self.status == .buffering else { return }
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, !Task.isCancelled, self.lastTickAt < issuedAt else { return }
+            guard self.status != .paused, self.status != .idle, self.status != .ended else { return }
+            if case .failed = self.status { return }
             let target = self.item?.url.host.map { "on \($0)" } ?? "the file"
             self.stopRequested = true
             self.player.stop()
-            self.setStatus(.failed("No response opening \(target) after 25 seconds. Check the server is on and reachable, then retry."))
+            self.setStatus(.failed("No response opening \(target) after 20 seconds. Check the server is on and reachable, then retry."))
         }
     }
 
@@ -337,9 +343,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         pipController?.invalidatePlaybackState()
         switch state {
         case .opening: setStatus(.opening)
-        case .buffering: status = player.isPlaying ? .playing : .buffering
+        case .buffering: setStatus(player.isPlaying && lastTickAt >= loadedAt ? .playing : .buffering)
         case .playing:
-            openWatchdog?.cancel()
             setStatus(.playing)
             hasPlayed = true
             if !tracksLoaded { loadTracks() }
@@ -388,6 +393,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
         let now = TimeInterval(player.time.intValue) / 1000
         lastTickAt = Date()
+        openWatchdog?.cancel()
         if status == .buffering { setStatus(.playing) }
         if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }

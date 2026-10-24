@@ -233,7 +233,7 @@ struct PlayerContentView: View {
                 if engine.duration > 0 { Text("Your position at \(MediaFormat.clock(engine.time)) is saved.").font(.caption).foregroundStyle(.white.opacity(0.6)) }
                 HStack {
                     if let item = player.current, player.loadError != nil || failure != nil {
-                        Button("Retry") { player.loadError = nil; player.play(item, file: player.currentFile, settings: settings) }.buttonStyle(.borderedProminent)
+                        Button("Retry") { player.retry(settings: settings) }.buttonStyle(.borderedProminent)
                         if let alt = item.files.first(where: { $0.id != player.currentFile?.id }) {
                             Button("Use \(alt.resolution ?? "other") copy") { player.loadError = nil; player.play(item, file: alt, settings: settings) }.buttonStyle(.bordered)
                         }
