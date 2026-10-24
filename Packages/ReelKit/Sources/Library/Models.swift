@@ -277,7 +277,11 @@ public enum LibrarySchema {
 
     public static func container(inMemory: Bool = false) throws -> ModelContainer {
         let schema = Schema(models)
-        let config = ModelConfiguration("Reel", schema: schema, isStoredInMemoryOnly: inMemory)
+        // `cloudKitDatabase` defaults to `.automatic`: as soon as the app carries a CloudKit entitlement,
+        // SwiftData tries to mirror this store to iCloud and refuses the schema (unique attributes are not
+        // allowed there), so the container fails to open and the app dies at launch. Sync is CKSyncEngine's
+        // job (Sources/Sync), not SwiftData's, so this store is explicitly local-only.
+        let config = ModelConfiguration("Reel", schema: schema, isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
         return try ModelContainer(for: schema, configurations: [config])
     }
 }
