@@ -82,6 +82,32 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     // MARK: - PlaybackEngine
 
     public func load(_ item: PlaybackItem, options: PlaybackOptions) {
+        recoveries = 0
+        performLoad(item, options: options)
+    }
+
+    /// How many times the stream has been reopened on its own since the last `load`. Two reconnects
+    /// with no joy means the server is really gone; the viewer gets the error card and Retry instead.
+    private var recoveries = 0
+
+    /// Reopens the current stream at the current position: a fresh VLC input and, for SMB and WebDAV,
+    /// a fresh connection. Used when the stream dies mid-play (a NAS that dropped the session, Wi-Fi
+    /// that came and went); the alternative was a player spinning on a dead socket forever.
+    private func reconnect(at position: TimeInterval? = nil) {
+        guard var current = item else { return }
+        guard recoveries < 2 else {
+            let host = current.url.host.map { " to \($0)" } ?? ""
+            stopRequested = true
+            player.stop()
+            setStatus(.failed("Lost the connection\(host) and couldn't get it back. Check the server, then retry."))
+            return
+        }
+        recoveries += 1
+        current.startAt = max(0, position ?? clock.time)
+        performLoad(current, options: options)
+    }
+
+    private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
         stop()
         self.item = item
         self.options = options
@@ -114,6 +140,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         player.play()
         for sub in item.externalSubtitles { addExternalSubtitle(sub) }
         startOpenWatchdog()
+        startStallWatchdog()
     }
 
     public func play() { player.play() }
@@ -127,13 +154,50 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // VLC keeps reporting the old position for a few ticks after a seek; don't let those drag the
         // scrubber back before the jump lands.
         ignoreTicksUntil = Date().addingTimeInterval(0.6)
+        lastSeekAt = Date()
         startSeekWatchdog(target: clamped)
     }
     private var ignoreTicksUntil = Date.distantPast
     private var lastTickAt = Date.distantPast
+    private var lastSeekAt = Date.distantPast
     private var loadedAt = Date.distantPast
     private var seekWatchdog: Task<Void, Never>?
     private var openWatchdog: Task<Void, Never>?
+    private var stallWatchdog: Task<Void, Never>?
+
+    /// Output progress: pictures shown plus audio buffers played. VLC's clock (and so the time ticks)
+    /// keeps running while the demuxer is blocked on a dead socket, so the position is no guide to a
+    /// stall; this counter is. `lastProgressTime` is where the picture actually froze, which is where
+    /// a reconnect should resume, not where the runaway clock got to.
+    private var lastProgressCount = 0
+    private var lastProgressAt = Date.distantPast
+    private var lastProgressTime: TimeInterval = 0
+
+    /// If nothing has been shown or played for 15 s while VLC still claims to be playing, the connection
+    /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
+    /// Paused, the end of the stream and seeks are left alone; the seek watchdog has its own recovery.
+    private func startStallWatchdog() {
+        stallWatchdog?.cancel()
+        lastProgressCount = 0
+        lastProgressAt = Date()
+        stallWatchdog = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !Task.isCancelled else { return }
+                guard self.status == .playing, let stats = self.player.media?.statistics else { continue }
+                let count = Int(stats.displayedPictures) + Int(stats.playedAudioBuffers)
+                if count != self.lastProgressCount {
+                    self.lastProgressCount = count
+                    self.lastProgressAt = Date()
+                    self.lastProgressTime = self.clock.time
+                    continue
+                }
+                if Date().timeIntervalSince(self.lastProgressAt) > 15, Date().timeIntervalSince(self.lastSeekAt) > 15 {
+                    self.reconnect(at: self.lastProgressTime)
+                }
+            }
+        }
+    }
 
     /// libvlc never times out an open on its own: an SMB server that has gone away, or a Wi-Fi link that
     /// dropped while the app was in the background, leaves the input thread blocked in the network with
@@ -172,8 +236,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard !Task.isCancelled, self.status != .paused, self.status != .idle, self.status != .ended else { return }
             if self.lastTickAt < issuedAt, var current = self.item {
                 current.startAt = target
-                self.load(current, options: self.options)
+                self.performLoad(current, options: self.options)
             }
+            self.seekWatchdog = nil
         }
     }
 
@@ -222,8 +287,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func stop() {
-        seekWatchdog?.cancel()
+        seekWatchdog?.cancel(); seekWatchdog = nil
         openWatchdog?.cancel()
+        stallWatchdog?.cancel()
         if player.state != .stopped {
             stopRequested = true
             player.stop()
@@ -359,9 +425,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             // A stop right after the PiP window closed is VLC tearing down its PiP output, not the end
             // of the film: hold as paused and let the PiP recovery reload the picture.
             if isPictureInPictureActive || pipEndedRecently { setStatus(.paused); recoverAfterPictureInPicture(); break }
+            // A stop well short of the end is the stream dying (the server dropped the connection),
+            // not the film finishing: reopen where we were rather than marking it watched.
+            if state == .stopped, duration > 0, duration - time > 20 { reconnect(); break }
             setStatus(.ended)
             canStartPictureInPicture = false
-        case .error: setStatus(.failed("VLC couldn't play this file."))
+        case .error:
+            if hasPlayed, time > 0 { reconnect() } else { setStatus(.failed("VLC couldn't play this file.")) }
         @unknown default: break
         }
     }
@@ -394,6 +464,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         let now = TimeInterval(player.time.intValue) / 1000
         lastTickAt = Date()
         openWatchdog?.cancel()
+        // Half a minute of steady playback after a reconnect earns a fresh allowance for the next drop.
+        if recoveries > 0, Date().timeIntervalSince(loadedAt) > 30 { recoveries = 0 }
         if status == .buffering { setStatus(.playing) }
         if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }
