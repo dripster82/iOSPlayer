@@ -82,6 +82,7 @@ struct FilmsView: View {
         .navigationTitle("Films")
         .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film) }
         .toolbar {
+            NavigationLink(value: LibraryRoute.collections) { Image(systemName: "rectangle.stack") }
             Menu {
                 Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
             } label: { Image(systemName: "arrow.up.arrow.down") }
@@ -220,10 +221,12 @@ struct CollectionIcon: View {
         Group {
             switch kind {
             case .logo(let path):
+                // TMDb's company logos are drawn for a white page (many are black on transparent),
+                // so the panel is white in both colour schemes.
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
+                    RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [Color.white, Color(white: 0.92)], startPoint: .top, endPoint: .bottom))
                     AsyncImage(url: ArtworkURL.logo(path, size: .medium)) { image in
-                        image.resizable().scaledToFit().padding(10)
+                        image.resizable().scaledToFit().padding(12)
                     } placeholder: { ArtworkImage.Placeholder(title: title) }
                 }.aspectRatio(2 / 3, contentMode: .fit)
             case .poster(let path):

@@ -26,12 +26,14 @@ public enum Universes {
         "the conjuring universe": "The Conjuring Universe", "conjuring universe": "The Conjuring Universe",
         "jurassic park": "Jurassic Park", "jurassic world": "Jurassic Park",
         "mission impossible": "Mission: Impossible", "fast and furious": "Fast & Furious", "fast & furious": "Fast & Furious",
-        "transformers": "Transformers", "alien": "Alien", "predator": "Predator", "terminator": "Terminator",
-        "rocky": "Rocky", "indiana jones": "Indiana Jones", "pirates of the caribbean": "Pirates of the Caribbean",
-        "the hunger games": "The Hunger Games", "twilight": "Twilight", "despicable me": "Despicable Me",
+        // Only keywords that name a franchise. "alien", "halloween", "saw", "rocky", "predator" are
+        // ordinary words on TMDb (films with aliens, films set at Halloween) and made nonsense groups.
+        "transformers": "Transformers", "xenomorph": "Alien", "yautja": "Predator", "terminator": "Terminator",
+        "rocky balboa": "Rocky", "indiana jones": "Indiana Jones", "pirates of the caribbean": "Pirates of the Caribbean",
+        "the hunger games": "The Hunger Games", "twilight saga": "Twilight", "despicable me": "Despicable Me",
         "shrek": "Shrek", "toy story": "Toy Story", "planet of the apes": "Planet of the Apes",
-        "john wick": "John Wick", "the matrix": "The Matrix", "halloween": "Halloween", "saw": "Saw",
-        "ghostbusters": "Ghostbusters", "kaiju": "Kaiju", "tokusatsu": "Tokusatsu",
+        "john wick": "John Wick", "the matrix": "The Matrix", "michael myers": "Halloween", "jigsaw": "Saw",
+        "ghostbusters": "Ghostbusters", "tokusatsu": "Tokusatsu",
     ]
 
     /// Studios whose output people think of as a body of work, mapped to a display name.

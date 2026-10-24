@@ -71,6 +71,7 @@ struct HomeView: View {
                         if n > 0 { Text("\(n)").font(.caption2.bold()).padding(3).background(.red, in: Circle()).foregroundStyle(.white).offset(x: 8, y: -8) }
                     }
                 }
+                NavigationLink(value: LibraryRoute.collections) { Image(systemName: "rectangle.stack") }
                 NavigationLink(value: LibraryRoute.settings) { Image(systemName: "gearshape") }
             }
         }
