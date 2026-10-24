@@ -57,6 +57,7 @@ struct PlayerContentView: View {
                 TimedOverlays(engine: engine, locked: locked)
                 if controlsVisible && !locked { controls(size: geo.size) }
                 if let err = player.loadError ?? failure { errorCard(err) }
+                keyboardShortcuts
             }
         }
         .statusBarHidden(true)
@@ -193,6 +194,42 @@ struct PlayerContentView: View {
                 .foregroundStyle(on ? .black : .white)
                 .frame(width: size, height: size).background(on ? Color.accentColor : Color.white.opacity(0.12), in: Circle())
         }
+        .accessibilityLabel(Self.accessibilityLabel(for: icon, on: on))
+    }
+
+    /// VoiceOver names for the icon-only controls.
+    private static func accessibilityLabel(for icon: String, on: Bool) -> String {
+        switch icon {
+        case "xmark": "Close"
+        case "pip.enter": "Picture in Picture"
+        case "captions.bubble": on ? "Subtitles, on" : "Subtitles"
+        case "waveform": "Audio"
+        case "ellipsis": "More"
+        case "backward.end.fill": "Previous episode"
+        case "forward.end.fill": "Next episode"
+        case "backward.frame": "Previous chapter"
+        case "forward.frame": "Next chapter"
+        case "lock": "Lock controls"
+        case "lock.open", "lock.fill": "Unlock controls"
+        default: icon
+        }
+    }
+
+    /// Hardware keyboard (iPad, Mac): space play/pause, arrows skip, S subtitles, A audio, F fill, Escape close.
+    private var keyboardShortcuts: some View {
+        Group {
+            Button("") { engine.togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
+            Button("") { engine.skip(by: -Double(settings.skipInterval)) }.keyboardShortcut(.leftArrow, modifiers: [])
+            Button("") { engine.skip(by: Double(settings.skipInterval)) }.keyboardShortcut(.rightArrow, modifiers: [])
+            Button("") { engine.skip(by: -60) }.keyboardShortcut(.leftArrow, modifiers: .shift)
+            Button("") { engine.skip(by: 60) }.keyboardShortcut(.rightArrow, modifiers: .shift)
+            Button("") { sheet = .subtitles }.keyboardShortcut("s", modifiers: [])
+            Button("") { sheet = .audio }.keyboardShortcut("a", modifiers: [])
+            Button("") { fill.toggle(); engine.setFill(fill) }.keyboardShortcut("f", modifiers: [])
+            Button("") { player.dismiss() }.keyboardShortcut(.escape, modifiers: [])
+            Button("") { player.playNext(settings: settings) }.keyboardShortcut("n", modifiers: [])
+        }
+        .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
     }
     private func tag(_ text: String, on: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -437,7 +474,7 @@ struct TrackSheet: View {
                     Toggle("Fill screen", isOn: $fill).onChange(of: fill) { _, _ in onFill() }
                     Button { engine.startPictureInPicture(); dismiss() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
                         .disabled(!engine.canStartPictureInPicture)
-                    Label("AirPlay video is screen mirroring with VLCKit; audio-only AirPlay streams natively.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)
+                    Label("With an AirPlay speaker or TV selected before you press Play, MP4/MOV files over HTTP or from Downloads stream natively; MKV and SMB mirror the screen.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)

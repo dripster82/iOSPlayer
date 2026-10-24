@@ -105,6 +105,18 @@ public actor TMDbClient {
         return imgs
     }
 
+    /// TMDb's recommendations for a film or show: (id, title, year, poster path, isShow).
+    public struct Recommendation: Sendable, Identifiable, Hashable { public var id: Int; public var title: String; public var year: Int?; public var posterPath: String?; public var isShow: Bool }
+    public func recommendations(id: Int, isShow: Bool) async throws -> [Recommendation] {
+        if isShow {
+            let page: TMDbSearchPage<TMDbShowSummary> = try await get("tv/\(id)/recommendations", [], label: "recommendations")
+            return page.results.prefix(20).map { Recommendation(id: $0.id, title: $0.name, year: $0.year, posterPath: $0.posterPath, isShow: true) }
+        } else {
+            let page: TMDbSearchPage<TMDbMovieSummary> = try await get("movie/\(id)/recommendations", [], label: "recommendations")
+            return page.results.prefix(20).map { Recommendation(id: $0.id, title: $0.title, year: $0.year, posterPath: $0.posterPath, isShow: false) }
+        }
+    }
+
     /// Trailers and teasers on YouTube, official trailers first.
     public func trailers(id: Int, isShow: Bool) async throws -> [TMDbVideo] {
         let v: TMDbVideos = try await get("\(isShow ? "tv" : "movie")/\(id)/videos", [], label: "videos")

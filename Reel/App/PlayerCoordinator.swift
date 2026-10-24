@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 import Combine
 import SwiftData
 import MediaCore
@@ -17,6 +18,17 @@ final class PlayerCoordinator: ObservableObject {
     @Published private(set) var upNext: MediaItem?
     @Published private(set) var previous: MediaItem?
     @Published var isLoading = false
+    /// Set instead of `isPresented` when the file should play through AVPlayer (AirPlay, native container).
+    struct NativePlayback: Identifiable { var itemKey: String; var url: URL; var startAt: TimeInterval; var id: String { itemKey } }
+    @Published var nativePlayback: NativePlayback?
+
+    /// True when AirPlay is the current audio route and AVFoundation can stream this URL itself.
+    static func prefersNativePlayer(for url: URL) -> Bool {
+        let airPlay = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
+        let native = ["mp4", "m4v", "mov"].contains(url.pathExtension.lowercased())
+        let scheme = url.scheme?.lowercased() ?? ""
+        return airPlay && native && (url.isFileURL || scheme == "http" || scheme == "https")
+    }
     /// What the spinner is waiting on, when it is something slow such as waking a sleeping NAS.
     @Published var loadingMessage: String?
     let engine = VLCPlaybackEngine()
@@ -83,6 +95,12 @@ final class PlayerCoordinator: ObservableObject {
                 }
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
+                if Self.prefersNativePlayer(for: url) {
+                    isLoading = false
+                    isPresented = false
+                    nativePlayback = NativePlayback(itemKey: item.itemKey, url: url, startAt: resume)
+                    return
+                }
                 let opts = playbackOptions(for: item, settings: settings)
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)
                 let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume,

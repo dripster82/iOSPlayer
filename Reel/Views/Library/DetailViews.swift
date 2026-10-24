@@ -180,6 +180,7 @@ struct FilmDetailView: View {
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = film.overview { Text(o).font(.subheadline).padding(.horizontal) }
                 CastRow(names: film.cast, profiles: film.castProfiles, ids: film.castIDs).padding(.horizontal)
+                MoreLikeThisRow(item: film).loading()
                 if let cid = film.collectionID {
                     let others = library.films(inCollection: cid, excluding: film.itemKey)
                     if !others.isEmpty {
@@ -317,6 +318,7 @@ struct ShowDetailView: View {
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = show.overview { Text(o).font(.subheadline).padding(.horizontal) }
                 CastRow(names: show.cast, profiles: show.castProfiles, ids: show.castIDs).padding(.horizontal)
+                MoreLikeThisRow(item: show).loading()
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Episodes").font(.headline).padding(.horizontal)
                     ScrollView(.horizontal, showsIndicators: false) {
