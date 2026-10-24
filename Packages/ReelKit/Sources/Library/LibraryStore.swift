@@ -62,32 +62,33 @@ public final class LibraryStore: ObservableObject {
             rule.source = record
             record.folderRules.append(rule)
         }
-        // Excluding a folder should empty it from the library now, not just skip it on the next scan.
-        if tag == .excluded { purgeFiles(under: folder, in: record) }
         try context.save()
+        // Excluding a folder should empty it from the library now, not just skip it on the next scan.
+        if tag == .excluded { purgeInBackground(folder, sourceID: record.id) }
     }
 
-    /// Drops a folder from a source: its rule, every file under it, and any item left with no files.
-    /// The next scan only brings the folder back if it still sits inside an included root.
+    /// Drops a folder from a source: its rule now, then every file under it and any item left with no
+    /// files in the background. The next scan only brings the folder back if it still sits inside an
+    /// included root.
     public func removeFolder(_ folder: String, from record: SourceRecord) throws {
         if let existing = record.folderRules.first(where: { $0.folderPath == folder }) { context.delete(existing) }
-        purgeFiles(under: folder, in: record)
         try context.save()
+        purgeInBackground(folder, sourceID: record.id)
     }
 
-    private func purgeFiles(under folder: String, in record: SourceRecord) {
-        let prefix = folder.isEmpty ? "" : folder.hasSuffix("/") ? folder : folder + "/"
-        var touched: [MediaItem] = []
-        for file in record.files where prefix.isEmpty || file.relativePath.hasPrefix(prefix) || file.relativePath == folder {
-            if let item = file.item { touched.append(item) }
-            context.delete(file)
-        }
-        for item in touched {
-            let remaining = item.files.filter { !$0.isDeleted }
-            guard remaining.isEmpty else { continue }
-            let show = item.show
-            context.delete(item)
-            if let show, show.episodes.filter({ !$0.isDeleted }).isEmpty { context.delete(show) }
+    /// Folders being emptied right now, so the UI can show it.
+    @Published public private(set) var purging: Set<String> = []
+
+    private func purgeInBackground(_ folder: String, sourceID: UUID) {
+        purging.insert(folder)
+        let maintenance = LibraryMaintenance(modelContainer: container)
+        Task { [weak self] in
+            do { try await maintenance.purgeFiles(under: folder, sourceID: sourceID) }
+            catch { await MainActor.run { [weak self] in self?.lastError = error.localizedDescription } }
+            await MainActor.run { [weak self] in
+                self?.purging.remove(folder)
+                self?.objectWillChange.send()
+            }
         }
     }
 

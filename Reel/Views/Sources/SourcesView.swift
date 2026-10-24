@@ -75,7 +75,10 @@ struct SourceDetailView: View {
                 }
             }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
 
-            Section("Folders · tap to tag, swipe to remove") {
+            Section {
+                if !library.purging.isEmpty {
+                    HStack { ProgressView().controlSize(.small); Text("Removing \(library.purging.count == 1 ? "folder" : "folders") from the library…").font(.caption).foregroundStyle(.secondary) }
+                }
                 ForEach(source.folderRules.sorted { $0.folderPath < $1.folderPath }, id: \.folderPath) { rule in
                     Button { tagging = FolderPath(rule.folderPath) } label: {
                         HStack {
@@ -90,7 +93,7 @@ struct SourceDetailView: View {
                     }
                 }
                 NavigationLink { FileBrowserView(source: source, path: "", tagging: true) } label: { Label("Add a folder…", systemImage: "plus") }
-            }
+            } header: { Text("Folders · tap to tag, swipe to remove") }
             Section("Browse") {
                 NavigationLink { FileBrowserView(source: source, path: "") } label: {
                     VStack(alignment: .leading) { Text("Browse files"); Text("Plain file view. Play anything, even if it isn't in the library.").font(.caption).foregroundStyle(.secondary) }
