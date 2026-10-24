@@ -296,7 +296,7 @@ struct TimedOverlays: View {
 
     var body: some View {
         ZStack {
-            if let intro = engine.chapters.first(where: \.looksLikeIntro), now >= intro.start, now < intro.start + intro.duration, !locked {
+            if let intro = engine.chapters.intro, now >= intro.start, now < intro.start + intro.duration, !locked {
                 Button("Skip intro") { engine.seek(to: intro.start + intro.duration) }
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)

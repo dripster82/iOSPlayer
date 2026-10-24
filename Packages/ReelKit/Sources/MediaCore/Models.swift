@@ -136,9 +136,46 @@ public struct Chapter: Identifiable, Hashable, Sendable {
         self.duration = duration
     }
 
-    /// Heuristic: a chapter named like an intro/opening in the first 10 minutes.
+    /// A chapter named like an intro or opening, in the first 10 minutes. Whole words only: "op" must
+    /// not match "Shop" or "Opening Credits" by accident, and "intro" must not match "Introduction of
+    /// the Suspects". Generic names ("Chapter 2", "Track 3") say nothing and never match.
     public var looksLikeIntro: Bool {
-        let t = title.lowercased()
-        return start < 600 && (t.contains("intro") || t.contains("opening") || t.contains("titles") || t.contains("op"))
+        guard start < 600 else { return false }
+        return Self.introWords.contains { Self.words(in: title).contains($0) }
+    }
+
+    /// Names the tools write for the opening; "op"/"ed" are the anime convention (opening/ending).
+    static let introWords: Set<String> = ["intro", "opening", "titles", "op", "theme", "credits", "recap", "cold open"]
+
+    static func words(in title: String) -> Set<String> {
+        let lower = title.lowercased()
+        let tokens = lower.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        var set = Set(tokens)
+        for i in tokens.indices.dropLast() { set.insert(tokens[i] + " " + tokens[i + 1]) }   // "cold open"
+        return set
+    }
+
+    /// True for the automatic "Chapter 1", "Track 2", "Kapitel 3" names tools write when nobody named
+    /// the chapters; those carry no information about what the chapter is.
+    public var hasGenericTitle: Bool {
+        let t = title.lowercased().trimmingCharacters(in: .whitespaces)
+        let generic = ["chapter", "track", "kapitel", "capítulo", "chapitre", "part"]
+        return generic.contains { prefix in
+            t.hasPrefix(prefix) && t.dropFirst(prefix.count).allSatisfy { $0 == " " || $0.isNumber }
+        } || t.allSatisfy(\.isNumber) || t.isEmpty
+    }
+}
+
+public extension Array where Element == Chapter {
+    /// The chapter the Skip intro button should jump over, or nil.
+    ///
+    /// Named chapters win. Unnamed ones fall back to shape: TV episodes are usually cut as a cold
+    /// open, the title sequence, then the story, so a short chapter (20 s to 2 min) that starts in the
+    /// first five minutes and is not the last chapter is taken as the intro, but only when every chapter
+    /// is unnamed. Films with a handful of long chapters match nothing.
+    var intro: Chapter? {
+        if let named = first(where: \.looksLikeIntro) { return named }
+        guard count >= 3, allSatisfy(\.hasGenericTitle) else { return nil }
+        return dropLast().first { c in c.start < 300 && c.duration >= 20 && c.duration <= 120 }
     }
 }
