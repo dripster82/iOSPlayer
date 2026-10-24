@@ -446,7 +446,14 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             guard let sid = (r["sourceID"] as? String).flatMap(UUID.init(uuidString:)), let path = r["relativePath"] as? String else { return }
             guard let source = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == sid })).first else { return } // source arrives first or never
             let existing = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.relativePath == path && $0.source?.id == sid })).first
-            if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
+            // Decisions are sticky whichever side is newer: reviewed/ignored merge with OR, and a match
+            // (itemKey set) beats an unmatched copy. Only then does latest-wins apply to the rest.
+            if let existing {
+                if ((r["reviewed"] as? Int) ?? 0) == 1, !existing.reviewed { existing.reviewed = true }
+                if ((r["ignored"] as? Int) ?? 0) == 1, !existing.ignored { existing.ignored = true; existing.classificationRaw = "ignored" }
+                let remoteMatched = (r["itemKey"] as? String) != nil
+                if let local = existing.updatedAt, local >= remoteUpdated, !(remoteMatched && existing.item == nil && existing.itemKeyHint == nil) { return }
+            }
             let f = existing ?? {
                 let x = MediaFile(relativePath: path, size: (r["size"] as? Int64) ?? 0, modified: r["modified"] as? Date, source: source); ctx.insert(x); return x
             }()
@@ -457,7 +464,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             f.classificationRaw = (r["classification"] as? String) ?? f.classificationRaw
             f.guessTitle = r["guessTitle"] as? String; f.guessYear = r["guessYear"] as? Int; f.guessSeason = r["guessSeason"] as? Int
             f.guessEpisode = r["guessEpisode"] as? Int; f.guessKindRaw = r["guessKind"] as? String
-            f.reviewed = ((r["reviewed"] as? Int) ?? 0) == 1; f.ignored = ((r["ignored"] as? Int) ?? 0) == 1
+            f.reviewed = f.reviewed || ((r["reviewed"] as? Int) ?? 0) == 1; f.ignored = f.ignored || ((r["ignored"] as? Int) ?? 0) == 1
             f.addedAt = (r["addedAt"] as? Date) ?? f.addedAt; f.lastSeenAt = (r["lastSeenAt"] as? Date) ?? f.lastSeenAt
             f.itemKeyHint = r["itemKey"] as? String
             f.syncKey = r.recordID.recordName

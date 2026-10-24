@@ -148,7 +148,11 @@ public actor LibraryScanner {
     }
 
     private func apply(_ c: Classification, to file: MediaFile) {
-        file.pendingSync = true; file.updatedAt = Date()
+        // Only a real change marks the row for sync: re-parsing a review file on every scan must not
+        // stamp it "newer" than a decision taken on another device.
+        func snapshot() -> String { [file.classificationRaw, file.guessTitle ?? "", "\(file.guessYear ?? -1)", "\(file.guessSeason ?? -1)", "\(file.guessEpisode ?? -1)", file.guessKindRaw ?? "", "\(file.ignored)"].joined(separator: "\u{1F}") }
+        let before = snapshot()
+        defer { if snapshot() != before { file.pendingSync = true; file.updatedAt = Date() } }
         switch c {
         case .episode(let p):
             file.classificationRaw = "episode"; file.guessKindRaw = nil; fill(file, p)
