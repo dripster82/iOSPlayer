@@ -3,6 +3,7 @@ import Combine
 import MediaCore
 import Library
 import Playback
+import Metadata
 
 /// Full-screen player. Gestures: tap toggles controls, double-tap left/right skips, horizontal drag
 /// scrubs, vertical drag on each half adjusts brightness/volume, long-press holds 2×, pinch toggles fill.
@@ -279,7 +280,7 @@ struct TimedOverlays: View {
 
     private func upNextCard(_ next: MediaItem) -> some View {
         HStack(spacing: 10) {
-            ArtworkImage(url: nil, title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90)
+            ArtworkImage(url: ArtworkURL.still(next.stillPath) ?? ArtworkURL.poster(next.posterPath), title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90, height: 90 * 9 / 16)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Up next" + (upNextCountdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
                 Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)

@@ -10,15 +10,21 @@ struct ArtworkImage: View {
     @State private var image: UIImage?
 
     var body: some View {
-        ZStack {
-            Placeholder(title: title)
-            if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+        // The box is sized by "fit" from whichever dimension the caller fixes; the artwork fills that box
+        // and is clipped to it. With "fill" the box itself grew to the container (a card inside a
+        // full-screen overlay produced a screen-sized placeholder).
+        Color.clear
+            .aspectRatio(aspect, contentMode: .fit)
+            .overlay {
+                ZStack {
+                    Placeholder(title: title)
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    }
+                }
             }
-        }
-        .aspectRatio(aspect, contentMode: .fill)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: url) {
             image = nil
             guard let url else { return }
