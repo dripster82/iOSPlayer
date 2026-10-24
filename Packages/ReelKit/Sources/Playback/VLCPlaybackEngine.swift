@@ -14,6 +14,7 @@ import UIKit
 public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
 
     @Published public private(set) var status: PlaybackStatus = .idle
+    private func setStatus(_ new: PlaybackStatus) { if new != status { status = new } }
     /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
     /// `duration` everywhere else.
     public let clock = PlaybackClock()
@@ -87,7 +88,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         stopRequested = false
         hasPlayed = false
 
-        guard let media = VLCMedia(url: item.url) else { status = .failed("VLC couldn't open this URL."); return }
+        guard let media = VLCMedia(url: item.url) else { setStatus(.failed("VLC couldn't open this URL.")); return }
         media.addOption(":network-caching=\(options.networkCachingMS)")
         media.addOption(":file-caching=1000")
         media.addOption(":clock-jitter=0")
@@ -107,7 +108,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // fallback for streams that start at zero regardless.
         if item.startAt > 0 { media.addOption(":start-time=\(Int(item.startAt))") }
         player.media = media
-        status = .opening
+        setStatus(.opening)
         player.play()
         for sub in item.externalSubtitles { addExternalSubtitle(sub) }
     }
@@ -175,7 +176,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             stopRequested = true
             player.stop()
         }
-        status = .idle
+        setStatus(.idle)
         clock.time = 0
         clock.duration = 0
         rate = 1
@@ -289,17 +290,17 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func handleStateChange(_ state: VLCMediaPlayerState) {
         pipController?.invalidatePlaybackState()
         switch state {
-        case .opening: status = .opening
+        case .opening: setStatus(.opening)
         case .buffering: status = player.isPlaying ? .playing : .buffering
         case .playing:
-            status = .playing
+            setStatus(.playing)
             hasPlayed = true
             if !tracksLoaded { loadTracks() }
             if !appliedStart, let start = item?.startAt, start > 0 {
                 appliedStart = true
                 seek(to: start)
             }
-        case .paused: status = .paused
+        case .paused: setStatus(.paused)
         case .stopping, .stopped:
             // VLC 4 has no "ended" state: a stream that runs out goes stopping → stopped on its own.
             // Only our own `stop()` sets `stopRequested`, so anything else after playback began is the
@@ -308,10 +309,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard !stopRequested, hasPlayed else { break }
             // A stop right after the PiP window closed is VLC tearing down its PiP output, not the end
             // of the film: hold as paused and let the PiP recovery reload the picture.
-            if isPictureInPictureActive || pipEndedRecently { status = .paused; recoverAfterPictureInPicture(); break }
-            status = .ended
+            if isPictureInPictureActive || pipEndedRecently { setStatus(.paused); recoverAfterPictureInPicture(); break }
+            setStatus(.ended)
             canStartPictureInPicture = false
-        case .error: status = .failed("VLC couldn't play this file.")
+        case .error: setStatus(.failed("VLC couldn't play this file."))
         @unknown default: break
         }
     }
@@ -332,7 +333,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             if seconds != clock.duration { clock.duration = seconds }
         }
         if !tracksLoaded, now > 0.5 { loadTracks() }
-        if status == .buffering { status = .playing }
+        if status == .buffering { setStatus(.playing) }
     }
 
     /// Track lists are only reliable once the ES have been added, so this runs lazily and re-runs
@@ -341,12 +342,16 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         vlcAudioTracks = player.audioTracks
         vlcSubtitleTracks = player.textTracks
 
-        audioTracks = vlcAudioTracks.enumerated().map { i, t in
+        // Every @Published assignment redraws the whole player and rebuilds its gesture recognisers, and
+        // VLC fires track events many times while a stream opens, so only publish actual changes.
+        let newAudio = vlcAudioTracks.enumerated().map { i, t in
             MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), codec: t.codecName(), channels: t.audio.map { Int($0.channelsNumber) })
         }
-        subtitleTracks = vlcSubtitleTracks.enumerated().map { i, t in
+        let newSubs = vlcSubtitleTracks.enumerated().map { i, t in
             MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), isForced: t.trackName.localizedCaseInsensitiveContains("forced"))
         }
+        if newAudio != audioTracks { audioTracks = newAudio }
+        if newSubs != subtitleTracks { subtitleTracks = newSubs }
         syncSelection()
         loadChapters()
 
@@ -360,15 +365,17 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func syncSelection() {
-        currentAudioTrack = vlcAudioTracks.firstIndex(where: \.isSelected)
-        currentSubtitleTrack = vlcSubtitleTracks.firstIndex(where: \.isSelected)
+        let a = vlcAudioTracks.firstIndex(where: \.isSelected), t = vlcSubtitleTracks.firstIndex(where: \.isSelected)
+        if a != currentAudioTrack { currentAudioTrack = a }
+        if t != currentSubtitleTrack { currentSubtitleTrack = t }
     }
 
     private func loadChapters() {
         let descs = player.chapterDescriptions(ofTitle: player.currentTitleIndex)
-        chapters = descs.enumerated().map { i, d in
+        let newChapters = descs.enumerated().map { i, d in
             Chapter(id: i, title: d.name ?? "Chapter \(i + 1)", start: TimeInterval(d.timeOffset.intValue) / 1000, duration: TimeInterval(d.durationTime.intValue) / 1000)
         }
+        if newChapters != chapters { chapters = newChapters }
     }
 
     /// "Track 1 - [English]" → "English"
