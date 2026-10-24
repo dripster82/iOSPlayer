@@ -98,8 +98,9 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | Anime matching (AniDB titles + Anime-Lists → TMDb), TheTVDB fallback (optional key) | Done |
 | Picture in Picture (VLCKit 4) | Done |
 | "Open in Reel" from other apps + `reel://play?url=` scheme | Done |
-| OpenSubtitles search, Fanart.tv | Not yet |
-| Picture in Picture, scrub thumbnails | Not yet (phase 4) |
+| OpenSubtitles search/download (own key + account), fanart.tv logos (own key) | Done (24 Oct) |
+| Offline downloads (Downloads tab), Wake-on-LAN for a sleeping NAS, film collections, diagnostics log | Done (24 Oct) |
+| Scrub thumbnails | Not yet (phase 4) |
 | Background scan continuation (background task + BGProcessingTask) | Done |
 
 ## First build

@@ -290,15 +290,33 @@ Phase 2 remainder
 - [ ] Probe duration/codec/audio/subtitle summaries for `MediaFile` after first play (VLC `media.tracksInformation`) so Film detail's "File" section shows real codecs.
 - [ ] Scan: mark files not seen for N scans as missing rather than keeping them forever.
 
+Reliability (24 Oct, evening)
+- [x] Diagnostics log: `Diagnostics.log(category, message)` (MediaCore) → Documents/Diagnostics/reel.log,
+      Settings → About → Diagnostics (share/clear). Read this first for any "it just spun" report.
+- [x] Player watchdogs (`VLCPlaybackEngine`): open (20 s without a tick), mid-stream stall (15 s without
+      output pictures/audio buffers; VLC's clock keeps ticking on a dead socket so ticks are no guide),
+      foreground check after PiP/background, and `reconnect(at:)` with a two-strike limit before the
+      error card. Verified in the simulator against a black-hole IP and a SIGSTOPped local HTTP server.
+- [x] Sync errors name the CKError code (`SyncEngine.describe`); Home shows "Synced x ago" or the problem.
+- [x] Wake-on-LAN: `SourceConfig.macAddress` (synced), `WakeOnLAN.wake`, wake-and-wait in `playbackURL`.
+
 Phase 3
-- [ ] OpenSubtitles search/download in the subtitle sheet (confirmation step, daily quota).
+- [x] OpenSubtitles (24 Oct): `OpenSubtitlesClient` (Metadata), `SubtitleSearchView` from the Subtitles
+      sheet, files kept in Documents/Subtitles/<item>/ and re-added on play. Key + account in Settings.
+      `TrackMemory` remembers the audio/subtitle choice per show.
+- [x] Offline downloads (24 Oct): `DownloadManager` (app), `MediaSource.download(_:to:progress:)` on
+      every source type, Downloads tab, player prefers the local copy. Sources moved to Settings → Library.
+- [x] Film collections (24 Oct): `MediaItem.collectionID/Name` from TMDb `belongs_to_collection`;
+      film page lists library films in the collection and names the missing ones.
+- [x] Needs Review groups by folder with apply-to-all (`resolveReview(_ files:)`, `ignoreFiles`).
 - [x] Metadata providers (24 Oct): `MetadataProviders` bundles TMDb + optional TheTVDB + AniDB/Anime-Lists.
       Matcher order for episodes: forced override → AniDB exact title (incl. "2nd Season"/"II"/"Part 2"
       candidates) → Anime-Lists `tmdbtv`/`tmdbseason`/`tmdboffset` → TMDb search (shortening) → TheTVDB
       search bridged to TMDb via remote ids or `/find`. Items are always TMDb-backed. AniDB needs no key
       (daily dump, cached weekly in Caches/metadata/anidb-titles.json; ~2 MB download); TheTVDB needs the
       user's v4 project key (Settings). Toggle "Anime matching" in Settings.
-- [ ] Fanart.tv clear logos on the hero.
+- [x] fanart.tv (24 Oct): `FanartClient`, logo replaces the title in `HeroHeader`, fetched on first open
+      of a detail page (`LibraryStore.fetchExtraArt`), weekly. Needs the user's project key (Settings).
 - [ ] Duplicate detection UI ("2 versions" badge exists via `files.count > 1`; add preferred-version persistence).
 - [ ] FTP/SFTP/NFS/DLNA browsing (`UnsupportedSource` placeholders exist; VLC already plays their URLs).
 - [ ] Playlists / Up Next queue beyond next-episode.
