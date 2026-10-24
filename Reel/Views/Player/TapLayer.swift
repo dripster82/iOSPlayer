@@ -1,10 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// Tap, double tap and hold for the player, on UIKit recognisers. SwiftUI holds a single tap back behind
-/// a double-tap recogniser attached to the same view (and with `.simultaneousGesture` it stopped firing
-/// at all), so taps felt dead; UIKit recognisers fire exactly as configured: the single tap at once, the
-/// double on its second tap, and the hold after its delay. Drags stay in SwiftUI on top of this view.
+/// Tap, double tap and hold for the player, read from raw touches rather than gesture recognisers.
+///
+/// Recognisers were unreliable here: UIKit arbitrates between ours and the ones SwiftUI installs for
+/// the drag and pinch gestures layered on top, and a tap sometimes lost that arbitration. Touch events
+/// reach the view before any recogniser has a say, so a touch that lifts quickly without moving is a
+/// tap, every time. Drags still work: once SwiftUI's drag recogniser claims the touch it cancels it
+/// here, which simply means "not a tap".
 struct TapLayer: UIViewRepresentable {
     var onTap: () -> Void
     /// Location in the layer's coordinate space.
@@ -12,41 +15,78 @@ struct TapLayer: UIViewRepresentable {
     var onHoldBegan: () -> Void
     var onHoldEnded: () -> Void
 
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView()
+    func makeUIView(context: Context) -> TouchView {
+        let v = TouchView()
         v.backgroundColor = .clear
-        let single = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped))
-        single.numberOfTapsRequired = 1
-        let double = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped(_:)))
-        double.numberOfTapsRequired = 2
-        let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.held(_:)))
-        hold.minimumPressDuration = 0.4
-        for g in [single, double, hold] { g.cancelsTouchesInView = false; g.delegate = context.coordinator; v.addGestureRecognizer(g) }
+        v.isMultipleTouchEnabled = false
+        v.handlers = Handlers(onTap: onTap, onDoubleTap: onDoubleTap, onHoldBegan: onHoldBegan, onHoldEnded: onHoldEnded)
         return v
     }
+    func updateUIView(_ uiView: TouchView, context: Context) {
+        uiView.handlers = Handlers(onTap: onTap, onDoubleTap: onDoubleTap, onHoldBegan: onHoldBegan, onHoldEnded: onHoldEnded)
+    }
 
-    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    struct Handlers {
+        var onTap: () -> Void
+        var onDoubleTap: (CGPoint, CGSize) -> Void
+        var onHoldBegan: () -> Void
+        var onHoldEnded: () -> Void
+    }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: TapLayer
-        init(parent: TapLayer) { self.parent = parent }
+    final class TouchView: UIView {
+        var handlers: Handlers?
+        private var start: (point: CGPoint, time: TimeInterval)?
+        private var moved = false
+        private var holding = false
+        private var holdTimer: Timer?
+        private var lastTap: (point: CGPoint, time: TimeInterval)?
 
-        @objc func tapped() { parent.onTap() }
-        @objc func doubleTapped(_ g: UITapGestureRecognizer) {
-            guard let v = g.view else { return }
-            parent.onDoubleTap(g.location(in: v), v.bounds.size)
-        }
-        @objc func held(_ g: UILongPressGestureRecognizer) {
-            switch g.state {
-            case .began: parent.onHoldBegan()
-            case .ended, .cancelled, .failed: parent.onHoldEnded()
-            default: break
+        private let moveTolerance: CGFloat = 12
+        private let doubleTapWindow: TimeInterval = 0.35
+        private let holdDelay: TimeInterval = 0.4
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesBegan(touches, with: event)
+            guard let t = touches.first else { return }
+            start = (t.location(in: self), t.timestamp)
+            moved = false
+            holdTimer?.invalidate()
+            holdTimer = Timer.scheduledTimer(withTimeInterval: holdDelay, repeats: false) { [weak self] _ in
+                guard let self, !self.moved, self.start != nil else { return }
+                self.holding = true
+                self.handlers?.onHoldBegan()
             }
         }
 
-        // Let SwiftUI's drag recognisers and these run together.
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesMoved(touches, with: event)
+            guard let t = touches.first, let start else { return }
+            let p = t.location(in: self)
+            if hypot(p.x - start.point.x, p.y - start.point.y) > moveTolerance { moved = true; holdTimer?.invalidate() }
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesEnded(touches, with: event)
+            holdTimer?.invalidate()
+            defer { start = nil }
+            if holding { holding = false; handlers?.onHoldEnded(); return }
+            guard let t = touches.first, let start, !moved, t.timestamp - start.time < 0.5 else { return }
+            let p = t.location(in: self)
+            handlers?.onTap()
+            if let last = lastTap, t.timestamp - last.time < doubleTapWindow, hypot(p.x - last.point.x, p.y - last.point.y) < 40 {
+                lastTap = nil
+                handlers?.onDoubleTap(p, bounds.size)
+            } else {
+                lastTap = (p, t.timestamp)
+            }
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesCancelled(touches, with: event)
+            holdTimer?.invalidate()
+            if holding { holding = false; handlers?.onHoldEnded() }
+            start = nil
+        }
     }
 }
 
