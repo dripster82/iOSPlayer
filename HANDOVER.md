@@ -240,7 +240,7 @@ Phase 4
 - [ ] Scrub thumbnails (`VLCMediaThumbnailer`, 10 s intervals, cached per file).
 - [ ] Subtitle style editor (size/colour/position) — VLC `--freetype-*` options at load time.
 - [ ] Accessibility pass: VoiceOver labels on player controls, Dynamic Type in grids, reduced motion.
-- [ ] App icon.
+- [x] App icon (24 Oct): letter R in film strip, generated with Codex; see Design/README.md.
 
 Phase 5
 - [ ] TestFlight: raise `SWIFT_STRICT_CONCURRENCY`, privacy manifest, 500-file playback corpus (PLAN §11.9).
