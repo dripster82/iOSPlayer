@@ -100,6 +100,38 @@ public struct TMDbMovieDetail: Decodable, Sendable {
     }
 }
 
+/// One credit from a person's combined (film + TV) filmography.
+public struct TMDbPersonCredit: Decodable, Sendable, Identifiable, Hashable {
+    public var id: Int
+    public var mediaType: String
+    public var title: String?
+    public var name: String?
+    public var character: String?
+    public var posterPath: String?
+    public var releaseDate: String?
+    public var firstAirDate: String?
+    public var voteCount: Int?
+    public var displayTitle: String { title ?? name ?? "" }
+    public var date: String? { releaseDate ?? firstAirDate }
+    public var year: Int? { date.flatMap { Int($0.prefix(4)) } }
+    public var isFilm: Bool { mediaType == "movie" }
+    enum CodingKeys: String, CodingKey {
+        case id, title, name, character
+        case mediaType = "media_type", posterPath = "poster_path", releaseDate = "release_date", firstAirDate = "first_air_date", voteCount = "vote_count"
+    }
+}
+
+public struct TMDbPersonCredits: Decodable, Sendable {
+    public var cast: [TMDbPersonCredit]
+}
+
+public struct TMDbPersonSummary: Decodable, Sendable, Identifiable, Hashable {
+    public var id: Int
+    public var name: String
+    public var profilePath: String?
+    enum CodingKeys: String, CodingKey { case id, name; case profilePath = "profile_path" }
+}
+
 public struct TMDbCollectionDetail: Decodable, Sendable, Hashable {
     public var id: Int
     public var name: String

@@ -170,6 +170,8 @@ public final class MediaItem {
     public var pendingDeletion: Bool = false
     /// TMDb profile image paths, one per `cast` entry ("" when the person has no photo).
     public var castProfiles: [String] = []
+    /// TMDb person ids, one per `cast` entry (0 when unknown), for the person page.
+    public var castIDs: [Int] = []
     public var castPhotosCheckedAt: Date? = nil
 
     // Episode fields

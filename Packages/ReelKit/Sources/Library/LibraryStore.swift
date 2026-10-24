@@ -344,6 +344,18 @@ public final class LibraryStore: ObservableObject {
         return o
     }
 
+    /// Films and shows in the library with this person in the cast (by name: cast lists are short).
+    public func items(withCastMember name: String) -> [MediaItem] {
+        (items(kind: .film) + items(kind: .show)).filter { $0.cast.contains(name) }.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+    }
+
+    /// Library items by TMDb id, to mark which of a person's credits are owned.
+    public func items(tmdbIDs: Set<Int>) -> [Int: MediaItem] {
+        var out: [Int: MediaItem] = [:]
+        for i in items(kind: .film) + items(kind: .show) where i.tmdbID.map(tmdbIDs.contains) == true { out[i.tmdbID!] = i }
+        return out
+    }
+
     // MARK: - Film collections
 
     /// Library films in the same TMDb collection, oldest first, the given film excluded.
@@ -394,8 +406,9 @@ public final class LibraryStore: ObservableObject {
         var members: [TMDbCastMember] = []
         if item.kind == .film, let d = try? await tmdb.movie(id: id) { members = d.credits?.cast ?? [] }
         else if item.kind == .show, let d = try? await tmdb.show(id: id) { members = d.credits?.cast ?? [] }
-        let byName = Dictionary(members.map { ($0.name, $0.profilePath ?? "") }, uniquingKeysWith: { a, _ in a })
-        item.castProfiles = item.cast.map { byName[$0] ?? "" }
+        let byName = Dictionary(members.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        item.castProfiles = item.cast.map { byName[$0]?.profilePath ?? "" }
+        item.castIDs = item.cast.map { byName[$0]?.id ?? 0 }
         item.castPhotosCheckedAt = Date()
         try? context.save()
         if item.castProfiles.contains(where: { !$0.isEmpty }) { objectWillChange.send() }

@@ -81,6 +81,18 @@ public actor TMDbClient {
 
     // MARK: - Details
 
+    /// Everything a person acted in, films and TV together. Crew credits are left out.
+    public func personCredits(id: Int) async throws -> [TMDbPersonCredit] {
+        let credits: TMDbPersonCredits = try await get("person/\(id)/combined_credits", [], label: "person credits")
+        return credits.cast
+    }
+
+    /// For cast members recorded before their TMDb ids were kept: find the person by name.
+    public func searchPeople(query: String) async throws -> [TMDbPersonSummary] {
+        let page: TMDbSearchPage<TMDbPersonSummary> = try await get("search/person", [URLQueryItem(name: "query", value: query), URLQueryItem(name: "include_adult", value: "false")], label: "person search")
+        return page.results
+    }
+
     /// A film collection (sequels, a trilogy) and every film TMDb lists in it.
     public func collection(id: Int) async throws -> TMDbCollectionDetail {
         try await get("collection/\(id)", [], label: "collection")
