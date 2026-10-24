@@ -71,6 +71,7 @@ struct ReelApp: App {
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { await ImageLoader.shared.enforceLimit() }
+                .task(priority: .background) { if let tmdb = settings.tmdb { await library.backfillCollections(tmdb: tmdb) } }
                 .onOpenURL { url in open(url) }
                 .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in
                     Task { await sync.fetchNow() }

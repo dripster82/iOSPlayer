@@ -337,6 +337,29 @@ public final class LibraryStore: ObservableObject {
         if film.collectionID != nil { objectWillChange.send() }
     }
 
+    /// Films matched before collections were recorded (anything before 24 Oct 2026) have none, so
+    /// a film page found no siblings. Run once per launch: one TMDb detail call per film, almost all
+    /// of them served from the metadata cache that the original match filled.
+    public func backfillCollections(tmdb: TMDbClient) async {
+        let pending = items(kind: .film, includeHidden: true).filter { $0.collectionCheckedAt == nil && $0.tmdbID != nil }
+        guard !pending.isEmpty else { return }
+        Diagnostics.log("library", "backfilling collections for \(pending.count) films")
+        var found = 0
+        for (n, film) in pending.enumerated() {
+            if Task.isCancelled { break }
+            if let d = try? await tmdb.movie(id: film.tmdbID!) {
+                film.collectionID = d.belongsToCollection?.id
+                film.collectionName = d.belongsToCollection?.name
+                if film.collectionID != nil { found += 1 }
+            }
+            film.collectionCheckedAt = Date()
+            if n % 25 == 24 { try? context.save() }
+        }
+        try? context.save()
+        Diagnostics.log("library", "collections backfilled: \(found) of \(pending.count) films belong to one")
+        if found > 0 { objectWillChange.send() }
+    }
+
     // MARK: - Extra artwork
 
     /// Fills in fanart.tv logo and background for an item the first time its detail screen opens
