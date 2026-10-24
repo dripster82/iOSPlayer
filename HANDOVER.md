@@ -300,6 +300,25 @@ Reliability (24 Oct, evening)
 - [x] Sync errors name the CKError code (`SyncEngine.describe`); Home shows "Synced x ago" or the problem.
 - [x] Wake-on-LAN: `SourceConfig.macAddress` (synced), `WakeOnLAN.wake`, wake-and-wait in `playbackURL`.
 
+Late 24 Oct (second batch)
+- [x] Scans remove files a successful listing no longer shows; titles left empty are retired
+      (`pendingDeletion`, purged at next launch) — `LibraryScanner`.
+- [x] Player resilience: `VLCPlaybackEngine.rebuildPlayer` swaps in a fresh VLCMediaPlayer when the
+      previous input is still stopping at load or an open times out (one automatic retry). Root cause of
+      the iPad "hung then server error" report: the SMB pre-flight connected in 0.3 s, VLC was wedged.
+- [x] Artwork: Edit artwork… on film/show/collection/universe/series cards (`ArtworkPickerView`):
+      TMDb images, fanart.tv, TheTVDB (shows), collection posters, collages. Overrides on `MediaItem`
+      (`posterOverrideURL`…), `MediaCollection.artworkURL/collageURLs`, `GroupArtwork` rows — all synced.
+- [x] Universes (`Universes` in MediaCore, curated studio/keyword lists), film series, smart collections
+      (`SmartCollectionStore`, per device), person pages, More like this, trailers, cast photos.
+- [x] Scrub thumbnails (`ScrubThumbnails`, VLCMediaThumbnailer, Caches/scrub), subtitle style, codec
+      probe on first play (`VLCPlaybackEngine.onProbe` → `LibraryStore.recordProbe`).
+- [x] Native AVPlayer path for AirPlay with MP4/M4V/MOV over HTTP or downloads (`NativePlayerView`).
+- [x] Siri shortcuts (`ReelIntents.swift`), keyboard shortcuts, VoiceOver labels, PrivacyInfo.xcprivacy.
+- [ ] Widgets: need an App Group entitlement in the provisioning profile (Developer portal), not doable
+      from the build script; `ReelRoutes.writeShowsSnapshot` already keeps a shared-ready snapshot.
+- [ ] Group artwork and smart collections are the only per-device state left (smart rules).
+
 Phase 3
 - [x] OpenSubtitles (24 Oct): `OpenSubtitlesClient` (Metadata), `SubtitleSearchView` from the Subtitles
       sheet, files kept in Documents/Subtitles/<item>/ and re-added on play. Key + account in Settings.

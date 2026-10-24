@@ -100,7 +100,8 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | "Open in Reel" from other apps + `reel://play?url=` scheme | Done |
 | OpenSubtitles search/download (own key + account), fanart.tv logos (own key) | Done (24 Oct) |
 | Offline downloads (Downloads tab), Wake-on-LAN for a sleeping NAS, film collections, diagnostics log | Done (24 Oct) |
-| Scrub thumbnails | Not yet (phase 4) |
+| Scrub thumbnails, subtitle style, trailers, person pages, universes, smart collections, artwork editing, Siri shortcuts | Done (24 Oct) |
+| Home Screen widgets | Not yet (needs an App Group in the provisioning profile) |
 | Background scan continuation (background task + BGProcessingTask) | Done |
 
 ## First build
