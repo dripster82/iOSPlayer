@@ -72,6 +72,7 @@ enum LibraryRoute: Hashable {
     case person(PersonRef)
     case universe(String)
     case filmCollection(Int)
+    case smart(UUID)
 }
 
 /// Who was tapped in a cast row. The TMDb id is 0 for cast recorded before ids were kept; the
@@ -95,6 +96,7 @@ struct LibraryRouteDestination: View {
         case .person(let p): PersonView(person: p)
         case .universe(let name): UniverseView(name: name)
         case .filmCollection(let id): FilmCollectionView(id: id)
+        case .smart(let id): SmartCollectionView(id: id)
         case .collection(let id):
             if let c = library.collections().first(where: { $0.id == id }) {
                 ScrollView { ItemGrid(items: c.itemKeys.compactMap { library.item($0) }, fixMatchTarget: $fixMatchTarget).padding(.vertical) }

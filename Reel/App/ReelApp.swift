@@ -15,6 +15,7 @@ struct ReelApp: App {
     @StateObject private var player: PlayerCoordinator
     @StateObject private var downloads: DownloadManager
     @StateObject private var groupArt: GroupArtStore
+    @StateObject private var smart = SmartCollectionStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -42,6 +43,18 @@ struct ReelApp: App {
     }
 
     /// "Open in Reel" from another app (a file URL), or `reel://play?url=…` / `reel://x-callback-url/play?url=…`.
+    /// Plays what a Siri intent asked for, once the scene is up.
+    private func runPendingRoute() {
+        guard let route = ReelRoutes.pending else { return }
+        ReelRoutes.pending = nil
+        switch route {
+        case .continueWatching:
+            if let (item, _) = library.continueWatching().first { player.play(item, settings: settings) }
+        case .nextEpisode(let showKey):
+            if let show = library.item(showKey), let next = library.nextEpisode(of: show) { player.play(next, settings: settings) }
+        }
+    }
+
     private func open(_ url: URL) {
         if url.isFileURL { player.playExternal(url, settings: settings); return }
         guard url.scheme?.lowercased() == "reel" else { return }
@@ -77,9 +90,19 @@ struct ReelApp: App {
                 .environmentObject(player)
                 .environmentObject(downloads)
                 .environmentObject(groupArt)
+                .environmentObject(smart)
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { library.purgePendingDeletions(); await ImageLoader.shared.enforceLimit() }
+                .task {
+                    // Siri: act on a route an intent left, and keep the show list Siri's picker reads current.
+                    ReelRoutes.onPending = { runPendingRoute() }
+                    runPendingRoute()
+                    ReelRoutes.writeShowsSnapshot(library.items(kind: .show).map { ($0.itemKey, $0.title) })
+                }
+                .onReceive(library.objectWillChange.debounce(for: .seconds(5), scheduler: DispatchQueue.main)) { _ in
+                    ReelRoutes.writeShowsSnapshot(library.items(kind: .show).map { ($0.itemKey, $0.title) })
+                }
                 .task(priority: .background) { if let tmdb = settings.tmdb { await library.backfillCollections(tmdb: tmdb) } }
                 .onOpenURL { url in open(url) }
                 .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in

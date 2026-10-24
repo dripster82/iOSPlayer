@@ -137,8 +137,11 @@ struct FavouritesView: View {
 struct CollectionsView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var groupArt: GroupArtStore
+    @EnvironmentObject private var smart: SmartCollectionStore
     @State private var newName = ""
     @State private var adding = false
+    @State private var addingSmart = false
+    @State private var smartCards: [Card] = []
     /// Built once per library change, off the render path: the old body re-fetched and re-grouped
     /// every film for every card on every redraw, which made the screen crawl on a big library.
     @State private var mine: [Card] = []
@@ -155,6 +158,7 @@ struct CollectionsView: View {
         var icon: CollectionIcon.Kind
         var editTarget: ArtworkPickerView.Target
         var hasCustomArt: Bool
+        var editable = true
     }
     struct EditTarget: Identifiable { var id: String; var target: ArtworkPickerView.Target }
 
@@ -162,6 +166,7 @@ struct CollectionsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 section("My collections", cards: mine, footer: mine.isEmpty ? "Tap + to make one, then add titles from their menu." : nil)
+                section("Smart collections", cards: smartCards, footer: smartCards.isEmpty ? "Saved filters that fill themselves: unwatched Marvel, films under 100 minutes, added this month. Use + to make one." : nil)
                 if !universes.isEmpty {
                     section("Universes", cards: universes, footer: "Studios and franchises, from TMDb's companies and keywords. A universe appears once two of its films are in the library.")
                 }
@@ -172,9 +177,16 @@ struct CollectionsView: View {
         }
         .refreshFromLibrary { rebuild() }
         .onReceive(groupArt.$version) { _ in rebuild() }
+        .onReceive(smart.$all) { _ in rebuild() }
         .itemNavigation()
         .navigationTitle("Collections")
-        .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
+        .toolbar {
+            Menu {
+                Button { adding = true } label: { Label("New collection", systemImage: "rectangle.stack.badge.plus") }
+                Button { addingSmart = true } label: { Label("New smart collection", systemImage: "sparkles") }
+            } label: { Image(systemName: "plus") }
+        }
+        .sheet(isPresented: $addingSmart) { SmartCollectionEditor(rule: SmartCollection(name: ""), isNew: true) }
         .sheet(item: $editing) { ArtworkPickerView(target: $0.target) }
         .alert("New collection", isPresented: $adding) {
             TextField("Name", text: $newName)
@@ -190,6 +202,11 @@ struct CollectionsView: View {
                 ?? .mosaicURLs(c.collageURLs.isEmpty ? posters : c.collageURLs.compactMap(URL.init))
             return Card(id: "c:\(c.id)", title: c.name, subtitle: "\(c.itemKeys.count) items", route: .collection(c.id), icon: icon,
                         editTarget: .collection(c), hasCustomArt: c.artworkURL != nil || !c.collageURLs.isEmpty)
+        }
+        smartCards = smart.all.map { r in
+            let matches = r.matches(in: library)
+            return Card(id: "sm:\(r.id)", title: r.name, subtitle: "\(matches.count) titles", route: .smart(r.id),
+                        icon: .mosaicURLs(matches.prefix(4).compactMap(\.posterURL)), editTarget: .collection(MediaCollection(name: "")), hasCustomArt: false, editable: false)
         }
         let index = library.groupIndex()
         universes = index.universes.map { g in
@@ -228,7 +245,7 @@ struct CollectionsView: View {
                         }
                     }.buttonStyle(.plain)
                     .contextMenu {
-                        Button { editing = EditTarget(id: card.id, target: card.editTarget) } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
+                        if card.editable { Button { editing = EditTarget(id: card.id, target: card.editTarget) } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") } }
                         if card.hasCustomArt {
                             Button { resetArt(card) } label: { Label("Use automatic artwork", systemImage: "arrow.uturn.backward") }
                         }
