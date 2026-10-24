@@ -180,6 +180,24 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var lastProgressAt = Date.distantPast
     private var lastProgressTime: TimeInterval = 0
 
+    /// Coming back to the foreground (after PiP, the lock screen or another app): if VLC says it is
+    /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
+    /// Reconnect now rather than leaving the viewer to wait for the 15 s stall watchdog.
+    public func verifyPlaybackAfterForeground() {
+        guard status == .playing, let stats = player.media?.statistics else { return }
+        let before = Int(stats.displayedPictures) + Int(stats.playedAudioBuffers)
+        let position = clock.time
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.status == .playing, let now = self.player.media?.statistics else { return }
+            let after = Int(now.displayedPictures) + Int(now.playedAudioBuffers)
+            if after == before {
+                Diagnostics.log("player", "no output since returning to the foreground; reconnecting at \(Int(position))s")
+                self.reconnect(at: position)
+            }
+        }
+    }
+
     /// If nothing has been shown or played for 15 s while VLC still claims to be playing, the connection
     /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
     /// Paused, the end of the stream and seeks are left alone; the seek watchdog has its own recovery.
