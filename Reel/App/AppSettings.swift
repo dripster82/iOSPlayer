@@ -1,6 +1,7 @@
 import SwiftUI
 import Metadata
 import Library
+import MediaSources
 
 /// User preferences. Everything here is per-device; nothing syncs.
 /// `@Published` + `didSet` rather than `@AppStorage`, because `@AppStorage` doesn't notify an ObservableObject's subscribers.
@@ -20,6 +21,16 @@ final class AppSettings: ObservableObject {
     @Published var tmdbAPIKey: String { didSet { d.set(tmdbAPIKey, forKey: "tmdbAPIKey") } }
     @Published var tvdbAPIKey: String { didSet { d.set(tvdbAPIKey, forKey: "tvdbAPIKey") } }
     @Published var tvdbPIN: String { didSet { d.set(tvdbPIN, forKey: "tvdbPIN") } }
+    @Published var openSubtitlesAPIKey: String { didSet { d.set(openSubtitlesAPIKey, forKey: "openSubtitlesAPIKey") } }
+    @Published var openSubtitlesUsername: String { didSet { d.set(openSubtitlesUsername, forKey: "openSubtitlesUsername") } }
+    /// Kept in the Keychain (with the source passwords), not in UserDefaults.
+    @Published var openSubtitlesPassword: String {
+        didSet {
+            if openSubtitlesPassword.isEmpty { CredentialStore.shared.remove(for: Self.openSubtitlesCredentialID) }
+            else { try? CredentialStore.shared.save(Credentials(username: openSubtitlesUsername, password: openSubtitlesPassword), for: Self.openSubtitlesCredentialID) }
+        }
+    }
+    private static let openSubtitlesCredentialID = UUID(uuidString: "6F9B2E1C-5D0A-4C4B-9A1E-0B5E4C3D2A11")!
     @Published var animeMatching: Bool { didSet { d.set(animeMatching, forKey: "animeMatching") } }
     @Published var metadataLanguage: String { didSet { d.set(metadataLanguage, forKey: "metadataLanguage") } }
     @Published var hardwareDecoding: Bool { didSet { d.set(hardwareDecoding, forKey: "hardwareDecoding") } }
@@ -40,6 +51,9 @@ final class AppSettings: ObservableObject {
         tmdbAPIKey = d.string(forKey: "tmdbAPIKey") ?? ""
         tvdbAPIKey = d.string(forKey: "tvdbAPIKey") ?? ""
         tvdbPIN = d.string(forKey: "tvdbPIN") ?? ""
+        openSubtitlesAPIKey = d.string(forKey: "openSubtitlesAPIKey") ?? ""
+        openSubtitlesUsername = d.string(forKey: "openSubtitlesUsername") ?? ""
+        openSubtitlesPassword = CredentialStore.shared.load(for: Self.openSubtitlesCredentialID)?.password ?? ""
         animeMatching = d.object(forKey: "animeMatching") as? Bool ?? true
         metadataLanguage = d.string(forKey: "metadataLanguage") ?? "en-GB"
         hardwareDecoding = d.object(forKey: "hardwareDecoding") as? Bool ?? true
@@ -68,6 +82,12 @@ final class AppSettings: ObservableObject {
     var tvdb: TVDBClient? {
         guard !tvdbAPIKey.isEmpty else { return nil }
         return TVDBClient(apiKey: tvdbAPIKey, pin: tvdbPIN)
+    }
+
+    /// nil until the user has entered an OpenSubtitles API key. Searching works with the key alone.
+    var openSubtitles: OpenSubtitlesClient? {
+        guard !openSubtitlesAPIKey.isEmpty else { return nil }
+        return OpenSubtitlesClient(apiKey: openSubtitlesAPIKey, username: openSubtitlesUsername, password: openSubtitlesPassword)
     }
 
     /// Shared so the AniDB and Anime-Lists indexes load once per launch, not once per scan.

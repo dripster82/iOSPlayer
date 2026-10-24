@@ -310,9 +310,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         audioDelay = seconds
     }
 
-    public func addExternalSubtitle(_ url: URL) {
-        player.addPlaybackSlave(url, type: .subtitle, enforce: false)
+    /// `select` switches to the file once VLC has added it as a track (it arrives through the track
+    /// callbacks a moment later), for a subtitle the viewer just downloaded.
+    public func addExternalSubtitle(_ url: URL) { addExternalSubtitle(url, select: false) }
+    public func addExternalSubtitle(_ url: URL, select: Bool) {
+        if select { userChoseSubtitle = true; selectNextAddedSubtitle = true }
+        player.addPlaybackSlave(url, type: .subtitle, enforce: select)
     }
+    private var selectNextAddedSubtitle = false
 
     public func stop() {
         seekWatchdog?.cancel(); seekWatchdog = nil
@@ -522,6 +527,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), isForced: t.trackName.localizedCaseInsensitiveContains("forced"))
         }
         if newAudio != audioTracks { audioTracks = newAudio }
+        if newSubs.count > subtitleTracks.count, selectNextAddedSubtitle, let last = newSubs.last {
+            selectNextAddedSubtitle = false
+            subtitleTracks = newSubs
+            applySubtitleTrack(last.id)
+        }
         if newSubs != subtitleTracks { subtitleTracks = newSubs }
         syncSelection()
         loadChapters()

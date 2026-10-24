@@ -39,6 +39,16 @@ struct SettingsView: View {
                 Text(settings.tmdbAPIKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information.")
             }
 
+            Section {
+                SecureField("OpenSubtitles API key (optional)", text: $settings.openSubtitlesAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                if !settings.openSubtitlesAPIKey.isEmpty {
+                    TextField("OpenSubtitles username", text: $settings.openSubtitlesUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("OpenSubtitles password", text: $settings.openSubtitlesPassword)
+                }
+            } header: { Text("Subtitles") } footer: {
+                Text("Find subtitles online from the player's Subtitles sheet. The API key comes from opensubtitles.com → API consumers (free); downloading needs a free account and has a daily limit. Only the title or TMDb id is sent, never your files.")
+            }
+
             Section("Playback") {
                 Toggle(isOn: $settings.hardwareDecoding) { VStack(alignment: .leading) { Text("Hardware decoding"); Text("VideoToolbox. Turn off if a file shows artefacts.").font(.caption).foregroundStyle(.secondary) } }
                 Picker("Preferred audio language", selection: $settings.audioLanguage) { ForEach(AppSettings.languages, id: \.code) { Text($0.name).tag($0.code) } }

@@ -53,14 +53,10 @@ final class PlayerCoordinator: ObservableObject {
                 }
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
-                var opts = PlaybackOptions()
-                opts.hardwareDecoding = settings.hardwareDecoding
-                opts.networkCachingMS = settings.networkCachingMS
-                opts.preferredAudioLanguage = settings.audioLanguage
-                opts.preferredSubtitleLanguage = settings.subtitleLanguage
-                opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+                let opts = playbackOptions(for: item, settings: settings)
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)
-                let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume, externalSubtitles: subs, itemKey: item.itemKey)
+                let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume,
+                                                externalSubtitles: subs + SubtitleStore.subtitles(for: item.itemKey), itemKey: item.itemKey)
                 engine.load(playbackItem, options: opts)
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
                 startSaveTimer()
@@ -72,6 +68,38 @@ final class PlayerCoordinator: ObservableObject {
                 Diagnostics.log("player", "could not resolve \(file.fileName): \(error.localizedDescription)")
             }
         }
+    }
+
+    /// The global playback settings, overridden by what the viewer chose last time for this show
+    /// (or film): the audio language, and subtitles on in a language or off.
+    private func playbackOptions(for item: MediaItem, settings: AppSettings) -> PlaybackOptions {
+        var opts = PlaybackOptions()
+        opts.hardwareDecoding = settings.hardwareDecoding
+        opts.networkCachingMS = settings.networkCachingMS
+        opts.preferredAudioLanguage = settings.audioLanguage
+        opts.preferredSubtitleLanguage = settings.subtitleLanguage
+        opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        if let choice = TrackMemory.choice(for: Self.memoryKey(item)) {
+            if let audio = choice.audioLanguage { opts.preferredAudioLanguage = audio }
+            switch choice.subtitle {
+            case "off": opts.subtitlesOnByDefault = false
+            case "on": opts.subtitlesOnByDefault = true
+            case let lang?: opts.subtitlesOnByDefault = true; opts.preferredSubtitleLanguage = lang
+            case nil: break
+            }
+        }
+        return opts
+    }
+    private static func memoryKey(_ item: MediaItem) -> String { item.show?.itemKey ?? item.itemKey }
+
+    func rememberAudioChoice(language: String?) {
+        guard let current, let language else { return }
+        TrackMemory.update(Self.memoryKey(current)) { $0.audioLanguage = language }
+    }
+    /// `language` is a code, "on" for a track with no language tag, or "off".
+    func rememberSubtitleChoice(language: String) {
+        guard let current else { return }
+        TrackMemory.update(Self.memoryKey(current)) { $0.subtitle = language }
     }
 
     /// Plays something handed to us by another app: a file URL (Files, DS file, AirDrop) or a stream URL

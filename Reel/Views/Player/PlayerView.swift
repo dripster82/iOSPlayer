@@ -397,18 +397,24 @@ struct TrackSheet: View {
     @Binding var fill: Bool
     let onFill: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var player: PlayerCoordinator
+    @State private var searchingSubtitles = false
 
     var body: some View {
         NavigationStack {
             List {
                 switch kind {
                 case .audio:
-                    ForEach(engine.audioTracks) { t in row(t.name, sub: t.language, on: engine.currentAudioTrack == t.id) { engine.selectAudioTrack(t.id) } }
+                    ForEach(engine.audioTracks) { t in row(t.name, sub: t.language, on: engine.currentAudioTrack == t.id) { engine.selectAudioTrack(t.id); player.rememberAudioChoice(language: t.language) } }
                     delayRow("Audio delay", value: engine.audioDelay) { engine.setAudioDelay($0) }
                 case .subtitles:
-                    row("Off", sub: nil, on: engine.currentSubtitleTrack == nil) { engine.selectSubtitleTrack(nil) }
-                    ForEach(engine.subtitleTracks) { t in row(t.name, sub: t.isForced ? "Forced" : "Embedded", on: engine.currentSubtitleTrack == t.id) { engine.selectSubtitleTrack(t.id) } }
-                    Section { Label("Search online (OpenSubtitles) — coming in phase 3", systemImage: "magnifyingglass").foregroundStyle(.secondary).font(.footnote) }
+                    row("Off", sub: nil, on: engine.currentSubtitleTrack == nil) { engine.selectSubtitleTrack(nil); player.rememberSubtitleChoice(language: "off") }
+                    ForEach(engine.subtitleTracks) { t in row(t.name, sub: t.isForced ? "Forced" : "Embedded", on: engine.currentSubtitleTrack == t.id) { engine.selectSubtitleTrack(t.id); player.rememberSubtitleChoice(language: t.language ?? "on") } }
+                    Section {
+                        Button { searchingSubtitles = true } label: { Label("Find subtitles online…", systemImage: "magnifyingglass") }
+                            .disabled(settings.openSubtitles == nil)
+                        if settings.openSubtitles == nil { Text("Add an OpenSubtitles API key in Settings → Subtitles.").font(.footnote).foregroundStyle(.secondary) }
+                    }
                     delayRow("Subtitle delay", value: engine.subtitleDelay) { engine.setSubtitleDelay($0) }
                 case .chapters:
                     ForEach(engine.chapters) { c in row(c.title, sub: MediaFormat.clock(c.start), on: engine.time >= c.start && engine.time < c.start + c.duration) { engine.seek(to: c.start); dismiss() } }
@@ -423,6 +429,7 @@ struct TrackSheet: View {
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() } }
+            .sheet(isPresented: $searchingSubtitles) { SubtitleSearchView(engine: engine) }
         }
     }
 
