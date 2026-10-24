@@ -282,10 +282,24 @@ public final class MediaCollection {
     }
 }
 
+/// CloudKit's system fields (record change tag, timestamps) for every record this device has sent or
+/// received. An update is only accepted by CloudKit when it carries the current change tag, so without
+/// this every second save of a record is rejected as a conflict.
+@Model
+public final class SyncRecordMeta {
+    @Attribute(.unique) public var recordName: String
+    public var systemFields: Data
+    public init(recordName: String, systemFields: Data) {
+        self.recordName = recordName
+        self.systemFields = systemFields
+    }
+}
+
 public enum LibrarySchema {
     public static let models: [any PersistentModel.Type] = [
         SourceRecord.self, FolderRule.self, MediaFile.self, MediaItem.self,
         WatchState.self, Favourite.self, ItemOverride.self, MediaCollection.self,
+        SyncRecordMeta.self,
     ]
 
     public static func container(inMemory: Bool = false) throws -> ModelContainer {
