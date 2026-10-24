@@ -58,6 +58,7 @@ struct ArtworkPickerView: View {
                         if settings.fanart != nil { section("fanart.tv", fanart[slot] ?? []) }
                         else if slot != .poster { Text("Add a fanart.tv key in Settings for more logos and backgrounds.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
                     case .collection:
+                        if titles.isEmpty, !loading { Text("This collection has no titles yet. Add films or shows from their menu, then come back.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
                         ForEach(titles) { row in section(row.item.title, row.candidates) }
                     case .group(_, _, _, let logos):
                         if mode == .single, slot == .logo {

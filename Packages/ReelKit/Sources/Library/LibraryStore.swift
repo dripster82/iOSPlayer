@@ -318,7 +318,14 @@ public final class LibraryStore: ObservableObject {
             o.hidden = true
         }
         let target = files.first?.item.map { $0.kind == .episode ? ($0.show?.itemKey ?? $0.itemKey) : $0.itemKey }
-        if let target { rematched[item.itemKey] = target }
+        if let target {
+            rematched[item.itemKey] = target
+            // The user's collections follow the title to its new identity.
+            for c in collections() where c.itemKeys.contains(item.itemKey) {
+                c.itemKeys = c.itemKeys.map { $0 == item.itemKey ? target : $0 }
+                c.updatedAt = Date(); c.pendingSync = true
+            }
+        }
         try context.save()
         if !deleted.isEmpty { syncHooks?.deleted(deleted) }
         notifySync()
