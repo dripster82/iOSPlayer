@@ -179,7 +179,7 @@ struct ShowDetailView: View {
         let next = library.nextEpisode(of: show)
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HeroHeader(item: show, subtitle: [show.year.map(String.init), "\(seasons.count) season\(seasons.count == 1 ? "" : "s")", show.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)
+                HeroHeader(item: show, subtitle: [show.year.map(String.init), show.seasonsLabel, show.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)
                 if let next {
                     Button { player.play(next, settings: settings) } label: {
                         Label("Play \(next.episodeCode ?? "")", systemImage: "play.fill").frame(maxWidth: .infinity)

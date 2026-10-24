@@ -42,7 +42,7 @@ struct PosterCard: View {
 
     private var defaultSubtitle: String {
         switch item.kind {
-        case .show: item.seasonCount.map { "\($0) season\($0 == 1 ? "" : "s")" } ?? item.year.map(String.init) ?? ""
+        case .show: item.seasonsLabel
         case .film: [item.year.map(String.init), library.preferredFile(item)?.resolution].compactMap { $0 }.joined(separator: " · ")
         case .episode: item.episodeCode ?? ""
         }
