@@ -95,7 +95,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         }
         // One-time full refetch after the source-convergence upgrade: Source records fetched by an older
         // build were ignored, and CloudKit will not resend them without starting from a fresh state.
-        let refetchKey = "reel.sync.refetch.v2"
+        let refetchKey = "reel.sync.refetch.v3"
         if !UserDefaults.standard.bool(forKey: refetchKey) {
             UserDefaults.standard.removeObject(forKey: stateKey)
             UserDefaults.standard.set(true, forKey: refetchKey)
