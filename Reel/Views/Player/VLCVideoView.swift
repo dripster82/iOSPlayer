@@ -49,6 +49,9 @@ final class VLCDrawableView: UIView, VLCPictureInPictureDrawable {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // VLCKit 4 inserts its rendering view at attach time without autoresizing, so on rotation the
+        // picture kept its old size: zoomed and cropped in portrait, off-screen in landscape.
+        for sub in subviews where sub.frame != bounds { sub.frame = bounds }
         onLayout?()
     }
 
