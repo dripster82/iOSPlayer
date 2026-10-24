@@ -121,6 +121,9 @@ final class PlayerCoordinator: ObservableObject {
         saveTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.saveProgress() }
     }
 
+    /// Writes the current position now (the app is about to be suspended, or the user asked).
+    func flushProgress() { saveProgress() }
+
     private func saveProgress(markWatched: Bool = false) {
         guard let item = current, engine.duration > 0 else { return }
         library.recordProgress(itemKey: item.itemKey, position: markWatched ? engine.duration : engine.time, duration: engine.duration)

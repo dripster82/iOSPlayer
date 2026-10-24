@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SwiftData
 import Library
 import Sync
@@ -70,6 +71,14 @@ struct ReelApp: App {
                     Task { await sync.fetchNow() }
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    // Leaving the foreground (switching apps, locking, PiP hand-off): save the position
+                    // now and get it to iCloud before iOS suspends us, so the other device can pick up
+                    // exactly where this one stopped.
+                    if phase == .inactive || phase == .background {
+                        player.flushProgress()
+                        let assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel progress sync")
+                        Task { await sync.sendNow(); UIApplication.shared.endBackgroundTask(assertion) }
+                    }
                     if phase == .active {
                         Task { await sync.fetchNow(); sync.pushPendingChanges() }
                         scanForNewMediaIfDue()

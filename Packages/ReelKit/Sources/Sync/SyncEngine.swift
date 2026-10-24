@@ -194,6 +194,13 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         engine.state.add(pendingRecordZoneChanges: names.map { .deleteRecord(recordID($0)) })
     }
 
+    /// Push whatever is pending and wait for CloudKit to accept it. Used on the way to the background,
+    /// where the engine's own scheduling may not get a turn before the app is suspended.
+    public func sendNow() async {
+        pushPendingChanges()
+        do { try await engine?.sendChanges() } catch { lastError = error.localizedDescription }
+    }
+
     public func fetchNow() async {
         do { try await engine?.fetchChanges() } catch { lastError = error.localizedDescription }
     }
