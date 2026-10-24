@@ -24,13 +24,14 @@ public actor ImageLoader {
         if let task = inflight[url] { return await task.value }
         let task = Task<UIImage?, Never> { [directory] in
             let file = directory.appendingPathComponent(Self.key(url))
-            if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
+            // `preparingForDisplay` decodes now, on this background task, instead of lazily on the main thread at draw time.
+            if let data = try? Data(contentsOf: file), let img = UIImage(data: data)?.preparingForDisplay() ?? UIImage(data: data) {
                 try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
                 return img
             }
             guard let result = try? await URLSession.shared.data(from: url),
                   (result.1 as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-                  let img = UIImage(data: result.0) else { return nil }
+                  let img = UIImage(data: result.0)?.preparingForDisplay() ?? UIImage(data: result.0) else { return nil }
             try? result.0.write(to: file, options: .atomic)
             return img
         }

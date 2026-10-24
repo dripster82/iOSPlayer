@@ -32,6 +32,7 @@ struct ReelApp: App {
         // Every local write pushes straight away, so putting one device down and picking up another just works.
         store.syncHooks = SyncHooks(changed: { [weak sync] in sync?.pushPendingChanges() },
                                     deleted: { [weak sync] keys in sync?.deleteRecords(named: keys) })
+        sync.onChangesApplied = { [weak store] in store?.invalidateCaches(); store?.objectWillChange.send() }
         // Must happen before launch finishes, so here rather than in a view.
         BackgroundScans.register(library: store, settings: settings)
     }

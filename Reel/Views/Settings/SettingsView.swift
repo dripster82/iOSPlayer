@@ -9,6 +9,9 @@ struct SettingsView: View {
     @EnvironmentObject private var sync: SyncEngine
     @State private var artworkSize: Int64 = 0
     @State private var showKeyHelp = false
+    @State private var unmatchedCount = 0
+    @State private var reviewCount = 0
+    @State private var hiddenCount = 0
 
     var body: some View {
         Form {
@@ -16,10 +19,10 @@ struct SettingsView: View {
                 SecureField("TMDb API key (v3)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                     // A v3 key is 32 hex characters. The moment a complete one lands, match everything scanned without it.
                     .onChange(of: settings.tmdbAPIKey) { _, key in
-                        if key.count == 32, library.unmatchedFileCount() > 0 { library.scanAll(providers: settings.providers) }
+                        if key.count == 32, unmatchedCount > 0 { library.scanAll(providers: settings.providers) }
                     }
-                if library.unmatchedFileCount() > 0, settings.tmdb != nil {
-                    Button("Match \(library.unmatchedFileCount()) unmatched files now") { library.scanAll(providers: settings.providers) }
+                if unmatchedCount > 0, settings.tmdb != nil {
+                    Button("Match \(unmatchedCount) unmatched files now") { library.scanAll(providers: settings.providers) }
                 }
                 Toggle(isOn: $settings.animeMatching) {
                     VStack(alignment: .leading) { Text("Anime matching"); Text("AniDB titles + Anime-Lists map fansub names and absolute episode numbers to TMDb. No key needed.").font(.caption).foregroundStyle(.secondary) }
@@ -51,8 +54,8 @@ struct SettingsView: View {
 
             Section("Library") {
                 Toggle(isOn: $settings.scanOnLaunch) { VStack(alignment: .leading) { Text("Scan for new media on launch"); Text("Checks every source when the app opens (at most every 10 minutes). Sources → Refresh all does it on demand.").font(.caption).foregroundStyle(.secondary) } }
-                NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(library.filesNeedingReview().count) items") }
-                NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(library.items(kind: .film, includeHidden: true).filter(\.hidden).count + library.items(kind: .show, includeHidden: true).filter(\.hidden).count)") }
+                NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }
+                NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(hiddenCount)") }
                 NavigationLink { HistoryView() } label: { Text("Watch history") }
             }
 
@@ -91,6 +94,11 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .refreshFromLibrary {
+            unmatchedCount = library.unmatchedFileCount()
+            reviewCount = library.filesNeedingReview().count
+            hiddenCount = library.items(kind: .film, includeHidden: true).filter(\.hidden).count + library.items(kind: .show, includeHidden: true).filter(\.hidden).count
+        }
         .task { artworkSize = await ImageLoader.shared.sizeOnDisk() }
         .alert("TMDb API key", isPresented: $showKeyHelp) { Button("OK") {} } message: {
             Text("Create a free account at themoviedb.org, open Settings → API, and request a v3 developer key. Personal, non-commercial use is free. Paste the key here.")

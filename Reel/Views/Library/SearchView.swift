@@ -9,13 +9,19 @@ struct SearchView: View {
     @AppStorage("recentSearches") private var recentRaw = ""
 
     private var recent: [String] { recentRaw.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+    // Computed when the query or the library changes, not on every render.
+    @State private var results: [MediaItem] = []
+    @State private var people: [String] = []
+
+    private func runSearch() {
+        results = library.search(query)
+        people = query.count >= 2 ? Array(Set((library.items(kind: .film) + library.items(kind: .show)).flatMap(\.cast).filter { $0.localizedCaseInsensitiveContains(query) })).sorted() : []
+    }
 
     var body: some View {
-        let results = library.search(query)
         let shows = results.filter { $0.kind == .show }
         let films = results.filter { $0.kind == .film }
         let episodes = results.filter { $0.kind == .episode }
-        let people = query.count >= 2 ? Array(Set((library.items(kind: .film) + library.items(kind: .show)).flatMap(\.cast).filter { $0.localizedCaseInsensitiveContains(query) })).sorted() : []
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if query.isEmpty {
@@ -35,6 +41,8 @@ struct SearchView: View {
                 }
             }.padding(.vertical)
         }
+        .onChange(of: query) { _, _ in runSearch() }
+        .refreshFromLibrary { runSearch() }
         .navigationTitle("Search")
         .searchable(text: $query, prompt: "Shows, films, episodes, people")
         .onSubmit(of: .search) {

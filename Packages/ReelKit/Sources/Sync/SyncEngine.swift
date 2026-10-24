@@ -21,6 +21,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     @Published public private(set) var lastError: String? { didSet { if let e = lastError { Self.log(e) } } }
     @Published public private(set) var isEnabled: Bool
     @Published public private(set) var isSyncing = false
+    /// Set by the app: called after remote changes were applied, so the store drops its caches and views refresh.
+    public var onChangesApplied: (() -> Void)?
     @Published public private(set) var lastSummary: String?
 
     /// Last few errors, persisted so they can be read off a device (Preferences plist).
@@ -257,6 +259,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             dedupeSources()
             try? ctx.save()
             lastSyncedAt = Date()
+            if !e.modifications.isEmpty || !e.deletions.isEmpty { onChangesApplied?() }
         case .sentRecordZoneChanges(let e):
             for saved in e.savedRecords { rememberSystemFields(saved); clearPending(saved.recordID) }
             for failed in e.failedRecordSaves {

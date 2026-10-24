@@ -259,6 +259,14 @@ doesn't notify an `ObservableObject`'s subscribers. Keep that pattern.
 
 ## 6. Conventions
 
+**Main-thread rules (learned the hard way on 24 Oct).** The store publishes on every scan step and every
+sync, so anything a `body` reads from it runs again each time. Screens compute their rows into `@State`
+and refresh through `.refreshFromLibrary { … }` (`Reel/Views/Components/LibraryRefresh.swift`, 500 ms
+debounce); `LibraryStore.watchState(_:)` and `isFavourite(_:)` read in-memory caches that every write
+and every sync apply invalidate; the player never observes the store, and its position-driven parts
+observe `PlaybackClock`, not the engine, so the body with the gesture recognisers stays static. Images
+are decoded in `ImageLoader`'s background task (`preparingForDisplay`). Keep it that way.
+
 - Swift 5.10, SwiftUI, structured concurrency. Actors for sources and the scanner; `@MainActor` for stores and coordinators.
 - Views read from `LibraryStore` via `@EnvironmentObject`; mutations go through `LibraryStore` methods (they set `pendingSync`).
 - No new third-party dependencies without a licence check: permissive (MIT/Apache/BSD) only, and add it to `LicencesView` + PLAN §11.10.

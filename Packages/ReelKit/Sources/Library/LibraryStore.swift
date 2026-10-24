@@ -20,7 +20,13 @@ public final class LibraryStore: ObservableObject {
     @Published public var lastError: String?
     /// Set by the app once the sync engine exists. Every write that marks rows `pendingSync` calls `changed`.
     public var syncHooks: SyncHooks?
-    private func notifySync() { syncHooks?.changed() }
+    private func notifySync() { invalidateCaches(); syncHooks?.changed() }
+
+    // Per-render lookups (poster cards, filters) read these instead of hitting SwiftData per item.
+    // Built lazily from one fetch each; dropped on every write and whenever sync applies changes.
+    private var watchCache: [String: WatchState]?
+    private var favouriteCache: Set<String>?
+    public func invalidateCaches() { watchCache = nil; favouriteCache = nil }
     private var scanTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(container: ModelContainer) {
@@ -282,8 +288,8 @@ public final class LibraryStore: ObservableObject {
     // MARK: - Watch state
 
     public func watchState(_ key: String) -> WatchState? {
-        var d = FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key }); d.fetchLimit = 1
-        return try? context.fetch(d).first
+        if watchCache == nil { watchCache = Dictionary(watchStates().map { ($0.itemKey, $0) }, uniquingKeysWith: { a, _ in a }) }
+        return watchCache?[key]
     }
 
     /// All watch states for a set of keys in one query, keyed by item key.
@@ -407,7 +413,13 @@ public final class LibraryStore: ObservableObject {
 
     // MARK: - Favourites
 
-    public func isFavourite(_ key: String) -> Bool { favourite(key)?.isActive ?? false }
+    public func isFavourite(_ key: String) -> Bool {
+        if favouriteCache == nil {
+            let d = FetchDescriptor<Favourite>(predicate: #Predicate { $0.deletedAt == nil })
+            favouriteCache = Set(((try? context.fetch(d)) ?? []).map(\.itemKey))
+        }
+        return favouriteCache?.contains(key) ?? false
+    }
 
     public func favourites() -> [MediaItem] {
         let d = FetchDescriptor<Favourite>(predicate: #Predicate { $0.deletedAt == nil }, sortBy: [SortDescriptor(\.createdAt, order: .reverse)])

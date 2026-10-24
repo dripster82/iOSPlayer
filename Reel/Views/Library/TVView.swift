@@ -8,13 +8,14 @@ struct TVView: View {
     @State private var genre: String?
     @State private var decade: String?
     @State private var fixMatchTarget: MediaItem?
+    @State private var all: [MediaItem] = []
+    @State private var genres: [String] = []
 
     var body: some View {
-        let all = library.items(kind: .show)
         let shown = filtered(all)
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                FilterBar(quick: $quick, genre: $genre, decade: $decade, genres: library.allGenres(kind: .show), decades: decades(all))
+                FilterBar(quick: $quick, genre: $genre, decade: $decade, genres: genres, decades: decades(all))
                 if shown.isEmpty {
                     ContentUnavailableView("No shows match", systemImage: "tv", description: Text("Try clearing a filter.")).padding(.top, 60)
                 } else {
@@ -23,6 +24,7 @@ struct TVView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("TV Shows")
+        .refreshFromLibrary { all = library.items(kind: .show); genres = library.allGenres(kind: .show) }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
     }
@@ -50,13 +52,14 @@ struct FilmsView: View {
     @State private var decade: String?
     @State private var sort: Sort = .title
     @State private var fixMatchTarget: MediaItem?
+    @State private var all: [MediaItem] = []
+    @State private var genres: [String] = []
 
     var body: some View {
-        let all = library.items(kind: .film)
         let shown = sorted(filtered(all))
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                FilterBar(quick: $quick, genre: $genre, decade: $decade, showUHD: true, genres: library.allGenres(kind: .film), decades: Array(Set(all.compactMap { FilterBar.decade($0.year) })).sorted(by: >))
+                FilterBar(quick: $quick, genre: $genre, decade: $decade, showUHD: true, genres: genres, decades: Array(Set(all.compactMap { FilterBar.decade($0.year) })).sorted(by: >))
                 if shown.isEmpty {
                     ContentUnavailableView("No films match", systemImage: "film", description: Text("Try clearing a filter.")).padding(.top, 60)
                 } else {
@@ -65,6 +68,7 @@ struct FilmsView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("Films")
+        .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film) }
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
@@ -101,8 +105,8 @@ struct FilmsView: View {
 struct FavouritesView: View {
     @EnvironmentObject private var library: LibraryStore
     @State private var fixMatchTarget: MediaItem?
+    @State private var items: [MediaItem] = []
     var body: some View {
-        let items = library.favourites()
         ScrollView {
             if items.isEmpty {
                 ContentUnavailableView("No favourites yet", systemImage: "heart", description: Text("Long-press any show or film and choose Add to Favourites.")).padding(.top, 80)
@@ -111,6 +115,7 @@ struct FavouritesView: View {
             }
         }
         .navigationTitle("Favourites")
+        .refreshFromLibrary { items = library.favourites() }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
     }
@@ -121,9 +126,10 @@ struct CollectionsView: View {
     @State private var newName = ""
     @State private var adding = false
     @State private var fixMatchTarget: MediaItem?
+    @State private var collections: [MediaCollection] = []
     var body: some View {
         List {
-            ForEach(library.collections(), id: \.id) { c in
+            ForEach(collections, id: \.id) { c in
                 NavigationLink {
                     ScrollView { ItemGrid(items: c.itemKeys.compactMap { library.item($0) }, fixMatchTarget: $fixMatchTarget).padding(.vertical) }
                         .navigationTitle(c.name).itemNavigation()
@@ -135,7 +141,8 @@ struct CollectionsView: View {
                 }
             }
         }
-        .overlay { if library.collections().isEmpty { ContentUnavailableView("No collections", systemImage: "rectangle.stack", description: Text("Group films and shows however you like.")) } }
+        .overlay { if collections.isEmpty { ContentUnavailableView("No collections", systemImage: "rectangle.stack", description: Text("Group films and shows however you like.")) } }
+        .refreshFromLibrary { collections = library.collections() }
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
         .alert("New collection", isPresented: $adding) {
