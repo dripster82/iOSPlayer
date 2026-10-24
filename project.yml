@@ -58,7 +58,7 @@ targets:
         CFBundleDocumentTypes:
           - CFBundleTypeName: Video
             CFBundleTypeRole: Viewer
-            LSHandlerRank: Alternate
+            LSHandlerRank: Owner
             LSItemContentTypes: [public.movie, public.video, public.audiovisual-content, public.mpeg-4, com.apple.m4v-video, com.apple.quicktime-movie, public.avi, public.mpeg, public.3gpp, org.matroska.mkv, org.webmproject.webm, public.mpeg-2-transport-stream, com.microsoft.windows-media-wmv, public.audio, public.mp3, com.apple.m4a-audio, org.xiph.flac]
           # Other players (Infuse, VLC) each import .mkv under their own identifier, and iOS resolves an
           # extension to one of them; a file that resolves to theirs never matches ours. Accepting any
@@ -71,6 +71,11 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: uk.co.ketelle.reel
             CFBundleURLSchemes: [reel]
+          # DS file, Documents and others hand streams to "VLC" through vlc-x-callback://x-callback-url/stream?url=…
+          # They only know a fixed list of players, so answering VLC's scheme is the only way into their menus.
+          # When VLC itself is installed iOS picks one of the two; nothing Reel can do about that.
+          - CFBundleURLName: uk.co.ketelle.reel.vlc-compat
+            CFBundleURLSchemes: [vlc-x-callback]
         # Matroska has no system UTI; declaring it lets .mkv files route here.
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: org.matroska.mkv

@@ -57,11 +57,15 @@ struct ReelApp: App {
 
     private func open(_ url: URL) {
         if url.isFileURL { player.playExternal(url, settings: settings); return }
-        guard url.scheme?.lowercased() == "reel" else { return }
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "reel" || scheme == "vlc-x-callback" else { return }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let action = (url.host == "x-callback-url" ? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : url.host) ?? ""
-        guard action == "play", let raw = comps?.queryItems?.first(where: { $0.name == "url" })?.value, let target = URL(string: raw) else { return }
-        let title = comps?.queryItems?.first(where: { $0.name == "title" })?.value
+        // reel://play?url=…  reel://x-callback-url/play?url=…  vlc-x-callback://x-callback-url/stream?url=… (and /download)
+        guard ["play", "stream", "download"].contains(action),
+              let raw = comps?.queryItems?.first(where: { $0.name == "url" })?.value, let target = URL(string: raw) else { return }
+        let title = comps?.queryItems?.first(where: { $0.name == "title" || $0.name == "filename" })?.value
+        Diagnostics.log("app", "opened via \(scheme) \(action): \(Diagnostics.safe(target))")
         player.playExternal(target, title: title, settings: settings)
     }
 
