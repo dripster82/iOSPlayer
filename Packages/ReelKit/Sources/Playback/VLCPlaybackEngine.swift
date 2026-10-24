@@ -14,7 +14,11 @@ import UIKit
 public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
 
     @Published public private(set) var status: PlaybackStatus = .idle
-    private func setStatus(_ new: PlaybackStatus) { if new != status { status = new } }
+    private func setStatus(_ new: PlaybackStatus) {
+        guard new != status else { return }
+        status = new
+        Diagnostics.log("player", "status \(new) at \(Int(clock.time))s")
+    }
     /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
     /// `duration` everywhere else.
     public let clock = PlaybackClock()
@@ -97,6 +101,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard var current = item else { return }
         guard recoveries < 2 else {
             let host = current.url.host.map { " to \($0)" } ?? ""
+            Diagnostics.log("player", "gave up reconnecting\(host)")
             stopRequested = true
             player.stop()
             setStatus(.failed("Lost the connection\(host) and couldn't get it back. Check the server, then retry."))
@@ -104,11 +109,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
         recoveries += 1
         current.startAt = max(0, position ?? clock.time)
+        Diagnostics.log("player", "reconnect \(recoveries)/2 at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
         performLoad(current, options: options)
     }
 
     private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
         stop()
+        Diagnostics.log("player", "load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
         self.item = item
         self.options = options
         tracksLoaded = false
@@ -193,6 +200,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                     continue
                 }
                 if Date().timeIntervalSince(self.lastProgressAt) > 15, Date().timeIntervalSince(self.lastSeekAt) > 15 {
+                    Diagnostics.log("player", "stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s")
                     self.reconnect(at: self.lastProgressTime)
                 }
             }
@@ -213,6 +221,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard self.status != .paused, self.status != .idle, self.status != .ended else { return }
             if case .failed = self.status { return }
             let target = self.item?.url.host.map { "on \($0)" } ?? "the file"
+            Diagnostics.log("player", "open timed out after 20s \(target)")
             self.stopRequested = true
             self.player.stop()
             self.setStatus(.failed("No response opening \(target) after 20 seconds. Check the server is on and reachable, then retry."))
@@ -235,6 +244,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, self.status != .paused, self.status != .idle, self.status != .ended else { return }
             if self.lastTickAt < issuedAt, var current = self.item {
+                Diagnostics.log("player", "seek to \(Int(target))s never landed; reloading there")
                 current.startAt = target
                 self.performLoad(current, options: self.options)
             }
@@ -427,10 +437,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             if isPictureInPictureActive || pipEndedRecently { setStatus(.paused); recoverAfterPictureInPicture(); break }
             // A stop well short of the end is the stream dying (the server dropped the connection),
             // not the film finishing: reopen where we were rather than marking it watched.
-            if state == .stopped, duration > 0, duration - time > 20 { reconnect(); break }
+            if state == .stopped, duration > 0, duration - time > 20 { Diagnostics.log("player", "stream stopped \(Int(duration - time))s before the end"); reconnect(); break }
             setStatus(.ended)
             canStartPictureInPicture = false
         case .error:
+            Diagnostics.log("player", "VLC error state (hasPlayed=\(hasPlayed))")
             if hasPlayed, time > 0 { reconnect() } else { setStatus(.failed("VLC couldn't play this file.")) }
         @unknown default: break
         }

@@ -62,6 +62,7 @@ final class PlayerCoordinator: ObservableObject {
             } catch {
                 isLoading = false
                 loadError = error.localizedDescription
+                Diagnostics.log("player", "could not resolve \(file.fileName): \(error.localizedDescription)")
             }
         }
     }
@@ -121,6 +122,7 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     func dismiss() {
+        Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
         saveProgress()
         engine.stop()
         externalScopedURL?.stopAccessingSecurityScopedResource(); externalScopedURL = nil

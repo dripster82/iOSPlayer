@@ -26,17 +26,25 @@ public actor SMBSource: MediaSource {
         guard let manager = SMB2Manager(url: serverURL, credential: cred) else { throw SourceError.unreachable(config.host) }
         // Two tries of 10 s: a NAS that has gone to sleep should read as unreachable in ~20 s, not 50.
         manager.timeout = 10
-        try await withRetries(2) {
-            do {
-                try await manager.connectShare(name: self.config.path)
-            } catch let e as NSError {
+        let started = Date()
+        do {
+            try await withRetries(2) {
+                do {
+                    try await manager.connectShare(name: self.config.path)
+                } catch let e as NSError {
+                    Diagnostics.log("source", "smb \(self.config.host)/\(self.config.path): \(e.domain) \(e.code) \(e.localizedDescription)")
                 // libsmb2 reports auth failures as EACCES/EPERM; everything else is treated as unreachable.
                 if e.code == Int(EACCES) || e.code == Int(EPERM) || e.localizedDescription.localizedCaseInsensitiveContains("logon") {
-                    throw SourceError.authFailed
+                        throw SourceError.authFailed
+                    }
+                    throw SourceError.unreachable(self.config.host)
                 }
-                throw SourceError.unreachable(self.config.host)
             }
+        } catch {
+            Diagnostics.log("source", "smb \(config.host)/\(config.path) failed after \(Int(Date().timeIntervalSince(started)))s: \(error)")
+            throw error
         }
+        Diagnostics.log("source", "smb \(config.host)/\(config.path) connected in \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
         client = manager
     }
 

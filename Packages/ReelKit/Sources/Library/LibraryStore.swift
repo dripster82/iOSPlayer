@@ -163,6 +163,7 @@ public final class LibraryStore: ObservableObject {
         let scanner = LibraryScanner(modelContainer: container)
         // Keep running for a while after the user leaves the app; iOS grants a few minutes.
         let assertion = BackgroundAssertion(name: "Reel scan \(record.name)")
+        Diagnostics.log("scan", "start \(record.name)")
         scanTasks[id] = Task { [weak self] in
             do {
                 let dropped = try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
@@ -172,8 +173,10 @@ public final class LibraryStore: ObservableObject {
             } catch is CancellationError {
                 // Expected when the background task expires or the user stops a scan.
             } catch {
+                Diagnostics.log("scan", "\(record.name) failed: \(error.localizedDescription)")
                 await MainActor.run { [weak self] in self?.lastError = error.localizedDescription }
             }
+            Diagnostics.log("scan", "finished \(record.name)")
             await MainActor.run { [weak self] in
                 self?.scanTasks[id] = nil
                 self?.objectWillChange.send()

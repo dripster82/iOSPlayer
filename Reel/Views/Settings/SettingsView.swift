@@ -89,6 +89,7 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")
+                NavigationLink("Diagnostics") { DiagnosticsView() }
                 NavigationLink("Licences") { LicencesView() }
                 NavigationLink("Data providers") { AttributionView() }
             }

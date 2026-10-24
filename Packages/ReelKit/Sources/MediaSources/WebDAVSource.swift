@@ -98,8 +98,8 @@ public actor WebDAVSource: MediaSource {
                 guard let http = resp as? HTTPURLResponse else { throw SourceError.unreachable(self.config.host) }
                 if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.authFailed }
                 return (data, http)
-            } catch let e as SourceError { throw e }
-            catch { throw SourceError.unreachable(self.config.host) }
+            } catch let e as SourceError { Diagnostics.log("source", "webdav \(self.config.host): \(e)"); throw e }
+            catch { Diagnostics.log("source", "webdav \(self.config.host): \(error.localizedDescription)"); throw SourceError.unreachable(self.config.host) }
         }
     }
 

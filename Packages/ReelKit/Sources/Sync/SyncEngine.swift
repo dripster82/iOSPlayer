@@ -27,6 +27,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     /// Last few errors, persisted so they can be read off a device (Preferences plist).
     private static func log(_ message: String) {
+        Diagnostics.log("sync", message)
         var entries = UserDefaults.standard.stringArray(forKey: "reel.sync.errorLog") ?? []
         entries.append("\(Date().formatted(.iso8601)) \(message)")
         UserDefaults.standard.set(Array(entries.suffix(10)), forKey: "reel.sync.errorLog")

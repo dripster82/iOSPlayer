@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 import UIKit
 import SwiftData
 import Library
@@ -72,6 +73,7 @@ struct ReelApp: App {
                     Task { await sync.fetchNow() }
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    Diagnostics.log("app", "scene \(phase)")
                     // Leaving the foreground (switching apps, locking, PiP hand-off): save the position
                     // now and get it to iCloud before iOS suspends us, so the other device can pick up
                     // exactly where this one stopped.
