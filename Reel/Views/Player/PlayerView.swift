@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 import Combine
 import MediaCore
 import Library
@@ -28,6 +29,8 @@ struct PlayerContentView: View {
     @State private var fill = false
     @State private var volumeOverlay: Double?
     @State private var brightnessOverlay: Double?
+    /// Level at the start of a vertical drag; the drag is applied as an offset from it, not accumulated.
+    @State private var dragStartLevel: Double?
 
     enum Sheet: Identifiable { case audio, subtitles, chapters, speed, more; var id: Int { hashValue } }
 
@@ -85,27 +88,21 @@ struct PlayerContentView: View {
     // MARK: - Gestures
 
     private func gestureLayer(size: CGSize) -> some View {
-        Color.clear.contentShape(Rectangle())
-            // A single tap acts at once (no waiting to rule out a double tap). A double tap then skips and
-            // puts the controls back the way they were before the first tap.
-            .gesture(TapGesture().onEnded {
+        TapLayer(
+            onTap: {
                 if locked { withAnimation { showLockHint() } } else { controlsVisible ? hideControls() : showControls() }
-            })
-            .simultaneousGesture(
-                SpatialTapGesture(count: 2).onEnded { v in
-                    guard !locked else { return }
-                    let left = v.location.x < size.width / 2
-                    engine.skip(by: left ? -Double(settings.skipInterval) : Double(settings.skipInterval))
-                    skipFlash = (left, UUID())
-                    controlsVisible ? hideControls() : showControls()   // undo the first tap's toggle
-                    Task { try? await Task.sleep(for: .milliseconds(600)); if skipFlash?.left == left { skipFlash = nil } }
-                }
-            )
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.4).sequenced(before: DragGesture(minimumDistance: 0)).onChanged { v in
-                    if case .second = v, !holdingSpeed, !locked { holdingSpeed = true; engine.setRate(2) }
-                }.onEnded { _ in if holdingSpeed { holdingSpeed = false; engine.setRate(1) } }
-            )
+            },
+            onDoubleTap: { location, layerSize in
+                guard !locked else { return }
+                let left = location.x < layerSize.width / 2
+                engine.skip(by: left ? -Double(settings.skipInterval) : Double(settings.skipInterval))
+                skipFlash = (left, UUID())
+                controlsVisible ? hideControls() : showControls()   // undo the first tap's toggle
+                Task { try? await Task.sleep(for: .milliseconds(600)); if skipFlash?.left == left { skipFlash = nil } }
+            },
+            onHoldBegan: { if !holdingSpeed, !locked { holdingSpeed = true; engine.setRate(2) } },
+            onHoldEnded: { if holdingSpeed { holdingSpeed = false; engine.setRate(1) } }
+        )
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12).onChanged { v in
                     guard !locked, !holdingSpeed else { return }
@@ -114,17 +111,24 @@ struct PlayerContentView: View {
                         scrubTime = max(0, min(engine.duration, engine.time + delta))
                         showControls()
                     } else {
+                        // A full-height drag spans the whole range, measured from where the level was.
                         let frac = -v.translation.height / size.height
                         if v.startLocation.x < size.width / 2 {
-                            UIScreen.main.brightness = max(0, min(1, UIScreen.main.brightness + frac * 0.04))
-                            brightnessOverlay = UIScreen.main.brightness
+                            let start = dragStartLevel ?? ScreenBrightness.value
+                            dragStartLevel = start
+                            ScreenBrightness.value = start + frac
+                            brightnessOverlay = ScreenBrightness.value
                         } else {
-                            volumeOverlay = max(0, min(1, (volumeOverlay ?? 0.5) + frac * 0.04))
-                            VolumeControl.set(Float(volumeOverlay!))
+                            let start = dragStartLevel ?? Double(VolumeControl.current)
+                            dragStartLevel = start
+                            let level = max(0, min(1, start + frac))
+                            volumeOverlay = level
+                            VolumeControl.set(Float(level))
                         }
                     }
                 }.onEnded { _ in
                     if let t = scrubTime { engine.seek(to: t); scrubTime = nil }
+                    dragStartLevel = nil
                     Task { try? await Task.sleep(for: .milliseconds(700)); volumeOverlay = nil; brightnessOverlay = nil }
                 }
             )
@@ -432,6 +436,8 @@ struct AirPlayButton: UIViewRepresentable {
 /// System volume via the hidden MPVolumeView slider (the only supported way to set volume programmatically).
 enum VolumeControl {
     private static let view = MPVolumeView(frame: .zero)
+    /// The current system volume.
+    static var current: Float { AVAudioSession.sharedInstance().outputVolume }
     static func set(_ value: Float) {
         guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
         DispatchQueue.main.async { slider.value = value }
