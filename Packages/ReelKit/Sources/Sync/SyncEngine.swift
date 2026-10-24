@@ -432,7 +432,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case "collection":
             guard let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first else { return nil }
             let r = baseRecord("Collection", id)
-            r["name"] = c.name; r["itemKeys"] = Self.list(c.itemKeys); r["updatedAt"] = c.updatedAt; r["artworkURL"] = c.artworkURL
+            r["name"] = c.name; r["itemKeys"] = Self.list(c.itemKeys); r["updatedAt"] = c.updatedAt; r["artworkURL"] = c.artworkURL; r["collageURLs"] = Self.list(c.collageURLs)
             return r
         case "source":
             guard let uuid = UUID(uuidString: key), let s = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first, s.type != .local else { return nil }
@@ -513,6 +513,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             c.name = (r["name"] as? String) ?? c.name
             c.itemKeys = (r["itemKeys"] as? [String]) ?? c.itemKeys
             c.artworkURL = r["artworkURL"] as? String
+            c.collageURLs = (r["collageURLs"] as? [String]) ?? []
             c.updatedAt = remoteUpdated; c.pendingSync = false
         case "Source":
             guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key),

@@ -377,6 +377,13 @@ public final class LibraryStore: ObservableObject {
         try? context.save()
         notifySync(); objectWillChange.send()
     }
+    public func setCollage(_ urls: [String], for collection: MediaCollection) {
+        collection.collageURLs = Array(urls.prefix(4))
+        collection.artworkURL = nil
+        collection.updatedAt = Date(); collection.pendingSync = true
+        try? context.save()
+        notifySync(); objectWillChange.send()
+    }
 
     // MARK: - Universes
 
@@ -385,6 +392,8 @@ public final class LibraryStore: ObservableObject {
     public struct GroupIndex: Sendable {
         public struct Group: Sendable {
             public var name: String; public var films: [MediaItem]; public var logoPath: String?; public var posterPath: String?
+            /// Every distinct studio logo among the group's films (for the artwork picker).
+            public var logoPaths: [String] = []
             /// fanart.tv title logo of the group's earliest film, for franchises with no studio logo.
             public var fanartLogoURL: String?
         }
@@ -402,12 +411,14 @@ public final class LibraryStore: ObservableObject {
     private func buildGroupIndex() -> GroupIndex {
         var byUniverse: [String: [MediaItem]] = [:]
         var logos: [String: String] = [:]
+        var allLogos: [String: [String]] = [:]
         var bySeries: [Int: (String, String?, [MediaItem])] = [:]
         for f in items(kind: .film) {
             for u in Universes.universes(studios: f.studios, keywords: f.keywords) {
                 byUniverse[u, default: []].append(f)
-                if logos[u] == nil {
-                    for (i, s) in f.studios.enumerated() where Universes.universeName(forStudio: s) == u && i < f.studioLogos.count && !f.studioLogos[i].isEmpty { logos[u] = f.studioLogos[i]; break }
+                for (i, s) in f.studios.enumerated() where Universes.universeName(forStudio: s) == u && i < f.studioLogos.count && !f.studioLogos[i].isEmpty {
+                    if logos[u] == nil { logos[u] = f.studioLogos[i] }
+                    if !(allLogos[u] ?? []).contains(f.studioLogos[i]) { allLogos[u, default: []].append(f.studioLogos[i]) }
                 }
             }
             if let id = f.collectionID {
@@ -422,7 +433,7 @@ public final class LibraryStore: ObservableObject {
         index.universes = byUniverse.filter { $0.value.count >= 2 }
             .map { entry in
                 let films = entry.value.sorted(by: byYear)
-                return GroupIndex.Group(name: entry.key, films: films, logoPath: logos[entry.key], posterPath: nil,
+                return GroupIndex.Group(name: entry.key, films: films, logoPath: logos[entry.key], posterPath: nil, logoPaths: allLogos[entry.key] ?? [],
                                         fanartLogoURL: logos[entry.key] == nil ? films.first(where: { $0.logoURL != nil })?.logoURL : nil)
             }
             .sorted { $0.films.count != $1.films.count ? $0.films.count > $1.films.count : $0.name < $1.name }

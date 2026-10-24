@@ -136,6 +136,7 @@ struct FavouritesView: View {
 
 struct CollectionsView: View {
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var groupArt: GroupArtStore
     @State private var newName = ""
     @State private var adding = false
     /// Built once per library change, off the render path: the old body re-fetched and re-grouped
@@ -143,6 +144,7 @@ struct CollectionsView: View {
     @State private var mine: [Card] = []
     @State private var universes: [Card] = []
     @State private var series: [Card] = []
+    @State private var editing: EditTarget?
     private let columns = [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)]
 
     struct Card: Identifiable {
@@ -151,10 +153,10 @@ struct CollectionsView: View {
         var subtitle: String
         var route: LibraryRoute
         var icon: CollectionIcon.Kind
-        /// Set for the user's own collections, whose cover can be edited.
-        var collection: MediaCollection? = nil
+        var editTarget: ArtworkPickerView.Target
+        var hasCustomArt: Bool
     }
-    @State private var editingCollection: MediaCollection?
+    struct EditTarget: Identifiable { var id: String; var target: ArtworkPickerView.Target }
 
     var body: some View {
         ScrollView {
@@ -169,10 +171,11 @@ struct CollectionsView: View {
             }.padding(.vertical)
         }
         .refreshFromLibrary { rebuild() }
+        .onReceive(groupArt.$all) { _ in rebuild() }
         .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
-        .sheet(item: $editingCollection) { ArtworkPickerView(target: .collection($0)) }
+        .sheet(item: $editing) { ArtworkPickerView(target: $0.target) }
         .alert("New collection", isPresented: $adding) {
             TextField("Name", text: $newName)
             Button("Create") { if !newName.isEmpty { library.addCollection(named: newName) }; newName = "" }
@@ -182,19 +185,34 @@ struct CollectionsView: View {
 
     private func rebuild() {
         mine = library.collections().map { c in
-            Card(id: "c:\(c.id)", title: c.name, subtitle: "\(c.itemKeys.count) items", route: .collection(c.id),
-                 icon: c.artworkURL.flatMap(URL.init).map { .url($0) } ?? .mosaic(c.itemKeys.compactMap { library.item($0)?.posterPath }), collection: c)
+            let posters = c.itemKeys.compactMap { library.item($0)?.posterURL }
+            let icon: CollectionIcon.Kind = c.artworkURL.flatMap(URL.init).map { .url($0) }
+                ?? .mosaicURLs(c.collageURLs.isEmpty ? posters : c.collageURLs.compactMap(URL.init))
+            return Card(id: "c:\(c.id)", title: c.name, subtitle: "\(c.itemKeys.count) items", route: .collection(c.id), icon: icon,
+                        editTarget: .collection(c), hasCustomArt: c.artworkURL != nil || !c.collageURLs.isEmpty)
         }
         let index = library.groupIndex()
         universes = index.universes.map { g in
-            Card(id: "u:\(g.name)", title: g.name, subtitle: "\(g.films.count) films", route: .universe(g.name),
-                 icon: ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!)
-                     : g.fanartLogoURL.flatMap(URL.init).map { .titleLogo($0) } ?? .mosaic(g.films.compactMap(\.posterPath)))
+            let id = "u:\(g.name)"
+            let automatic: CollectionIcon.Kind = ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!)
+                : g.fanartLogoURL.flatMap(URL.init).map { .titleLogo($0) } ?? .mosaicURLs(g.films.compactMap(\.posterURL))
+            return Card(id: id, title: g.name, subtitle: "\(g.films.count) films", route: .universe(g.name), icon: custom(id) ?? automatic,
+                        editTarget: .group(id: id, name: g.name, films: g.films, logos: g.logoPaths), hasCustomArt: groupArt.art(for: id) != nil)
         }
         series = index.series.map { s in
-            Card(id: "s:\(s.id)", title: s.group.name, subtitle: "\(s.group.films.count) films", route: .filmCollection(s.id),
-                 icon: s.group.posterPath.map { .poster($0) } ?? .mosaic(s.group.films.compactMap(\.posterPath)))
+            let id = "s:\(s.id)"
+            let automatic: CollectionIcon.Kind = s.group.posterPath.map { .poster($0) } ?? .mosaicURLs(s.group.films.compactMap(\.posterURL))
+            return Card(id: id, title: s.group.name, subtitle: "\(s.group.films.count) films", route: .filmCollection(s.id), icon: custom(id) ?? automatic,
+                        editTarget: .group(id: id, name: s.group.name, films: s.group.films, logos: []), hasCustomArt: groupArt.art(for: id) != nil)
         }
+    }
+
+    /// The user's pick for a universe or series, if any.
+    private func custom(_ id: String) -> CollectionIcon.Kind? {
+        guard let art = groupArt.art(for: id) else { return nil }
+        if let url = art.url.flatMap(URL.init) { return .url(url) }
+        if !art.collage.isEmpty { return .mosaicURLs(art.collage.compactMap(URL.init)) }
+        return nil
     }
 
     private func section(_ title: String, cards: [Card], footer: String?) -> some View {
@@ -210,9 +228,9 @@ struct CollectionsView: View {
                         }
                     }.buttonStyle(.plain)
                     .contextMenu {
-                        if let c = card.collection {
-                            Button { editingCollection = c } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
-                            if c.artworkURL != nil { Button { library.setArtwork(nil, for: c) } label: { Label("Use automatic cover", systemImage: "arrow.uturn.backward") } }
+                        Button { editing = EditTarget(id: card.id, target: card.editTarget) } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
+                        if card.hasCustomArt {
+                            Button { resetArt(card) } label: { Label("Use automatic artwork", systemImage: "arrow.uturn.backward") }
                         }
                     }
                 }
@@ -220,12 +238,20 @@ struct CollectionsView: View {
             if let footer { Text(footer).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
         }
     }
+
+    private func resetArt(_ card: Card) {
+        switch card.editTarget {
+        case .collection(let c): library.setArtwork(nil, for: c); library.setCollage([], for: c)
+        case .group(let id, _, _, _): groupArt.set(nil, for: id)
+        case .item: break
+        }
+    }
 }
 
 /// The picture for a grouping card: a studio logo, the series' own poster, or a mosaic of up to four
 /// of its posters, in that order of preference, with the initial as the last resort.
 struct CollectionIcon: View {
-    enum Kind { case logo(String), titleLogo(URL), poster(String), url(URL), mosaic([String]) }
+    enum Kind { case logo(String), titleLogo(URL), poster(String), url(URL), mosaic([String]), mosaicURLs([URL]) }
     let kind: Kind
     let title: String
     var body: some View {
@@ -253,22 +279,27 @@ struct CollectionIcon: View {
             case .url(let url):
                 ArtworkImage(url: url, title: title, aspect: 2 / 3, cornerRadius: 10)
             case .mosaic(let posters):
-                let tiles = Array(posters.prefix(4))
-                if tiles.isEmpty {
-                    ArtworkImage.Placeholder(title: title).aspectRatio(2 / 3, contentMode: .fit)
-                } else if tiles.count < 4 {
-                    ArtworkImage(url: ArtworkURL.poster(tiles[0]), title: title, aspect: 2 / 3, cornerRadius: 10)
-                } else {
-                    VStack(spacing: 1) {
-                        HStack(spacing: 1) { tile(tiles[0]); tile(tiles[1]) }
-                        HStack(spacing: 1) { tile(tiles[2]); tile(tiles[3]) }
-                    }
-                }
+                mosaic(posters.compactMap { ArtworkURL.poster($0) })
+            case .mosaicURLs(let urls):
+                mosaic(urls)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
-    private func tile(_ path: String) -> some View {
-        ArtworkImage(url: ArtworkURL.poster(path), title: title, aspect: 2 / 3, cornerRadius: 0)
+    @ViewBuilder private func mosaic(_ urls: [URL]) -> some View {
+        let tiles = Array(urls.prefix(4))
+        if tiles.isEmpty {
+            ArtworkImage.Placeholder(title: title).aspectRatio(2 / 3, contentMode: .fit)
+        } else if tiles.count < 4 {
+            ArtworkImage(url: tiles[0], title: title, aspect: 2 / 3, cornerRadius: 10)
+        } else {
+            VStack(spacing: 1) {
+                HStack(spacing: 1) { tile(tiles[0]); tile(tiles[1]) }
+                HStack(spacing: 1) { tile(tiles[2]); tile(tiles[3]) }
+            }
+        }
+    }
+    private func tile(_ url: URL) -> some View {
+        ArtworkImage(url: url, title: title, aspect: 2 / 3, cornerRadius: 0)
     }
 }

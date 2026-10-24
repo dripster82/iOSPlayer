@@ -308,6 +308,8 @@ public final class MediaCollection {
     public var pendingSync: Bool
     /// Cover picked in Edit artwork (absolute URL); nil means a mosaic of its titles.
     public var artworkURL: String? = nil
+    /// Up to four poster URLs the user ticked for the mosaic; empty means the first four titles.
+    public var collageURLs: [String] = []
 
     public init(name: String) {
         id = UUID()

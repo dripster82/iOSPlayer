@@ -14,6 +14,7 @@ struct ReelApp: App {
     @StateObject private var sync: SyncEngine
     @StateObject private var player: PlayerCoordinator
     @StateObject private var downloads: DownloadManager
+    @StateObject private var groupArt = GroupArtStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -74,6 +75,7 @@ struct ReelApp: App {
                 .environmentObject(sync)
                 .environmentObject(player)
                 .environmentObject(downloads)
+                .environmentObject(groupArt)
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { library.purgePendingDeletions(); await ImageLoader.shared.enforceLimit() }
