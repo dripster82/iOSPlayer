@@ -43,7 +43,7 @@ public enum Universes {
         "studio ghibli": "Studio Ghibli", "dreamworks animation": "DreamWorks Animation", "dreamworks": "DreamWorks",
         "illumination": "Illumination", "illumination entertainment": "Illumination",
         "aardman": "Aardman", "aardman animations": "Aardman", "laika": "Laika", "laika entertainment": "Laika",
-        "blue sky studios": "Blue Sky", "lucasfilm": "Star Wars", "lucasfilm ltd.": "Star Wars",
+        "blue sky studios": "Blue Sky", "lucasfilm": "Lucasfilm", "lucasfilm ltd.": "Lucasfilm",   // also Indiana Jones; Star Wars comes from its keyword
         "eon productions": "James Bond", "hammer film productions": "Hammer Horror", "hammer films": "Hammer Horror",
         "a24": "A24", "blumhouse productions": "Blumhouse", "blumhouse": "Blumhouse",
         "toho": "Toho", "toei animation": "Toei Animation", "kyoto animation": "Kyoto Animation",

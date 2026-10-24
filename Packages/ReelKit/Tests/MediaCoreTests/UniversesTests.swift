@@ -21,7 +21,11 @@ final class UniversesTests: XCTestCase {
         XCTAssertEqual(Universes.universes(studios: ["PIXAR"], keywords: []), ["Pixar"])
     }
 
+    func testLucasfilmIsNotStarWars() {
+        XCTAssertEqual(Universes.universes(studios: ["Lucasfilm Ltd."], keywords: ["indiana jones", "archaeologist"]), ["Lucasfilm", "Indiana Jones"])
+        XCTAssertEqual(Universes.universes(studios: ["Lucasfilm Ltd."], keywords: ["star wars"]), ["Lucasfilm", "Star Wars"])
+    }
     func testNoDuplicates() {
-        XCTAssertEqual(Universes.universes(studios: ["Lucasfilm Ltd."], keywords: ["star wars"]), ["Star Wars"])
+        XCTAssertEqual(Universes.universes(studios: ["Pixar"], keywords: ["toy story", "toy story"]), ["Pixar", "Toy Story"])
     }
 }
