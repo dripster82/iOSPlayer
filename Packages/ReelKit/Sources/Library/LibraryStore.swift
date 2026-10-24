@@ -286,6 +286,13 @@ public final class LibraryStore: ObservableObject {
         return try? context.fetch(d).first
     }
 
+    /// All watch states for a set of keys in one query, keyed by item key.
+    public func watchStates(for keys: [String]) -> [String: WatchState] {
+        guard !keys.isEmpty else { return [:] }
+        let d = FetchDescriptor<WatchState>(predicate: #Predicate { keys.contains($0.itemKey) })
+        return Dictionary(uniqueKeysWithValues: ((try? context.fetch(d)) ?? []).map { ($0.itemKey, $0) })
+    }
+
     public func watchStates() -> [WatchState] {
         (try? context.fetch(FetchDescriptor<WatchState>(sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)]))) ?? []
     }

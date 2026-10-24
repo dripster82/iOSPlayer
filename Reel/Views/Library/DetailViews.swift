@@ -170,13 +170,36 @@ struct ShowDetailView: View {
     var initialSeason: Int? = nil
     @State private var season: Int?
     @State private var fixMatchTarget: MediaItem?
+    /// Computed off the render path: sorting every episode and fetching a watch state per row on each
+    /// render, on every store publish, made the season list crawl.
+    @State private var seasons: [Int] = []
+    @State private var episodesBySeason: [Int: [MediaItem]] = [:]
+    @State private var states: [String: WatchState] = [:]
+    @State private var next: MediaItem?
+    @State private var unwatched = 0
+    @State private var refreshTask: Task<Void, Never>?
 
-    private var seasons: [Int] { Array(Set(show.episodes.compactMap(\.seasonNumber))).sorted() }
-    private var selected: Int { season ?? initialSeason ?? library.nextEpisode(of: show)?.seasonNumber ?? seasons.first ?? 1 }
-    private var episodes: [MediaItem] { show.episodes.filter { $0.seasonNumber == selected }.sorted { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) } }
+    private var selected: Int { season ?? initialSeason ?? next?.seasonNumber ?? seasons.first ?? 1 }
+    private var episodes: [MediaItem] { episodesBySeason[selected] ?? [] }
+
+    private func refresh() {
+        let eps = show.episodes
+        seasons = Array(Set(eps.compactMap(\.seasonNumber))).sorted()
+        episodesBySeason = Dictionary(grouping: eps, by: { $0.seasonNumber ?? 0 }).mapValues { $0.sorted { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) } }
+        states = library.watchStates(for: eps.map(\.itemKey))
+        next = library.nextEpisode(of: show)
+        unwatched = eps.filter { states[$0.itemKey]?.watched != true }.count
+    }
+    private func scheduleRefresh() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            refresh()
+        }
+    }
 
     var body: some View {
-        let next = library.nextEpisode(of: show)
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HeroHeader(item: show, subtitle: [show.year.map(String.init), show.seasonsLabel, show.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)
@@ -187,7 +210,7 @@ struct ShowDetailView: View {
                 }
                 Facts(facts: [
                     show.rating.map { ("★ \(String(format: "%.1f", $0))", nil) },
-                    ("\(library.unwatchedCount(show)) unwatched", nil),
+                    ("\(unwatched) unwatched", nil),
                     show.confidence == .autoLow ? ("Low-confidence match", .yellow) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = show.overview { Text(o).font(.subheadline).padding(.horizontal) }
@@ -200,10 +223,10 @@ struct ShowDetailView: View {
                         }.padding(.horizontal)
                     }
                     ForEach(episodes, id: \.itemKey) { ep in
-                        EpisodeRow(episode: ep).padding(.horizontal)
+                        EpisodeRow(episode: ep, state: states[ep.itemKey]).padding(.horizontal)
                             .onTapGesture { player.play(ep, settings: settings) }
                             .contextMenu {
-                                let watched = library.watchState(ep.itemKey)?.watched == true
+                                let watched = states[ep.itemKey]?.watched == true
                                 Button { library.setWatched(!watched, itemKey: ep.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: "checkmark.circle") }
                                 Button { player.play(ep, fromStart: true, settings: settings) } label: { Label("Play from start", systemImage: "gobackward") }
                             }
@@ -213,15 +236,18 @@ struct ShowDetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { refresh() }
+        .onReceive(library.objectWillChange) { _ in scheduleRefresh() }
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
     }
 }
 
 struct EpisodeRow: View {
-    @EnvironmentObject private var library: LibraryStore
     let episode: MediaItem
+    /// Handed in by the show page, which fetches all of a show's states in one query.
+    var state: WatchState? = nil
     var body: some View {
-        let ws = library.watchState(episode.itemKey)
+        let ws = state
         HStack(alignment: .top, spacing: 12) {
             ArtworkImage(url: ArtworkURL.still(episode.stillPath), title: episode.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 120)
                 .overlay(alignment: .topLeading) { if ws?.watched == true { Image(systemName: "checkmark").font(.caption2.bold()).foregroundStyle(.black).padding(4).background(.green, in: Circle()).padding(6) } }

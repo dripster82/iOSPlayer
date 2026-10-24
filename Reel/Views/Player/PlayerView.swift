@@ -25,13 +25,8 @@ struct PlayerContentView: View {
     @State private var skipFlash: (left: Bool, id: UUID)?
     @State private var holdingSpeed = false
     @State private var fill = false
-    @State private var upNextCountdown: Int?
     @State private var volumeOverlay: Double?
     @State private var brightnessOverlay: Double?
-    /// Coarse copy of the clock (1 Hz) for the few conditions that depend on position, so the whole
-    /// view is not rebuilt on every VLC tick. The scrubber observes the clock itself.
-    @State private var coarseTime: TimeInterval = 0
-    @State private var coarseDuration: TimeInterval = 0
 
     enum Sheet: Identifiable { case audio, subtitles, chapters, speed, more; var id: Int { hashValue } }
 
@@ -48,20 +43,12 @@ struct PlayerContentView: View {
                 if let v = volumeOverlay { verticalMeter(v, icon: "speaker.wave.2.fill").position(x: geo.size.width * 0.86, y: geo.size.height / 2) }
                 if let b = brightnessOverlay { verticalMeter(b, icon: "sun.max.fill").position(x: geo.size.width * 0.14, y: geo.size.height / 2) }
                 if locked { lockButton }
-                if let intro = engine.chapters.first(where: \.looksLikeIntro), coarseTime >= intro.start, coarseTime < intro.start + intro.duration, !locked {
-                    Button("Skip intro") { engine.seek(to: intro.start + intro.duration) }
-                        .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
-                }
+                // Position-dependent overlays live in their own view: observing the clock here would
+                // redraw this body (and rebuild its gesture recognisers) every second.
+                TimedOverlays(engine: engine, locked: locked)
                 if controlsVisible && !locked { controls(size: geo.size) }
-                if let next = player.upNext, coarseDuration > 0, coarseDuration - coarseTime < 20 || engine.status == .ended { upNextCard(next) }
                 if let err = player.loadError ?? failure { errorCard(err) }
             }
-        }
-        .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
-            let rounded = t.rounded()
-            if rounded != coarseTime { coarseTime = rounded }
-            if engine.clock.duration != coarseDuration { coarseDuration = engine.clock.duration }
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
@@ -72,7 +59,6 @@ struct PlayerContentView: View {
         }
         .onChange(of: scrubTime) { _, t in if t != nil { showControls() } }
         .onChange(of: engine.status) { _, s in
-            if s == .ended { startCountdown() }
             if s == .playing { scheduleHide() } else { showControls() }
         }
         .onDisappear { hideTask?.cancel() }
@@ -231,31 +217,13 @@ struct PlayerContentView: View {
         }
     }
 
-    private func upNextCard(_ next: MediaItem) -> some View {
-        HStack(spacing: 10) {
-            ArtworkImage(url: nil, title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Up next" + (upNextCountdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
-                Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)
-                HStack(spacing: 6) {
-                    Button("Play now") { player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
-                    Button("Stop") { upNextCountdown = nil; player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
-                }
-            }
-        }
-        .padding(12).frame(width: 300).background(Color(white: 0.1, opacity: 0.95), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.1)))
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28)
-    }
-
     private func errorCard(_ message: String) -> some View {
         ZStack {
             Color.black.opacity(0.7).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 8) {
                 Text("Can't play this").font(.headline)
                 Text(message).font(.footnote).foregroundStyle(.white.opacity(0.75))
-                if coarseDuration > 0 { Text("Your position at \(MediaFormat.clock(coarseTime)) is saved.").font(.caption).foregroundStyle(.white.opacity(0.6)) }
+                if engine.duration > 0 { Text("Your position at \(MediaFormat.clock(engine.time)) is saved.").font(.caption).foregroundStyle(.white.opacity(0.6)) }
                 HStack {
                     if let item = player.current, player.loadError != nil || failure != nil {
                         Button("Retry") { player.loadError = nil; player.play(item, file: player.currentFile, settings: settings) }.buttonStyle(.borderedProminent)
@@ -279,6 +247,54 @@ struct PlayerContentView: View {
         hideTask = Task { try? await Task.sleep(for: .seconds(3)); if engine.status == .playing, sheet == nil, scrubTime == nil { hideControls() } }
     }
     private func showLockHint() {}
+}
+
+/// Skip-intro button and Up Next card: the only overlays that depend on the position. They observe the
+/// clock at 1 Hz so the main player body (and its gestures) never redraws for time.
+struct TimedOverlays: View {
+    @EnvironmentObject private var player: PlayerCoordinator
+    @EnvironmentObject private var settings: AppSettings
+    @ObservedObject var engine: VLCPlaybackEngine
+    let locked: Bool
+    @State private var now: TimeInterval = 0
+    @State private var duration: TimeInterval = 0
+    @State private var upNextCountdown: Int?
+
+    var body: some View {
+        ZStack {
+            if let intro = engine.chapters.first(where: \.looksLikeIntro), now >= intro.start, now < intro.start + intro.duration, !locked {
+                Button("Skip intro") { engine.seek(to: intro.start + intro.duration) }
+                    .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
+            }
+            if let next = player.upNext, duration > 0, duration - now < 20 || engine.status == .ended { upNextCard(next) }
+        }
+        .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
+            let rounded = t.rounded()
+            if rounded != now { now = rounded }
+            if engine.clock.duration != duration { duration = engine.clock.duration }
+        }
+        .onChange(of: engine.status) { _, s in if s == .ended { startCountdown() } }
+    }
+
+    private func upNextCard(_ next: MediaItem) -> some View {
+        HStack(spacing: 10) {
+            ArtworkImage(url: nil, title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Up next" + (upNextCountdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
+                Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 6) {
+                    Button("Play now") { player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
+                    Button("Stop") { upNextCountdown = nil; player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+        }
+        .padding(12).frame(width: 300).background(Color(white: 0.1, opacity: 0.95), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.1)))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28)
+    }
+
     private func startCountdown() {
         guard player.upNext != nil, settings.autoPlayNext else { return }
         upNextCountdown = 15
