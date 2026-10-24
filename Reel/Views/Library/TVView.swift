@@ -132,7 +132,7 @@ struct CollectionsView: View {
             ForEach(collections, id: \.id) { c in
                 NavigationLink {
                     ScrollView { ItemGrid(items: c.itemKeys.compactMap { library.item($0) }, fixMatchTarget: $fixMatchTarget).padding(.vertical) }
-                        .navigationTitle(c.name).itemNavigation()
+                        .navigationTitle(c.name)
                 } label: {
                     HStack {
                         ArtworkImage.Placeholder(title: c.name).frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -143,6 +143,9 @@ struct CollectionsView: View {
         }
         .overlay { if collections.isEmpty { ContentUnavailableView("No collections", systemImage: "rectangle.stack", description: Text("Group films and shows however you like.")) } }
         .refreshFromLibrary { collections = library.collections() }
+        // The item-key destinations must be registered here, on the stack's root, not on the pushed
+        // collection page: registered there they were often missing when a poster was tapped.
+        .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
         .alert("New collection", isPresented: $adding) {
