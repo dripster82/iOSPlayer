@@ -84,7 +84,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
         player.time = VLCTime(int: Int32(clamped * 1000))
         clock.time = clamped
+        // VLC keeps reporting the old position for a few ticks after a seek; don't let those drag the
+        // scrubber back before the jump lands.
+        ignoreTicksUntil = Date().addingTimeInterval(0.6)
     }
+    private var ignoreTicksUntil = Date.distantPast
 
     public func skip(by seconds: TimeInterval) { seek(to: time + seconds) }
 
@@ -202,6 +206,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             seek(to: start)
             return
         }
+        if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
         if let length = player.media?.length.intValue, length > 0 {
             let seconds = TimeInterval(length) / 1000

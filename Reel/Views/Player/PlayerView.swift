@@ -66,6 +66,10 @@ struct PlayerContentView: View {
         .persistentSystemOverlays(.hidden)
         .preferredColorScheme(.dark)
         .onAppear { scheduleHide() }
+        .onChange(of: controlsVisible) { _, visible in
+            if !visible, let t = scrubTime { engine.seek(to: t); scrubTime = nil }
+        }
+        .onChange(of: scrubTime) { _, t in if t != nil { showControls() } }
         .onChange(of: engine.status) { _, s in
             if s == .ended { startCountdown() }
             if s == .playing { scheduleHide() } else { showControls() }
@@ -255,7 +259,7 @@ struct PlayerContentView: View {
     private func hideControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false } }
     private func scheduleHide() {
         hideTask?.cancel()
-        hideTask = Task { try? await Task.sleep(for: .seconds(3)); if engine.status == .playing, sheet == nil { hideControls() } }
+        hideTask = Task { try? await Task.sleep(for: .seconds(3)); if engine.status == .playing, sheet == nil, scrubTime == nil { hideControls() } }
     }
     private func showLockHint() {}
     private func startCountdown() {
