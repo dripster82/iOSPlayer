@@ -52,6 +52,10 @@ public actor LibraryScanner {
         let roots = record.folderRules.filter(\.includeInScan).map(\.folderPath)
         var queue = roots.isEmpty ? [""] : roots
         var seenPaths = Set<String>()
+        /// Every folder that listed without error, with the names it contained. A file is only treated
+        /// as gone when a listing that should have shown it (or one of its parent folders) did not;
+        /// a folder that failed to list, or a share that dropped mid-scan, proves nothing.
+        var listed: [String: Set<String>] = [:]
         let existing = Dictionary(record.files.map { ($0.relativePath, $0) }, uniquingKeysWith: { a, _ in a })
         report.phase = .listing
 
@@ -61,6 +65,7 @@ public actor LibraryScanner {
             if let tag = record.tag(for: dir), tag == .excluded { continue }
             let entries: [DirectoryEntry]
             do { entries = try await source.list(dir) } catch { continue } // one bad folder shouldn't kill the scan
+            listed[dir] = Set(entries.map(\.name))
 
             let videos = entries.filter { !$0.isDirectory && $0.isVideo }
             let subs = entries.filter { !$0.isDirectory && $0.isSubtitle }
@@ -106,7 +111,39 @@ public actor LibraryScanner {
             if !droppedKeys.isEmpty { try modelContext.save() }
         }
 
-        // Files that vanished keep their records (the share may just be offline); mark the time instead.
+        // Files that have gone from the share leave the library, and so do titles left with no files
+        // (retired the gentle way: hidden and purged at the next launch, in case a page is showing one).
+        func isGone(_ path: String) -> Bool {
+            var dir = ""
+            for part in path.split(separator: "/").map(String.init) {
+                if let names = listed[dir] { if !names.contains(part) { return true } } 
+                dir = dir.isEmpty ? part : dir + "/" + part
+            }
+            return false
+        }
+        let gone = existing.filter { !seenPaths.contains($0.key) && isGone($0.key) }.map(\.value)
+        if !gone.isEmpty {
+            var touched = Set<PersistentIdentifier>()
+            for file in gone {
+                droppedKeys.append(SyncKeys.file(sourceID: sourceID, relativePath: file.relativePath))
+                if let item = file.item { touched.insert(item.persistentModelID) }
+                modelContext.delete(file)
+            }
+            try modelContext.save()
+            var retired = 0
+            for id in touched {
+                guard let item = modelContext.model(for: id) as? MediaItem, !item.isDeleted, item.files.isEmpty, item.kind != .show else { continue }
+                item.pendingDeletion = true; item.hidden = true
+                droppedKeys.append(SyncKeys.item(item.itemKey))
+                retired += 1
+                if let show = item.show, show.episodes.allSatisfy({ $0.pendingDeletion || $0.files.isEmpty }) {
+                    show.pendingDeletion = true; show.hidden = true
+                    droppedKeys.append(SyncKeys.item(show.itemKey))
+                }
+            }
+            try modelContext.save()
+            Diagnostics.log("scan", "\(record.name): \(gone.count) files gone from the share, \(retired) titles retired")
+        }
         try modelContext.save()
         await source.disconnect()
 
