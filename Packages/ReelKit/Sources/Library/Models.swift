@@ -168,6 +168,9 @@ public final class MediaItem {
     /// deleting it at once invalidated the object under an open detail page, which SwiftData
     /// punishes with a trap on the next property read (and `isDeleted` does not say so).
     public var pendingDeletion: Bool = false
+    /// TMDb profile image paths, one per `cast` entry ("" when the person has no photo).
+    public var castProfiles: [String] = []
+    public var castPhotosCheckedAt: Date? = nil
 
     // Episode fields
     public var seasonNumber: Int?

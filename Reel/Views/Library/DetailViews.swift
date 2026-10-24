@@ -37,6 +37,7 @@ struct HeroHeader: View {
             .padding(.horizontal)
         }
         .task(id: item.itemKey) {
+            if let tmdb = settings.tmdb { await library.ensureCastPhotos(for: item, tmdb: tmdb) }
             if let fanart = settings.fanart { await library.fetchExtraArt(for: item, fanart: fanart) }
         }
         .toolbar {
@@ -100,15 +101,21 @@ struct Facts: View {
 
 struct CastRow: View {
     let names: [String]
+    /// TMDb profile paths parallel to `names`; "" or missing falls back to the initial.
+    var profiles: [String] = []
     var body: some View {
         if !names.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Cast").font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(names, id: \.self) { n in
+                        ForEach(Array(names.enumerated()), id: \.offset) { i, n in
                             VStack(spacing: 4) {
-                                ArtworkImage.Placeholder(title: n).frame(width: 56, height: 56).clipShape(Circle())
+                                if i < profiles.count, !profiles[i].isEmpty {
+                                    ArtworkImage(url: ArtworkURL.profile(profiles[i]), title: n, aspect: 1, cornerRadius: 28).frame(width: 56, height: 56).clipShape(Circle())
+                                } else {
+                                    ArtworkImage.Placeholder(title: n).frame(width: 56, height: 56).clipShape(Circle())
+                                }
                                 Text(n).font(.caption2).foregroundStyle(.secondary).frame(width: 72).lineLimit(2).multilineTextAlignment(.center)
                             }
                         }
@@ -163,7 +170,7 @@ struct FilmDetailView: View {
                     film.confidence == .autoLow ? ("Low-confidence match", .yellow) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = film.overview { Text(o).font(.subheadline).padding(.horizontal) }
-                CastRow(names: film.cast).padding(.horizontal)
+                CastRow(names: film.cast, profiles: film.castProfiles).padding(.horizontal)
                 if let cid = film.collectionID {
                     let others = library.films(inCollection: cid, excluding: film.itemKey)
                     if !others.isEmpty {
@@ -285,7 +292,7 @@ struct ShowDetailView: View {
                     show.confidence == .autoLow ? ("Low-confidence match", .yellow) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = show.overview { Text(o).font(.subheadline).padding(.horizontal) }
-                CastRow(names: show.cast).padding(.horizontal)
+                CastRow(names: show.cast, profiles: show.castProfiles).padding(.horizontal)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Episodes").font(.headline).padding(.horizontal)
                     ScrollView(.horizontal, showsIndicators: false) {

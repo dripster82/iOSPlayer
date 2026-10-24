@@ -387,6 +387,20 @@ public final class LibraryStore: ObservableObject {
         if found > 0 { objectWillChange.send() }
     }
 
+    /// Cast photos for titles matched before profile paths were recorded: one TMDb detail call,
+    /// usually served from the metadata cache, the first time the page opens.
+    public func ensureCastPhotos(for item: MediaItem, tmdb: TMDbClient) async {
+        guard item.castPhotosCheckedAt == nil, !item.cast.isEmpty, let id = item.tmdbID, item.kind != .episode else { return }
+        var members: [TMDbCastMember] = []
+        if item.kind == .film, let d = try? await tmdb.movie(id: id) { members = d.credits?.cast ?? [] }
+        else if item.kind == .show, let d = try? await tmdb.show(id: id) { members = d.credits?.cast ?? [] }
+        let byName = Dictionary(members.map { ($0.name, $0.profilePath ?? "") }, uniquingKeysWith: { a, _ in a })
+        item.castProfiles = item.cast.map { byName[$0] ?? "" }
+        item.castPhotosCheckedAt = Date()
+        try? context.save()
+        if item.castProfiles.contains(where: { !$0.isEmpty }) { objectWillChange.send() }
+    }
+
     // MARK: - Extra artwork
 
     /// Fills in fanart.tv logo and background for an item the first time its detail screen opens

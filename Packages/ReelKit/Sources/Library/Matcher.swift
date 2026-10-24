@@ -200,6 +200,8 @@ struct Matcher {
         item.runtimeMinutes = d.runtime
         item.genres = d.genres?.map(\.name) ?? []
         item.cast = d.credits?.cast.prefix(12).map(\.name) ?? []
+        item.castProfiles = d.credits?.cast.prefix(12).map { $0.profilePath ?? "" } ?? []
+        item.castPhotosCheckedAt = Date()
         item.collectionID = d.belongsToCollection?.id
         item.collectionName = d.belongsToCollection?.name
         item.collectionCheckedAt = Date()
@@ -221,6 +223,8 @@ struct Matcher {
         item.runtimeMinutes = d.episodeRunTime?.first
         item.genres = d.genres?.map(\.name) ?? []
         item.cast = d.credits?.cast.prefix(12).map(\.name) ?? []
+        item.castProfiles = d.credits?.cast.prefix(12).map { $0.profilePath ?? "" } ?? []
+        item.castPhotosCheckedAt = Date()
         item.seasonCount = d.numberOfSeasons ?? d.seasons?.filter { $0.seasonNumber > 0 }.count
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
