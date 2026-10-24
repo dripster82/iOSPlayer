@@ -226,6 +226,10 @@ struct FilmDetailView: View {
                         LabeledContent("Path", value: file.relativePath).font(.footnote).lineLimit(2)
                         LabeledContent("Size", value: MediaFormat.bytes(file.size)).font(.footnote)
                         LabeledContent("Source", value: file.source?.name ?? "—").font(.footnote)
+                        if let v = file.videoCodec { LabeledContent("Video", value: [file.resolution, v].compactMap { $0 }.joined(separator: " · ")).font(.footnote) }
+                        if let a = file.audioSummary { LabeledContent("Audio", value: a).font(.footnote) }
+                        if let s = file.subtitleSummary { LabeledContent("Embedded subtitles", value: s).font(.footnote) }
+                        if let d = file.duration, d > 0 { LabeledContent("Runtime", value: MediaFormat.clock(d)).font(.footnote) }
                         if !file.sidecars.isEmpty { LabeledContent("Subtitles", value: "\(file.sidecars.count) sidecar file\(file.sidecars.count == 1 ? "" : "s")").font(.footnote) }
                     }.padding(.horizontal)
                 }

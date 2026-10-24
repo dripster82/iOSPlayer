@@ -47,6 +47,14 @@ struct SettingsView: View {
                     TextField("OpenSubtitles username", text: $settings.openSubtitlesUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("OpenSubtitles password", text: $settings.openSubtitlesPassword)
                 }
+                Picker("Subtitle size", selection: $settings.subtitleScale) {
+                    Text("Small").tag(80); Text("Normal").tag(100); Text("Large").tag(130); Text("Huge").tag(170)
+                }
+                Picker("Subtitle colour", selection: $settings.subtitleColor) {
+                    ForEach(AppSettings.subtitleColors, id: \.hex) { Text($0.name).tag($0.hex) }
+                }
+                Toggle("Box behind subtitles", isOn: $settings.subtitleBackground)
+                Toggle(isOn: $settings.subtitleRaised) { VStack(alignment: .leading) { Text("Raise subtitles"); Text("Lifts them above the bottom edge, for letterboxed films.").font(.caption).foregroundStyle(.secondary) } }
             } header: { Text("Subtitles") } footer: {
                 Text("Find subtitles online from the player's Subtitles sheet. The API key comes from opensubtitles.com → API consumers (free); downloading needs a free account and has a daily limit. Only the title or TMDb id is sent, never your files.")
             }

@@ -40,6 +40,11 @@ final class AppSettings: ObservableObject {
     @Published var audioLanguage: String { didSet { d.set(audioLanguage, forKey: "audioLanguage") } }
     @Published var subtitleLanguage: String { didSet { d.set(subtitleLanguage, forKey: "subtitleLanguage") } }
     @Published var subtitlesOnByDefault: Bool { didSet { d.set(subtitlesOnByDefault, forKey: "subtitlesOnByDefault") } }
+    @Published var subtitleScale: Int { didSet { d.set(subtitleScale, forKey: "subtitleScale") } }
+    @Published var subtitleColor: String { didSet { d.set(subtitleColor, forKey: "subtitleColor") } }
+    @Published var subtitleBackground: Bool { didSet { d.set(subtitleBackground, forKey: "subtitleBackground") } }
+    @Published var subtitleRaised: Bool { didSet { d.set(subtitleRaised, forKey: "subtitleRaised") } }
+    static let subtitleColors: [(name: String, hex: String)] = [("White", "FFFFFF"), ("Yellow", "FFE94A"), ("Cyan", "7FE8FF"), ("Light grey", "D9D9D9")]
     @Published var backgroundAudio: Bool { didSet { d.set(backgroundAudio, forKey: "backgroundAudio") } }
     @Published var scanOnCellular: Bool { didSet { d.set(scanOnCellular, forKey: "scanOnCellular") } }
     @Published var scanOnLaunch: Bool { didSet { d.set(scanOnLaunch, forKey: "scanOnLaunch") } }
@@ -64,6 +69,10 @@ final class AppSettings: ObservableObject {
         audioLanguage = d.string(forKey: "audioLanguage") ?? "en"
         subtitleLanguage = d.string(forKey: "subtitleLanguage") ?? "en"
         subtitlesOnByDefault = d.bool(forKey: "subtitlesOnByDefault")
+        subtitleScale = d.object(forKey: "subtitleScale") as? Int ?? 100
+        subtitleColor = d.string(forKey: "subtitleColor") ?? "FFFFFF"
+        subtitleBackground = d.bool(forKey: "subtitleBackground")
+        subtitleRaised = d.bool(forKey: "subtitleRaised")
         backgroundAudio = d.bool(forKey: "backgroundAudio")
         scanOnCellular = d.bool(forKey: "scanOnCellular")
         scanOnLaunch = d.object(forKey: "scanOnLaunch") as? Bool ?? true

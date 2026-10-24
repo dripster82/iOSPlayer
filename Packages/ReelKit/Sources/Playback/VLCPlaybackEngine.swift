@@ -22,6 +22,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
     /// `duration` everywhere else.
     public let clock = PlaybackClock()
+    /// What the stream turned out to contain, reported once the tracks are known: video codec name,
+    /// an audio summary ("DTS 5.1 · AAC 2.0"), a subtitle summary, and the duration in seconds.
+    public struct Probe: Sendable, Equatable { public var videoCodec: String?; public var audio: String?; public var subtitles: String?; public var duration: TimeInterval }
+    public var onProbe: ((String, Probe) -> Void)?
+    private var probed = false
     public var time: TimeInterval { clock.time }
     public var duration: TimeInterval { clock.duration }
     @Published public private(set) var rate: Float = 1
@@ -119,6 +124,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         self.item = item
         self.options = options
         tracksLoaded = false
+        probed = false
         appliedStart = false
         resumeConfirmed = false
         resumeAttempts = 0
@@ -138,6 +144,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             media.addOption(":avcodec-hw=none")
         }
         if let lang = options.preferredAudioLanguage { media.addOption(":audio-language=\(lang)") }
+        // Subtitle style (freetype renderer). Set per media so a change in Settings reaches the next play.
+        media.addOption(":sub-text-scale=\(options.subtitleScale)")
+        media.addOption(":freetype-color=\(options.subtitleColor)")
+        media.addOption(":freetype-background-opacity=\(options.subtitleBackground ? 160 : 0)")
+        media.addOption(":freetype-outline-thickness=\(options.subtitleBackground ? 0 : 4)")
+        if options.subtitleMargin > 0 { media.addOption(":sub-margin=\(options.subtitleMargin)") }
         // Asking VLC for a subtitle language makes it switch that track on, so only do it when subtitles
         // should be on by default; the preference is still used to pick a track when the user turns them on.
         if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
@@ -527,6 +539,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), isForced: t.trackName.localizedCaseInsensitiveContains("forced"))
         }
         if newAudio != audioTracks { audioTracks = newAudio }
+        if !probed, let key = item?.itemKey, !newAudio.isEmpty || !player.videoTracks.isEmpty {
+            probed = true
+            let video = player.videoTracks.first.map { $0.codecName() }
+            let audio = newAudio.map { [$0.codec, $0.channels.map { Self.channelLabel($0) }].compactMap { $0 }.joined(separator: " ") }.filter { !$0.isEmpty }
+            let subs = newSubs.isEmpty ? nil : "\(newSubs.count) embedded" + (newSubs.compactMap(\.language).isEmpty ? "" : " (" + Array(Set(newSubs.compactMap(\.language))).sorted().joined(separator: ", ") + ")")
+            onProbe?(key, Probe(videoCodec: video?.isEmpty == false ? video : nil, audio: audio.isEmpty ? nil : Array(Set(audio)).joined(separator: " · "), subtitles: subs, duration: clock.duration))
+        }
         if newSubs.count > subtitleTracks.count, selectNextAddedSubtitle, let last = newSubs.last {
             selectNextAddedSubtitle = false
             subtitleTracks = newSubs
@@ -558,6 +577,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
         if newChapters != chapters { chapters = newChapters }
     }
+
+    static func channelLabel(_ n: Int) -> String { switch n { case 1: "mono"; case 2: "2.0"; case 6: "5.1"; case 8: "7.1"; default: "\(n)ch" } }
 
     /// "Track 1 - [English]" → "English"
     private static func language(in name: String) -> String? {

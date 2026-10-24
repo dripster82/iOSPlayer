@@ -40,6 +40,12 @@ public struct PlaybackOptions: Sendable {
     public var preferredAudioLanguage: String? = "en"
     public var preferredSubtitleLanguage: String? = "en"
     public var subtitlesOnByDefault = false
+    /// Subtitle rendering: scale as a percentage (100 = VLC default), colour as 0xRRGGBB, an opaque
+    /// box behind the text, and extra bottom margin in pixels to lift them off the picture's edge.
+    public var subtitleScale = 100
+    public var subtitleColor: UInt32 = 0xFFFFFF
+    public var subtitleBackground = false
+    public var subtitleMargin = 0
     public init() {}
 }
 

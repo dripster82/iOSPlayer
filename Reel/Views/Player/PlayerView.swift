@@ -165,7 +165,7 @@ struct PlayerContentView: View {
             }
             Spacer()
             VStack(spacing: 6) {
-                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime) { engine.seek(to: $0) }
+                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime, itemKey: player.current?.itemKey) { engine.seek(to: $0) }
                 HStack(spacing: 8) {
                     tag("\(engine.rate.formatted())×", on: engine.rate != 1) { sheet = .speed }
                     if !engine.chapters.isEmpty {
@@ -347,11 +347,12 @@ struct TimelineBar: View {
     @ObservedObject var clock: PlaybackClock
     let chapters: [Chapter]
     @Binding var scrubTime: TimeInterval?
+    var itemKey: String? = nil
     let onSeek: (TimeInterval) -> Void
 
     var body: some View {
         let shown = scrubTime ?? clock.time
-        Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
+        Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime, itemKey: itemKey) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
         HStack {
             Text(MediaFormat.clock(shown)).monospacedDigit()
             Spacer()
@@ -361,10 +362,12 @@ struct TimelineBar: View {
 }
 
 struct Scrubber: View {
+    @ObservedObject private var thumbs = ScrubThumbnails.shared
     let time: TimeInterval
     let duration: TimeInterval
     let chapters: [Chapter]
     let preview: TimeInterval?
+    var itemKey: String? = nil
     let onChange: (TimeInterval) -> Void
     let onCommit: (TimeInterval) -> Void
 
@@ -379,9 +382,16 @@ struct Scrubber: View {
                 }
                 Circle().fill(.white).frame(width: 14, height: 14).shadow(radius: 2).offset(x: g.size.width * frac - 7)
                 if let p = preview, duration > 0 {
-                    Text(MediaFormat.clock(p)).font(.caption.bold()).monospacedDigit().padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 6)).foregroundStyle(.black)
-                        .offset(x: max(0, min(g.size.width - 60, g.size.width * CGFloat(p / duration) - 30)), y: -30)
+                    let frame = itemKey.flatMap { thumbs.image(for: $0, fraction: p / duration) }
+                    VStack(spacing: 4) {
+                        if let frame {
+                            Image(uiImage: frame).resizable().aspectRatio(16 / 9, contentMode: .fit).frame(width: 160)
+                                .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.8), lineWidth: 1)).shadow(radius: 4)
+                        }
+                        Text(MediaFormat.clock(p)).font(.caption.bold()).monospacedDigit().padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 6)).foregroundStyle(.black)
+                    }
+                    .offset(x: max(0, min(g.size.width - (frame == nil ? 60 : 160), g.size.width * CGFloat(p / duration) - (frame == nil ? 30 : 80))), y: frame == nil ? -30 : -75)
                 }
             }
             .frame(height: 28)

@@ -88,6 +88,7 @@ final class PlayerCoordinator: ObservableObject {
                 let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume,
                                                 externalSubtitles: subs + SubtitleStore.subtitles(for: item.itemKey), itemKey: item.itemKey)
                 engine.load(playbackItem, options: opts)
+                scheduleScrubThumbnails(key: item.itemKey, url: url)
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
                 startSaveTimer()
                 isLoading = false
@@ -100,6 +101,15 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
+    /// Twenty seconds into a play, make the scrubber's preview frames if this title has none yet.
+    private func scheduleScrubThumbnails(key: String, url: URL) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, self.current?.itemKey == key, self.engine.status == .playing else { return }
+            ScrubThumbnails.shared.ensure(key: key, url: url)
+        }
+    }
+
     /// The global playback settings, overridden by what the viewer chose last time for this show
     /// (or film): the audio language, and subtitles on in a language or off.
     private func playbackOptions(for item: MediaItem, settings: AppSettings) -> PlaybackOptions {
@@ -109,6 +119,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredAudioLanguage = settings.audioLanguage
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        Self.applySubtitleStyle(&opts, settings)
         if let choice = TrackMemory.choice(for: Self.memoryKey(item)) {
             if let audio = choice.audioLanguage { opts.preferredAudioLanguage = audio }
             switch choice.subtitle {
@@ -121,6 +132,12 @@ final class PlayerCoordinator: ObservableObject {
         return opts
     }
     private static func memoryKey(_ item: MediaItem) -> String { item.show?.itemKey ?? item.itemKey }
+    static func applySubtitleStyle(_ opts: inout PlaybackOptions, _ settings: AppSettings) {
+        opts.subtitleScale = settings.subtitleScale
+        opts.subtitleColor = UInt32(settings.subtitleColor, radix: 16) ?? 0xFFFFFF
+        opts.subtitleBackground = settings.subtitleBackground
+        opts.subtitleMargin = settings.subtitleRaised ? 90 : 0
+    }
 
     func rememberAudioChoice(language: String?) {
         guard let current, let language else { return }
@@ -154,6 +171,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredAudioLanguage = settings.audioLanguage
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        Self.applySubtitleStyle(&opts, settings)
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
         nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
         startSaveTimer()
@@ -204,6 +222,10 @@ final class PlayerCoordinator: ObservableObject {
     private func startSaveTimer() {
         // Every 30 s during playback (PLAN.md §10.4), not every tick, to keep iCloud traffic low.
         saveTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.saveProgress() }
+        engine.onProbe = { [weak self] key, probe in
+            guard let self, self.current?.itemKey == key else { return }
+            self.library.recordProbe(itemKey: key, fileID: self.currentFile?.id, videoCodec: probe.videoCodec, audio: probe.audio, subtitles: probe.subtitles, duration: probe.duration)
+        }
     }
 
     /// Writes the current position now (the app is about to be suspended, or the user asked).

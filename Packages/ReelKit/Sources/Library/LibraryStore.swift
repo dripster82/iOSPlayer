@@ -364,6 +364,18 @@ public final class LibraryStore: ObservableObject {
         return out
     }
 
+    /// What the player found in a file once it opened; shown on the film page and the Versions list.
+    public func recordProbe(itemKey: String, fileID: UUID?, videoCodec: String?, audio: String?, subtitles: String?, duration: TimeInterval) {
+        guard let item = item(itemKey) else { return }
+        guard let file = fileID.flatMap({ id in item.files.first { $0.id == id } }) ?? preferredFile(item) else { return }
+        var changed = false
+        if let v = videoCodec, v != file.videoCodec { file.videoCodec = v; changed = true }
+        if let a = audio, a != file.audioSummary { file.audioSummary = a; changed = true }
+        if let s = subtitles, s != file.subtitleSummary { file.subtitleSummary = s; changed = true }
+        if duration > 0, abs((file.duration ?? 0) - duration) > 1 { file.duration = duration; changed = true }
+        if changed { file.pendingSync = true; file.updatedAt = Date(); try? context.save() }
+    }
+
     /// Remembers which copy to play for a title with several; nil goes back to the best resolution.
     public func setPreferredFile(_ file: MediaFile?, for item: MediaItem) {
         item.preferredFileID = file?.id
