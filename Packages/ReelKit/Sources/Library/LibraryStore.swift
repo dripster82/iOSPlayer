@@ -362,7 +362,11 @@ public final class LibraryStore: ObservableObject {
     /// Everything the Collections screen needs in one pass over the films: universes and TMDb series
     /// with two or more films, each with its films (oldest first) and, for a universe, a studio logo.
     public struct GroupIndex: Sendable {
-        public struct Group: Sendable { public var name: String; public var films: [MediaItem]; public var logoPath: String?; public var posterPath: String? }
+        public struct Group: Sendable {
+            public var name: String; public var films: [MediaItem]; public var logoPath: String?; public var posterPath: String?
+            /// fanart.tv title logo of the group's earliest film, for franchises with no studio logo.
+            public var fanartLogoURL: String?
+        }
         public var universes: [Group] = []
         public var series: [(id: Int, group: Group)] = []
     }
@@ -395,10 +399,14 @@ public final class LibraryStore: ObservableObject {
         let byYear: (MediaItem, MediaItem) -> Bool = { ($0.year ?? 0) < ($1.year ?? 0) }
         var index = GroupIndex()
         index.universes = byUniverse.filter { $0.value.count >= 2 }
-            .map { GroupIndex.Group(name: $0.key, films: $0.value.sorted(by: byYear), logoPath: logos[$0.key], posterPath: nil) }
+            .map { entry in
+                let films = entry.value.sorted(by: byYear)
+                return GroupIndex.Group(name: entry.key, films: films, logoPath: logos[entry.key], posterPath: nil,
+                                        fanartLogoURL: logos[entry.key] == nil ? films.first(where: { $0.logoURL != nil })?.logoURL : nil)
+            }
             .sorted { $0.films.count != $1.films.count ? $0.films.count > $1.films.count : $0.name < $1.name }
         index.series = bySeries.filter { $0.value.2.count >= 2 }
-            .map { ($0.key, GroupIndex.Group(name: $0.value.0, films: $0.value.2.sorted(by: byYear), logoPath: nil, posterPath: $0.value.1)) }
+            .map { ($0.key, GroupIndex.Group(name: $0.value.0, films: $0.value.2.sorted(by: byYear), logoPath: nil, posterPath: $0.value.1, fanartLogoURL: nil)) }
             .sorted { $0.group.films.count != $1.group.films.count ? $0.group.films.count > $1.group.films.count : $0.group.name < $1.group.name }
         return index
     }

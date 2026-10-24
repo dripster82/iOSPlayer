@@ -8,7 +8,7 @@ public enum ArtworkURL {
     public enum BackdropSize: String { case detail = "w1280", small = "w780" }
     public enum StillSize: String { case list = "w300", detail = "original" }
     public enum ProfileSize: String { case avatar = "w185" }
-    public enum LogoSize: String { case small = "w185", medium = "w300" }
+    public enum LogoSize: String { case small = "w185", medium = "w300", full = "original" }
 
     public static func poster(_ path: String?, size: PosterSize = .grid) -> URL? { url(path, size.rawValue) }
     public static func backdrop(_ path: String?, size: BackdropSize = .detail) -> URL? { url(path, size.rawValue) }

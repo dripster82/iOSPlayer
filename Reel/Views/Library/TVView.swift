@@ -184,7 +184,8 @@ struct CollectionsView: View {
         let index = library.groupIndex()
         universes = index.universes.map { g in
             Card(id: "u:\(g.name)", title: g.name, subtitle: "\(g.films.count) films", route: .universe(g.name),
-                 icon: ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!) : .mosaic(g.films.compactMap(\.posterPath)))
+                 icon: ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!)
+                     : g.fanartLogoURL.flatMap(URL.init).map { .titleLogo($0) } ?? .mosaic(g.films.compactMap(\.posterPath)))
         }
         series = index.series.map { s in
             Card(id: "s:\(s.id)", title: s.group.name, subtitle: "\(s.group.films.count) films", route: .filmCollection(s.id),
@@ -214,7 +215,7 @@ struct CollectionsView: View {
 /// The picture for a grouping card: a studio logo, the series' own poster, or a mosaic of up to four
 /// of its posters, in that order of preference, with the initial as the last resort.
 struct CollectionIcon: View {
-    enum Kind { case logo(String), poster(String), mosaic([String]) }
+    enum Kind { case logo(String), titleLogo(URL), poster(String), mosaic([String]) }
     let kind: Kind
     let title: String
     var body: some View {
@@ -225,7 +226,15 @@ struct CollectionIcon: View {
                 // so the panel is white in both colour schemes.
                 ZStack {
                     RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [Color.white, Color(white: 0.92)], startPoint: .top, endPoint: .bottom))
-                    AsyncImage(url: ArtworkURL.logo(path, size: .medium)) { image in
+                    AsyncImage(url: ArtworkURL.logo(path, size: .full)) { image in
+                        image.resizable().scaledToFit().padding(12)
+                    } placeholder: { ArtworkImage.Placeholder(title: title) }
+                }.aspectRatio(2 / 3, contentMode: .fit)
+            case .titleLogo(let url):
+                // fanart.tv title logos are made for dark backgrounds.
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)], startPoint: .top, endPoint: .bottom))
+                    AsyncImage(url: url) { image in
                         image.resizable().scaledToFit().padding(12)
                     } placeholder: { ArtworkImage.Placeholder(title: title) }
                 }.aspectRatio(2 / 3, contentMode: .fit)
