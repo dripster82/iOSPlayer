@@ -1,18 +1,15 @@
-#if canImport(VLCKit) || canImport(MobileVLCKit)
+#if canImport(VLCKit)
 import Foundation
 import Combine
 import MediaCore
-#if canImport(VLCKit)
 import VLCKit
-#else
-import MobileVLCKit
-#endif
 #if canImport(UIKit)
 import UIKit
 #endif
 
-/// VLCKit 3.x wrapper. Owns one `VLCMediaPlayer` and republishes its state for SwiftUI.
-/// The video is rendered into whatever view is assigned to `drawable` (see `VLCVideoView`).
+/// VLCKit 4 wrapper. Owns one `VLCMediaPlayer` and republishes its state for SwiftUI.
+/// The video is rendered into whatever view is assigned to `drawable` (see `VLCVideoView`), which
+/// also hands the engine VLCKit's Picture in Picture controller once the video output is up.
 @MainActor
 public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
 
@@ -31,15 +28,31 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     @Published public private(set) var subtitleDelay: TimeInterval = 0
     @Published public private(set) var audioDelay: TimeInterval = 0
 
+    /// True once VLC's video output has offered a Picture in Picture controller for the current media.
+    @Published public private(set) var canStartPictureInPicture = false
+    /// True while the system PiP window is showing the video.
+    @Published public private(set) var isPictureInPictureActive = false
+
     public let player = VLCMediaPlayer()
+    /// The object VLCKit's PiP window drives for play/pause/seek. `VLCVideoView` returns it from
+    /// `mediaController()`; it talks to `player` directly because PiP calls arrive off the main actor.
+    public let pictureInPictureMediaController: VLCPictureInPictureMediaControlling
+
+    private weak var pipController: (any VLCPictureInPictureWindowControlling)?
     private var item: PlaybackItem?
     private var options = PlaybackOptions()
     private var tracksLoaded = false
     private var appliedStart = false
     /// Once the viewer picks a subtitle track (or Off) in the sheet, the default rule stops interfering.
     private var userChoseSubtitle = false
+    private var stopRequested = false
+    private var hasPlayed = false
+    /// VLCKit 4 addresses tracks by string id; the UI keeps integer ids, so these are indexed by `MediaTrack.id`.
+    private var vlcAudioTracks: [VLCMediaPlayer.Track] = []
+    private var vlcSubtitleTracks: [VLCMediaPlayer.Track] = []
 
     public override init() {
+        pictureInPictureMediaController = PiPMediaController(player: player)
         super.init()
         player.delegate = self
     }
@@ -59,8 +72,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         tracksLoaded = false
         appliedStart = false
         userChoseSubtitle = false
+        stopRequested = false
+        hasPlayed = false
 
-        let media = VLCMedia(url: item.url)
+        guard let media = VLCMedia(url: item.url) else { status = .failed("VLC couldn't open this URL."); return }
         media.addOption(":network-caching=\(options.networkCachingMS)")
         media.addOption(":file-caching=1000")
         media.addOption(":clock-jitter=0")
@@ -103,7 +118,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func selectAudioTrack(_ id: Int?) {
-        player.currentAudioTrackIndex = Int32(id ?? -1)
+        if let id, vlcAudioTracks.indices.contains(id) {
+            vlcAudioTracks[id].isSelectedExclusively = true
+        } else {
+            player.deselectAllAudioTracks()
+        }
         currentAudioTrack = id
     }
 
@@ -113,7 +132,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func applySubtitleTrack(_ id: Int?) {
-        player.currentVideoSubTitleIndex = Int32(id ?? -1)
+        if let id, vlcSubtitleTracks.indices.contains(id) {
+            vlcSubtitleTracks[id].isSelectedExclusively = true
+        } else {
+            player.deselectAllTextTracks()
+        }
         currentSubtitleTrack = id
     }
 
@@ -132,24 +155,32 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func stop() {
-        if player.isPlaying || player.state != .stopped { player.stop() }
+        if player.state != .stopped {
+            stopRequested = true
+            player.stop()
+        }
         status = .idle
         clock.time = 0
         clock.duration = 0
         rate = 1
         audioTracks = []
         subtitleTracks = []
+        vlcAudioTracks = []
+        vlcSubtitleTracks = []
         chapters = []
         currentAudioTrack = nil
         currentSubtitleTrack = nil
+        pipController = nil
+        canStartPictureInPicture = false
+        isPictureInPictureActive = false
     }
 
     private var fillEnabled = false
     private var appliedFill: (fill: Bool, width: Int, height: Int)?
 
     /// Fit letterboxes inside the drawable (VLC's default). Fill crops the picture to the drawable's
-    /// aspect ratio so it covers the screen. Scaling was wrong here before: `scaleFactor` works in
-    /// pixels, so a points-based factor shrank the video to a third on a 3× display.
+    /// aspect ratio so it covers the screen. VLCKit 4 replaced the `videoCropGeometry` string with a
+    /// crop *ratio*, which is all Fill ever needed (points vs pixels doesn't matter for a ratio).
     public func setFill(_ fill: Bool) {
         fillEnabled = fill
         applyFill()
@@ -167,41 +198,84 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         if let applied = appliedFill, applied.fill == wanted.fill, !wanted.fill || (applied.width == w && applied.height == h) { return }
         appliedFill = wanted
         player.scaleFactor = 0
-        setCropGeometry(wanted.fill ? "\(w):\(h)" : nil)
+        if wanted.fill { player.setCropRatioWithNumerator(UInt32(w), denominator: UInt32(h)) } else { player.setCropRatioWithNumerator(0, denominator: 0) }
     }
 
-    /// VLCKit exposes the crop filter as a C string that libvlc copies on set.
-    private func setCropGeometry(_ geometry: String?) {
-        guard let geometry else { player.videoCropGeometry = nil; return }
-        geometry.withCString { player.videoCropGeometry = UnsafeMutablePointer(mutating: $0) }
+    // MARK: - Picture in Picture
+
+    /// Called by the drawable's `pictureInPictureReady` block. VLC creates one controller per video
+    /// output, so this fires on every `load` once the first frame is up and the reference dies with it.
+    public func pictureInPictureDidBecomeAvailable(_ controller: any VLCPictureInPictureWindowControlling) {
+        pipController = controller
+        controller.stateChangeEventHandler = { [weak self] started in
+            Task { @MainActor in self?.isPictureInPictureActive = started }
+        }
+        canStartPictureInPicture = true
+    }
+
+    public func startPictureInPicture() {
+        guard let pipController, !isPictureInPictureActive else { return }
+        pipController.invalidatePlaybackState()
+        pipController.startPictureInPicture()
+    }
+
+    public func stopPictureInPicture() {
+        guard isPictureInPictureActive else { return }
+        pipController?.stopPictureInPicture()
     }
 
     // MARK: - VLCMediaPlayerDelegate
 
-    nonisolated public func mediaPlayerStateChanged(_ aNotification: Notification) {
-        Task { @MainActor in self.handleStateChange() }
+    nonisolated public func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
+        Task { @MainActor in self.handleStateChange(newState) }
     }
 
     nonisolated public func mediaPlayerTimeChanged(_ aNotification: Notification) {
         Task { @MainActor in self.handleTimeChange() }
     }
 
-    private func handleStateChange() {
-        switch player.state {
+    nonisolated public func mediaPlayerLengthChanged(_ length: Int64) {
+        Task { @MainActor in
+            if length > 0 { self.clock.duration = TimeInterval(length) / 1000 }
+            self.pipController?.invalidatePlaybackState()
+        }
+    }
+
+    nonisolated public func mediaPlayerTrackAdded(_ trackId: String, with trackType: VLCMedia.TrackType) {
+        Task { @MainActor in self.loadTracks() }   // subtitle streams often arrive after the audio ones
+    }
+
+    nonisolated public func mediaPlayerTrackSelected(_ trackType: VLCMedia.TrackType, selectedId: String, unselectedId: String) {
+        Task { @MainActor in self.syncSelection() }
+    }
+
+    nonisolated public func mediaPlayerChapterChanged(_ aNotification: Notification) {
+        Task { @MainActor in if self.chapters.isEmpty { self.loadChapters() } }
+    }
+
+    private func handleStateChange(_ state: VLCMediaPlayerState) {
+        pipController?.invalidatePlaybackState()
+        switch state {
         case .opening: status = .opening
         case .buffering: status = player.isPlaying ? .playing : .buffering
         case .playing:
             status = .playing
+            hasPlayed = true
             if !tracksLoaded { loadTracks() }
             if !appliedStart, let start = item?.startAt, start > 0 {
                 appliedStart = true
                 seek(to: start)
             }
         case .paused: status = .paused
-        case .stopped: if status != .idle { status = .paused }
-        case .ended: status = .ended
+        case .stopping, .stopped:
+            // VLC 4 has no "ended" state: a stream that runs out goes stopping → stopped on its own.
+            // Only our own `stop()` sets `stopRequested`, so anything else after playback began is the
+            // end. `hasPlayed` also filters the stop events of the *previous* media, which can land
+            // after `load()` has already moved on (stop is asynchronous in libvlc 4).
+            guard !stopRequested, hasPlayed else { break }
+            status = .ended
+            canStartPictureInPicture = false
         case .error: status = .failed("VLC couldn't play this file.")
-        case .esAdded: loadTracks()   // subtitle streams often arrive after the audio ones
         @unknown default: break
         }
     }
@@ -229,25 +303,17 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Track lists are only reliable once the ES have been added, so this runs lazily and re-runs
     /// until it finds something.
     private func loadTracks() {
-        let aIdx = (player.audioTrackIndexes as? [NSNumber]) ?? []
-        let aNames = (player.audioTrackNames as? [String]) ?? []
-        let sIdx = (player.videoSubTitlesIndexes as? [NSNumber]) ?? []
-        let sNames = (player.videoSubTitlesNames as? [String]) ?? []
+        vlcAudioTracks = player.audioTracks
+        vlcSubtitleTracks = player.textTracks
 
-        // VLC lists "Disable" as index -1; drop it, the UI has its own Off row.
-        audioTracks = zip(aIdx, aNames).compactMap { i, n in i.intValue >= 0 ? MediaTrack(id: i.intValue, name: n, language: Self.language(in: n)) : nil }
-        subtitleTracks = zip(sIdx, sNames).compactMap { i, n in i.intValue >= 0 ? MediaTrack(id: i.intValue, name: n, language: Self.language(in: n), isForced: n.localizedCaseInsensitiveContains("forced")) : nil }
-        currentAudioTrack = player.currentAudioTrackIndex >= 0 ? Int(player.currentAudioTrackIndex) : nil
-        currentSubtitleTrack = player.currentVideoSubTitleIndex >= 0 ? Int(player.currentVideoSubTitleIndex) : nil
-
-        if let descs = player.chapterDescriptions(ofTitle: player.currentTitleIndex) as? [[String: Any]] {
-            chapters = descs.enumerated().map { i, d in
-                let name = (d[VLCChapterDescriptionName] as? String) ?? "Chapter \(i + 1)"
-                let offset = ((d[VLCChapterDescriptionTimeOffset] as? NSNumber)?.doubleValue ?? 0) / 1000
-                let dur = ((d[VLCChapterDescriptionDuration] as? NSNumber)?.doubleValue ?? 0) / 1000
-                return Chapter(id: i, title: name, start: offset, duration: dur)
-            }
+        audioTracks = vlcAudioTracks.enumerated().map { i, t in
+            MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), codec: t.codecName(), channels: t.audio.map { Int($0.channelsNumber) })
         }
+        subtitleTracks = vlcSubtitleTracks.enumerated().map { i, t in
+            MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), isForced: t.trackName.localizedCaseInsensitiveContains("forced"))
+        }
+        syncSelection()
+        loadChapters()
 
         // VLC switches a subtitle track on whenever a default-flagged stream appears, which can be after
         // the first tracks load. Until the viewer chooses, keep enforcing "off by default" (forced tracks excepted).
@@ -258,11 +324,41 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         tracksLoaded = !audioTracks.isEmpty
     }
 
+    private func syncSelection() {
+        currentAudioTrack = vlcAudioTracks.firstIndex(where: \.isSelected)
+        currentSubtitleTrack = vlcSubtitleTracks.firstIndex(where: \.isSelected)
+    }
+
+    private func loadChapters() {
+        let descs = player.chapterDescriptions(ofTitle: player.currentTitleIndex)
+        chapters = descs.enumerated().map { i, d in
+            Chapter(id: i, title: d.name ?? "Chapter \(i + 1)", start: TimeInterval(d.timeOffset.intValue) / 1000, duration: TimeInterval(d.durationTime.intValue) / 1000)
+        }
+    }
+
     /// "Track 1 - [English]" → "English"
     private static func language(in name: String) -> String? {
         guard let open = name.lastIndex(of: "["), let close = name.lastIndex(of: "]"), open < close else { return nil }
         return String(name[name.index(after: open)..<close])
     }
+}
+
+/// Playback controls for the system PiP window. VLCKit calls these from AVKit's queues, so this is
+/// deliberately not on the main actor and talks to the (thread-safe) `VLCMediaPlayer` directly,
+/// like VideoLAN's own PiP example. The engine's published state catches up via the delegate.
+private final class PiPMediaController: NSObject, VLCPictureInPictureMediaControlling, @unchecked Sendable {
+    private let player: VLCMediaPlayer
+    init(player: VLCMediaPlayer) { self.player = player }
+
+    func play() { player.play() }
+    func pause() { player.pause() }
+    func seek(by offset: Int64, completion: @escaping () -> Void) {
+        if !player.jump(withOffset: Int32(clamping: offset), completion: completion) { completion() }
+    }
+    func mediaLength() -> Int64 { player.media?.length.value?.int64Value ?? 0 }
+    func mediaTime() -> Int64 { player.time.value?.int64Value ?? 0 }
+    func isMediaSeekable() -> Bool { player.isSeekable }
+    func isMediaPlaying() -> Bool { player.isPlaying }
 }
 
 #if canImport(UIKit)

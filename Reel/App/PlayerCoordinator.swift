@@ -64,6 +64,34 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
+    /// Plays something handed to us by another app: a file URL (Files, DS file, AirDrop) or a stream URL
+    /// (`reel://play?url=`). Nothing is added to the library; watch state is keyed by the URL.
+    func playExternal(_ url: URL, title: String? = nil, settings: AppSettings) {
+        let name = title ?? url.lastPathComponent.removingPercentEncoding ?? url.absoluteString
+        let key = ItemKey.unmatched(fileName: url.absoluteString, size: 0, duration: nil)
+        let item = MediaItem(itemKey: key, kind: .film, title: name, confidence: .unmatched)
+        current = item
+        currentFile = nil
+        upNext = nil
+        isPresented = true
+        isLoading = true
+        loadError = nil
+        // Security-scoped access for files other apps hand over; released when playback stops.
+        if url.isFileURL, url.startAccessingSecurityScopedResource() { externalScopedURL = url }
+        let resume = library.watchState(key).map { $0.watched ? 0 : $0.position } ?? 0
+        var opts = PlaybackOptions()
+        opts.hardwareDecoding = settings.hardwareDecoding
+        opts.networkCachingMS = settings.networkCachingMS
+        opts.preferredAudioLanguage = settings.audioLanguage
+        opts.preferredSubtitleLanguage = settings.subtitleLanguage
+        opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
+        nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
+        startSaveTimer()
+        isLoading = false
+    }
+    private var externalScopedURL: URL?
+
     /// Plays a file that isn't in the library (file browser).
     func playFile(_ file: MediaFile, settings: AppSettings) {
         let temp = MediaItem(itemKey: ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: nil), kind: .film, title: file.fileName, confidence: .unmatched)
@@ -78,6 +106,7 @@ final class PlayerCoordinator: ObservableObject {
     func dismiss() {
         saveProgress()
         engine.stop()
+        externalScopedURL?.stopAccessingSecurityScopedResource(); externalScopedURL = nil
         nowPlaying.detach()
         saveTimer = nil
         isPresented = false

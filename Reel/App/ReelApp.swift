@@ -35,6 +35,17 @@ struct ReelApp: App {
         BackgroundScans.register(library: store, settings: settings)
     }
 
+    /// "Open in Reel" from another app (a file URL), or `reel://play?url=…` / `reel://x-callback-url/play?url=…`.
+    private func open(_ url: URL) {
+        if url.isFileURL { player.playExternal(url, settings: settings); return }
+        guard url.scheme?.lowercased() == "reel" else { return }
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let action = (url.host == "x-callback-url" ? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : url.host) ?? ""
+        guard action == "play", let raw = comps?.queryItems?.first(where: { $0.name == "url" })?.value, let target = URL(string: raw) else { return }
+        let title = comps?.queryItems?.first(where: { $0.name == "title" })?.value
+        player.playExternal(target, title: title, settings: settings)
+    }
+
     /// Incremental scan of every source when the app comes to the foreground: listing is cheap and only
     /// new or changed files go to TMDb. Throttled so switching apps doesn't restart it every time.
     private func scanForNewMediaIfDue() {
@@ -54,6 +65,7 @@ struct ReelApp: App {
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { await ImageLoader.shared.enforceLimit() }
+                .onOpenURL { url in open(url) }
                 .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in
                     Task { await sync.fetchNow() }
                 }

@@ -2,12 +2,13 @@
 import PackageDescription
 import Foundation
 
-// VideoLAN's official MobileVLCKit binary (LGPL 2.1). There is no official SwiftPM package for
-// VLCKit 3.x, so the xcframework is vendored by `Scripts/fetch-vlckit.sh` (gitignored). When it is
-// absent — Linux CI, or a fresh checkout before the fetch — the Playback module still compiles because
-// VLCPlaybackEngine is wrapped in `#if canImport(MobileVLCKit)`; only the pure modules are testable then.
+// VideoLAN's official VLCKit 4 binary (LGPL 2.1, prerelease — the first VLCKit with Picture in
+// Picture). There is no official SwiftPM package, so the xcframework is vendored by
+// `Scripts/fetch-vlckit.sh` (gitignored). When it is absent — Linux CI, or a fresh checkout before
+// the fetch — the Playback module still compiles because VLCPlaybackEngine is wrapped in
+// `#if canImport(VLCKit)`; only the pure modules are testable then.
 let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-let vlcKitPath = "Vendor/MobileVLCKit.xcframework"
+let vlcKitPath = "Vendor/VLCKit.xcframework"
 let hasVLCKit = FileManager.default.fileExists(atPath: packageDir.appendingPathComponent(vlcKitPath).path)
 
 let package = Package(
@@ -48,10 +49,11 @@ let package = Package(
         // VLCKit wrapper exposing an async state stream to SwiftUI.
         .target(
             name: "Playback",
-            dependencies: ["MediaCore"] + (hasVLCKit ? [.target(name: "MobileVLCKit", condition: .when(platforms: [.iOS]))] : []),
+            dependencies: ["MediaCore"] + (hasVLCKit ? [.target(name: "VLCKit", condition: .when(platforms: [.iOS]))] : []),
             linkerSettings: hasVLCKit ? [
-                // System frameworks and libraries MobileVLCKit depends on (dynamic xcframework, embedded by Xcode).
+                // System frameworks and libraries VLCKit depends on (dynamic xcframework, embedded by Xcode).
                 .linkedFramework("AVFoundation", .when(platforms: [.iOS])),
+                .linkedFramework("AVKit", .when(platforms: [.iOS])),
                 .linkedFramework("AudioToolbox", .when(platforms: [.iOS])),
                 .linkedFramework("CFNetwork", .when(platforms: [.iOS])),
                 .linkedFramework("CoreGraphics", .when(platforms: [.iOS])),
@@ -78,5 +80,5 @@ let package = Package(
 
         .testTarget(name: "MediaCoreTests", dependencies: ["MediaCore"]),
         .testTarget(name: "MetadataTests", dependencies: ["Metadata"]),
-    ] + (hasVLCKit ? [.binaryTarget(name: "MobileVLCKit", path: vlcKitPath)] : [])
+    ] + (hasVLCKit ? [.binaryTarget(name: "VLCKit", path: vlcKitPath)] : [])
 )

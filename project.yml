@@ -54,6 +54,24 @@ targets:
         NSBonjourServices: [_smb._tcp, _webdav._tcp, _webdavs._tcp, _afpovertcp._tcp]
         LSSupportsOpeningDocumentsInPlace: true
         UIFileSharingEnabled: true
+        # "Open in Reel": other apps (DS file, Files, Safari downloads, share sheets) offer Reel for any video.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Video
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.movie, public.video, public.audiovisual-content, public.mpeg-4, com.apple.quicktime-movie, public.avi, org.matroska.mkv, public.mpeg-2-transport-stream, com.microsoft.windows-media-wmv]
+        # reel://play?url=<percent-encoded URL>  and the Infuse-style  reel://x-callback-url/play?url=...
+        CFBundleURLTypes:
+          - CFBundleURLName: uk.co.ketelle.reel
+            CFBundleURLSchemes: [reel]
+        # Matroska has no system UTI; declaring it lets .mkv files route here.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.matroska.mkv
+            UTTypeDescription: Matroska Video
+            UTTypeConformsTo: [public.movie]
+            UTTypeTagSpecification:
+              public.filename-extension: [mkv, mka, mks]
+              public.mime-type: [video/x-matroska]
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
         NSAppTransportSecurity:

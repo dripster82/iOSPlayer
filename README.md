@@ -18,11 +18,11 @@ network shares or local storage, sorts the library into TV and Films, and fetche
 ## Build
 
 The Xcode project is generated from `project.yml` so it never conflicts in git. VLCKit is not
-on Swift Package Manager, so VideoLAN's official MobileVLCKit binary is fetched once per checkout.
+on Swift Package Manager, so VideoLAN's official VLCKit 4 binary is fetched once per checkout.
 
 ```sh
 brew install xcodegen
-Scripts/fetch-vlckit.sh    # ~260 MB download → Packages/ReelKit/Vendor/MobileVLCKit.xcframework (gitignored)
+Scripts/fetch-vlckit.sh    # ~520 MB download → Packages/ReelKit/Vendor/VLCKit.xcframework (iOS slices only, ~140 MB, gitignored)
 xcodegen generate          # creates Reel.xcodeproj
 open Reel.xcodeproj
 ```
@@ -45,14 +45,15 @@ copy the `info.properties` and entitlements from `project.yml`/`Reel/Reel.entitl
 
 ### VLCKit
 
-`Packages/ReelKit/Package.swift` declares `MobileVLCKit` as a local binary target at
-`Packages/ReelKit/Vendor/MobileVLCKit.xcframework`, only when that folder exists. Without it the pure
+`Packages/ReelKit/Package.swift` declares `VLCKit` as a local binary target at
+`Packages/ReelKit/Vendor/VLCKit.xcframework`, only when that folder exists. Without it the pure
 modules still build and test (Linux CI, fresh checkout); `VLCPlaybackEngine` is behind
-`#if canImport(MobileVLCKit)`. The fetch script pins MobileVLCKit **3.7.3** by sha256 from
-`download.videolan.org/pub/cocoapods/prod/`. To upgrade, change `VERSION` and `SHA256` in the script and
-delete the `Vendor` folder.
+`#if canImport(VLCKit)`. The fetch script pins VLCKit **4.0.0a19** (a prerelease: the first VLCKit with
+Picture in Picture) by sha256 from `download.videolan.org/pub/cocoapods/unstable/`, keeps only the iOS
+device and simulator slices and strips the dSYMs. To upgrade, change `VERSION` and `SHA256` in the
+script and delete the `Vendor` folder. `VLCKIT_ARCHIVE=/path/to/VLCKit-4.…tar.xz` reuses a download.
 
-The licence route is LGPL: MobileVLCKit 3.7.3 is a **dynamic** framework (verified with `file`), embedded
+The licence route is LGPL: VLCKit 4 is a **dynamic** framework (verified with `file`), embedded
 by Xcode, and credited in Settings → About → Licences. Do not switch to a static build.
 
 ## Run
@@ -88,12 +89,15 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 | Scanner (incremental), matcher, SwiftData schema | Done |
 | iCloud sync (CKSyncEngine): sources, scanned library, watch state, favourites, overrides, collections; passwords via iCloud Keychain | Done |
 | VLCKit engine: tracks, subtitles, delays, chapters, rate | Done |
+| Picture in Picture (VLCKit 4; auto on swipe-home, button in player) | Done |
 | Player UI: gestures, scrubber, sheets, Up Next, error card, lock | Done |
 | Home, TV, Films (genre/year/sort filters), detail pages, Search, Favourites, Collections, History | Done |
 | Sources, Add Source (discovered/manual/local), folder tags, file browser | Done |
 | Needs Review, Fix Match, Settings, Licences, Attribution | Done |
 | FTP/SFTP/NFS/DLNA browsing | Not yet (greyed out in Add Source) |
 | Anime matching (AniDB titles + Anime-Lists → TMDb), TheTVDB fallback (optional key) | Done |
+| Picture in Picture (VLCKit 4) | Done |
+| "Open in Reel" from other apps + `reel://play?url=` scheme | Done |
 | OpenSubtitles search, Fanart.tv | Not yet |
 | Picture in Picture, scrub thumbnails | Not yet (phase 4) |
 | Background scan continuation (background task + BGProcessingTask) | Done |

@@ -508,7 +508,7 @@ This section turns each feature area into a concrete approach: libraries, data m
 **System integration**
 - `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` for lock screen and Control Centre.
 - Background audio via the `audio` background mode; video pauses, audio continues if the user enables "Play audio in background".
-- PiP: VLCKit does not render through `AVPlayerLayer`, so native PiP needs an `AVSampleBufferDisplayLayer` bridge. This is the riskiest item in the engine. Plan: ship without PiP in phase 1, add it in phase 4 via the sample-buffer bridge, and treat it as cut-able.
+- PiP: VLCKit 3.x had no PiP at all (it does not render through `AVPlayerLayer`). VLCKit 4 ships its own `AVSampleBufferDisplayLayer` bridge: a drawable that conforms to `VLCPictureInPictureDrawable` gets a `VLCPictureInPictureWindowControlling` controller, and the system PiP window drives playback through `VLCPictureInPictureMediaControlling`. Reel moved to VLCKit 4 (prerelease) for this in Oct 2026; PiP starts when the scene goes to background mid-playback and from a button in the player.
 - AirPlay: video AirPlay of VLC-decoded content is screen mirroring, not native streaming. Audio-only AirPlay works via the system route picker. Document this honestly in Settings.
 
 ### 11.3 Source access
@@ -642,7 +642,7 @@ devices converge; Files-app sources stay device-local. Credentials and playback 
 
 | Package | Purpose | Licence |
 |---|---|---|
-| MobileVLCKit 3.7.3 (VideoLAN binary, dynamic xcframework, fetched by `Scripts/fetch-vlckit.sh`; no SwiftPM package exists) | Playback | LGPL 2.1 |
+| VLCKit 4.0.0a19 (VideoLAN prerelease binary from `download.videolan.org/pub/cocoapods/unstable`, dynamic xcframework, iOS slices only, fetched by `Scripts/fetch-vlckit.sh`; no SwiftPM package exists; replaced MobileVLCKit 3.7.3 for Picture in Picture) | Playback | LGPL 2.1 |
 | AMSMB2 4.x | SMB browsing | MIT |
 | AniDB titles dump (anidb.net/api/anime-titles.xml.gz) | Anime title recognition, offline | AniDB non-commercial terms; attribution in Settings |
 | Anime-Lists (github.com/Anime-Lists/anime-lists) | AniDB → TMDb season/episode mapping | Public data file; attribution in Settings |
@@ -658,7 +658,7 @@ Everything other than VLCKit is permissive. All notices go in Settings > About >
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| PiP with VLCKit | No native PiP | Sample-buffer bridge in phase 4; cut if it fails |
+| PiP with VLCKit | No native PiP in 3.x | Done via VLCKit 4's built-in sample-buffer bridge (Oct 2026). Residual risk: VLCKit 4 is a prerelease; pin the alpha, re-test playback on each bump |
 | Video AirPlay is mirroring only | Lower quality on Apple TV | Document; consider AVPlayer path for MP4 later |
 | Dolby Vision profile 5 | Washed-out colour | Detect and warn; fall back to HDR10 |
 | SMB seek speed on Wi-Fi | Slow scrubbing | Larger network cache; thumbnail pre-generation |
@@ -690,8 +690,8 @@ Packages/ReelKit/          One Swift package, six modules
 
 Written without Xcode access, so the first build will surface a few compile errors. Where to look first, in order of likelihood:
 
-1. **VLCKit package URL and product name** (`Package.swift`, `Playback` target). VideoLAN has renamed these. Fix the URL/product and the `import VLCKit` / `import MobileVLCKit` fallback in `VLCPlaybackEngine.swift` picks up whichever exists.
-2. **VLCKit 3.x API spelling** in `VLCPlaybackEngine.swift`: `audioTrackIndexes`/`audioTrackNames`, `videoSubTitlesIndexes`/`videoSubTitlesNames`, `chapterDescriptions(ofTitle:)`, `VLCChapterDescriptionName`. If a name differs, Xcode's fix-it will point at the right one.
+1. **VLCKit** — resolved: there is no SwiftPM package; `Scripts/fetch-vlckit.sh` vendors VideoLAN's VLCKit 4 xcframework and `Package.swift` declares it as a local binary target (HANDOVER.md §3.1).
+2. **VLCKit API spelling** — resolved: `VLCPlaybackEngine.swift` is written against the VLCKit 4 headers (`audioTracks`/`textTracks` of `VLCMediaPlayer.Track`, `chapterDescriptions(ofTitle:)` returning `VLCMediaPlayer.ChapterDescription`, `setCropRatioWithNumerator(_:denominator:)`, `mediaPlayerStateChanged(_ state:)`).
 3. **AMSMB2 async API** in `SMBSource.swift`: `connectShare(name:)`, `contentsOfDirectory(atPath:)`, `attributesOfItem(atPath:)`. All exist in 3.x; check the returned attribute keys if listings come back empty.
 4. **SwiftData `#Predicate` expressions** in `LibraryStore.swift` and `SyncEngine.swift`. The macro rejects some expressions (e.g. captured optionals). Simplify the predicate and filter in Swift if one is refused.
 5. **`CKSyncEngine` delegate signatures** in `SyncEngine.swift`. Both delegate methods are `nonisolated` and hop to the main actor; if Xcode complains about isolation, mark the class `nonisolated` for those two methods only.

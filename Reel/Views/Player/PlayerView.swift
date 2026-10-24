@@ -15,6 +15,7 @@ struct PlayerContentView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject var engine: VLCPlaybackEngine
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
@@ -75,6 +76,16 @@ struct PlayerContentView: View {
             if s == .playing { scheduleHide() } else { showControls() }
         }
         .onDisappear { hideTask?.cancel() }
+        .onChange(of: scenePhase) { _, phase in
+            // Like YouTube: leaving the app mid-playback hands the video to the system PiP window, and
+            // coming back takes it over again. VLCKit may already have started PiP itself on the way out
+            // (its controller allows automatic start from inline); `startPictureInPicture` is a no-op then.
+            switch phase {
+            case .background where engine.status == .playing: engine.startPictureInPicture()
+            case .active: engine.stopPictureInPicture()
+            default: break
+            }
+        }
         .sheet(item: $sheet) { which in
             TrackSheet(kind: which, engine: engine, settings: settings, fill: $fill, onFill: { engine.setFill(fill) })
                 .presentationDetents([.medium, .large]).presentationBackground(.thinMaterial)
@@ -142,6 +153,7 @@ struct PlayerContentView: View {
                 }
                 Spacer()
                 AirPlayButton().frame(width: 38, height: 38)
+                if engine.canStartPictureInPicture { circle("pip.enter") { engine.startPictureInPicture() } }
                 circle("captions.bubble", on: engine.currentSubtitleTrack != nil) { sheet = .subtitles }
                 circle("waveform") { sheet = .audio }
                 circle("ellipsis") { sheet = .more }
@@ -349,7 +361,8 @@ struct TrackSheet: View {
                     ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in row("\(r.formatted())×", sub: r == 1 ? "Normal" : nil, on: engine.rate == Float(r)) { engine.setRate(Float(r)); dismiss() } }
                 case .more:
                     Toggle("Fill screen", isOn: $fill).onChange(of: fill) { _, _ in onFill() }
-                    Label("Picture in Picture — phase 4", systemImage: "pip").foregroundStyle(.secondary)
+                    Button { engine.startPictureInPicture(); dismiss() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
+                        .disabled(!engine.canStartPictureInPicture)
                     Label("AirPlay video is screen mirroring with VLCKit; audio-only AirPlay streams natively.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)
                 }
             }
