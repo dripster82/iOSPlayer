@@ -289,8 +289,13 @@ public final class LibraryStore: ObservableObject {
     }
 
     /// Re-points every file of an item at a different TMDb entry. Used by Fix Match.
-    public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws {
-        let files = item.files
+    /// Old item key → the key of the title it was rematched to this launch, so an open page can follow.
+    public private(set) var rematched: [String: String] = [:]
+
+    /// Returns the key of the item the files now belong to. For a show, every episode's file moves.
+    @discardableResult
+    public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws -> String? {
+        let files = item.kind == .show ? item.episodes.flatMap(\.files) : item.files
         for f in files {
             let o = override(for: f)
             o.forcedTMDbID = tmdbID
@@ -298,21 +303,27 @@ public final class LibraryStore: ObservableObject {
             o.updatedAt = Date(); o.pendingSync = true
             f.item = nil
         }
-        var deleted: [String] = []
-        if item.files.isEmpty, item.kind != .show {
-            // Not deleted here: the detail page under the Fix Match sheet still holds this object.
-            deleted.append(SyncKeys.item(item.itemKey))
-            item.pendingDeletion = true
-            item.hidden = true
-        }
         try context.save()
         let matcher = Matcher(context: context, tmdb: tmdb)
         for f in files { _ = await matcher.match(f) }
+        // Only now, with the new title in place, retire the old one. The page under the sheet redraws
+        // on every save; flagging the orphan before its replacement existed left it with nothing to show.
+        var deleted: [String] = []
+        let orphans = item.kind == .show ? item.episodes.filter { $0.files.isEmpty } + [item] : (item.files.isEmpty ? [item] : [])
+        for o in orphans {
+            // Not deleted here: the detail page under the Fix Match sheet still holds this object.
+            deleted.append(SyncKeys.item(o.itemKey))
+            o.pendingDeletion = true
+            o.hidden = true
+        }
+        let target = files.first?.item.map { $0.kind == .episode ? ($0.show?.itemKey ?? $0.itemKey) : $0.itemKey }
+        if let target { rematched[item.itemKey] = target }
         try context.save()
         if !deleted.isEmpty { syncHooks?.deleted(deleted) }
-        invalidateCaches()
         notifySync()
-        Diagnostics.log("library", "fix match: \(item.title.prefix(40)) → tmdb \(tmdbID) (\(files.count) files)")
+        objectWillChange.send()
+        Diagnostics.log("library", "fix match: \(item.title.prefix(40)) → tmdb \(tmdbID) (\(files.count) files) now \(target ?? "unmatched")")
+        return target
     }
 
     /// Deletes the orphans Fix Match left behind. Called once at launch, before any page can hold one.

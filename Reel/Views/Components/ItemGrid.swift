@@ -59,12 +59,47 @@ struct ItemRow: View {
     }
 }
 
-/// Resolves an itemKey pushed via NavigationLink(value:) to the right detail view.
+/// Library screens pushed by value. A screen pushed with the view-based `NavigationLink { … }`
+/// cannot resolve value-based links inside it (SwiftUI pushes it outside the stack's path), which is
+/// why posters inside a custom collection did nothing. Everything that contains posters is pushed
+/// by value through this route, registered wherever `itemNavigation()` is.
+enum LibraryRoute: Hashable {
+    case favourites
+    case collections
+    case collection(UUID)
+    case settings
+    case needsReview
+}
+
+struct LibraryRouteDestination: View {
+    @EnvironmentObject private var library: LibraryStore
+    let route: LibraryRoute
+    @State private var fixMatchTarget: MediaItem?
+    var body: some View {
+        switch route {
+        case .favourites: FavouritesView()
+        case .collections: CollectionsView()
+        case .settings: SettingsView()
+        case .needsReview: NeedsReviewView()
+        case .collection(let id):
+            if let c = library.collections().first(where: { $0.id == id }) {
+                ScrollView { ItemGrid(items: c.itemKeys.compactMap { library.item($0) }, fixMatchTarget: $fixMatchTarget).padding(.vertical) }
+                    .navigationTitle(c.name)
+                    .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
+            } else {
+                ContentUnavailableView("Collection removed", systemImage: "rectangle.stack")
+            }
+        }
+    }
+}
+
+/// Resolves an itemKey pushed via NavigationLink(value:) to the right detail view. After Fix Match
+/// the old key points at a hidden orphan; the page follows it to the title it was rematched to.
 struct ItemDestination: View {
     @EnvironmentObject private var library: LibraryStore
     let key: String
     var body: some View {
-        if let item = library.item(key) {
+        if let item = library.item(key).flatMap({ $0.pendingDeletion ? library.rematched[key].flatMap(library.item) : $0 }) {
             switch item.kind {
             case .show: ShowDetailView(show: item)
             case .film: FilmDetailView(film: item)
@@ -80,5 +115,6 @@ extension View {
     /// Attach once per NavigationStack so `NavigationLink(value: itemKey)` works everywhere beneath.
     func itemNavigation() -> some View {
         navigationDestination(for: String.self) { ItemDestination(key: $0) }
+            .navigationDestination(for: LibraryRoute.self) { LibraryRouteDestination(route: $0) }
     }
 }

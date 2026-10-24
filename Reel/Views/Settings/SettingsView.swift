@@ -67,6 +67,8 @@ struct SettingsView: View {
             Section("Library") {
                 Toggle(isOn: $settings.scanOnLaunch) { VStack(alignment: .leading) { Text("Scan for new media on launch"); Text("Checks every source when the app opens (at most every 10 minutes). Sources → Refresh all does it on demand.").font(.caption).foregroundStyle(.secondary) } }
                 NavigationLink { SourcesView() } label: { Label("Sources", systemImage: "externaldrive.connected.to.line.below") }
+                NavigationLink(value: LibraryRoute.favourites) { Label("Favourites", systemImage: "heart") }
+                NavigationLink(value: LibraryRoute.collections) { Label("Collections", systemImage: "rectangle.stack") }
                 NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }
                 NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(hiddenCount)") }
                 NavigationLink { HistoryView() } label: { Text("Watch history") }

@@ -66,12 +66,12 @@ struct HomeView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 let n = rows.reviewCount
-                NavigationLink { NeedsReviewView() } label: {
+                NavigationLink(value: LibraryRoute.needsReview) {
                     Image(systemName: "wrench.and.screwdriver").overlay(alignment: .topTrailing) {
                         if n > 0 { Text("\(n)").font(.caption2.bold()).padding(3).background(.red, in: Circle()).foregroundStyle(.white).offset(x: 8, y: -8) }
                     }
                 }
-                NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
+                NavigationLink(value: LibraryRoute.settings) { Image(systemName: "gearshape") }
             }
         }
         .itemNavigation()

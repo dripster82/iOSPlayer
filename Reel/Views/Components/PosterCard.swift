@@ -85,6 +85,14 @@ struct ItemContextMenu: ViewModifier {
             if item.kind != .episode, settings.tmdb != nil {
                 Button { fixMatchTarget = item } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") }
             }
+            let collections = library.collections()
+            if !collections.isEmpty, item.kind != .episode {
+                Menu("Add to collection") {
+                    ForEach(collections, id: \.id) { c in
+                        Button { library.toggle(item.itemKey, in: c) } label: { Label(c.name, systemImage: c.itemKeys.contains(item.itemKey) ? "checkmark" : "rectangle.stack") }
+                    }
+                }
+            }
             Divider()
             Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
         }
