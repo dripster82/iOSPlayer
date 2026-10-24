@@ -8,6 +8,21 @@ struct HomeView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @State private var fixMatchTarget: MediaItem?
     @State private var showReview = false
+    /// Rows are computed off the render path: the store publishes on every scan step, and walking every
+    /// show for Next Up on each of those re-renders was dropping taps in the player sitting above Home.
+    @State private var rows = Rows()
+    @State private var refreshTask: Task<Void, Never>?
+
+    struct Rows {
+        var continueWatching: [(MediaItem, WatchState)] = []
+        var nextUp: [MediaItem] = []
+        var favourites: [MediaItem] = []
+        var recentlyAdded: [MediaItem] = []
+        var unwatchedFilms: [MediaItem] = []
+        var isEmpty = true
+        var reviewCount = 0
+        var unmatched = 0
+    }
 
     var body: some View {
         ScrollView {
@@ -15,22 +30,21 @@ struct HomeView: View {
                 offlineBanner
                 scanBanner
                 unmatchedBanner
-                let cont = library.continueWatching()
-                ItemRow(title: "Continue Watching", items: cont.map(\.0), wide: true, subtitle: { item in
-                    guard let ws = library.watchState(item.itemKey) else { return "" }
+                ItemRow(title: "Continue Watching", items: rows.continueWatching.map(\.0), wide: true, subtitle: { item in
+                    guard let ws = rows.continueWatching.first(where: { $0.0.itemKey == item.itemKey })?.1 else { return "" }
                     let prefix = item.kind == .episode ? (item.episodeCode ?? "") + " · " : ""
                     return prefix + MediaFormat.minutesLeft(ws.duration - ws.position)
-                }, fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Next Up", items: library.nextUp(), wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Favourites", items: Array(library.favourites().prefix(12)), fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Recently Added", items: recentlyAdded, subtitle: { _ in "Added recently" }, fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Unwatched Films", items: unwatchedFilms, fixMatchTarget: $fixMatchTarget)
-                if library.items(kind: .film).isEmpty && library.items(kind: .show).isEmpty {
+                }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)
+                ItemRow(title: "Next Up", items: rows.nextUp, wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)
+                ItemRow(title: "Favourites", items: rows.favourites, fixMatchTarget: $fixMatchTarget)
+                ItemRow(title: "Recently Added", items: rows.recentlyAdded, subtitle: { _ in "Added recently" }, fixMatchTarget: $fixMatchTarget)
+                ItemRow(title: "Unwatched Films", items: rows.unwatchedFilms, fixMatchTarget: $fixMatchTarget)
+                if rows.isEmpty {
                     ContentUnavailableView {
                         Label("Your library is empty", systemImage: "film.stack")
                     } description: {
                         Text(settings.tmdb == nil ? "Add a TMDb API key in Settings, then add a source and scan."
-                             : library.unmatchedFileCount() > 0 ? "Your files are scanned but not matched yet. Tap Match now above."
+                             : rows.unmatched > 0 ? "Your files are scanned but not matched yet. Tap Match now above."
                              : "Add a source and run a scan to fill it.")
                     } actions: {
                         NavigationLink("Open Sources") { SourcesView() }
@@ -42,7 +56,7 @@ struct HomeView: View {
         .navigationTitle("Home")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                let n = library.filesNeedingReview().count
+                let n = rows.reviewCount
                 NavigationLink { NeedsReviewView() } label: {
                     Image(systemName: "wrench.and.screwdriver").overlay(alignment: .topTrailing) {
                         if n > 0 { Text("\(n)").font(.caption2.bold()).padding(3).background(.red, in: Circle()).foregroundStyle(.white).offset(x: 8, y: -8) }
@@ -53,13 +67,32 @@ struct HomeView: View {
         }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
+        .onAppear { refreshRows() }
+        .onReceive(library.objectWillChange) { _ in scheduleRefresh() }
     }
 
-    private var recentlyAdded: [MediaItem] {
-        (library.items(kind: .film) + library.items(kind: .show)).sorted { $0.addedAt > $1.addedAt }.prefix(12).map { $0 }
+    /// Coalesces bursts of store changes (a running scan) into one recompute, after the change has landed.
+    private func scheduleRefresh() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            refreshRows()
+        }
     }
-    private var unwatchedFilms: [MediaItem] {
-        library.items(kind: .film).filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
+
+    private func refreshRows() {
+        var r = Rows()
+        r.continueWatching = library.continueWatching()
+        r.nextUp = library.nextUp()
+        r.favourites = Array(library.favourites().prefix(12))
+        let films = library.items(kind: .film), shows = library.items(kind: .show)
+        r.recentlyAdded = (films + shows).sorted { $0.addedAt > $1.addedAt }.prefix(12).map { $0 }
+        r.unwatchedFilms = films.filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
+        r.isEmpty = films.isEmpty && shows.isEmpty
+        r.reviewCount = library.filesNeedingReview().count
+        r.unmatched = library.unmatchedFileCount()
+        rows = r
     }
 
     @ViewBuilder private var offlineBanner: some View {
@@ -77,7 +110,7 @@ struct HomeView: View {
     /// Files were scanned but never matched (no TMDb key at the time, or the matcher hit errors).
     @ViewBuilder private var unmatchedBanner: some View {
         let scanning = library.scanProgress.values.contains { $0.phase != .done && $0.phase != .failed }
-        let unmatched = library.unmatchedFileCount()
+        let unmatched = rows.unmatched
         if !scanning, unmatched > 0 {
             if let err = library.lastMatchError {
                 Banner(colour: .red, text: "\(unmatched) files not matched. Last error: \(err)") {

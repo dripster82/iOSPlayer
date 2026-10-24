@@ -76,6 +76,18 @@ public final class LibraryStore: ObservableObject {
         purgeInBackground(folder, sourceID: record.id)
     }
 
+    private var lastProgressPublish: [UUID: Date] = [:]
+
+    /// Every publish re-renders every view observing the store, so progress is limited to once a second
+    /// per source, except for phase changes, which always go through.
+    private func publishProgress(_ p: ScanProgress) {
+        let now = Date()
+        let phaseChanged = scanProgress[p.sourceID]?.phase != p.phase
+        guard phaseChanged || now.timeIntervalSince(lastProgressPublish[p.sourceID] ?? .distantPast) >= 1 else { return }
+        lastProgressPublish[p.sourceID] = now
+        scanProgress[p.sourceID] = p
+    }
+
     /// Folders being emptied right now, so the UI can show it.
     @Published public private(set) var purging: Set<String> = []
 
@@ -118,7 +130,7 @@ public final class LibraryStore: ObservableObject {
         scanTasks[id] = Task { [weak self] in
             do {
                 try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
-                    Task { @MainActor [weak self] in self?.scanProgress[id] = p }
+                    Task { @MainActor [weak self] in self?.publishProgress(p) }
                 }
             } catch is CancellationError {
                 // Expected when the background task expires or the user stops a scan.
@@ -311,9 +323,14 @@ public final class LibraryStore: ObservableObject {
         return candidates.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
-    /// The show page's Play button: the episode after the last played one, else the first episode.
+    /// The show page's Play button: the episode still in progress if there is one, else the one after
+    /// the last played, else the first episode.
     public func nextEpisode(of show: MediaItem) -> MediaItem? {
-        episodeAfterLastPlayed(in: show) ?? orderedEpisodes(of: show, includingSpecials: false).first ?? orderedEpisodes(of: show, includingSpecials: true).first
+        let states = Dictionary(uniqueKeysWithValues: watchStates().map { ($0.itemKey, $0) })
+        if let (last, _) = lastPlayed(in: show, states: states), states[last.itemKey]?.isInProgress == true { return last }
+        return episodeAfterLastPlayed(in: show, states: states)
+            ?? orderedEpisodes(of: show, includingSpecials: false).first
+            ?? orderedEpisodes(of: show, includingSpecials: true).first
     }
 
     /// The episode following `episode` in season/episode order; specials only follow specials.

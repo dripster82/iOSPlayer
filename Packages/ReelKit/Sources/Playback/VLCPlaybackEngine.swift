@@ -195,6 +195,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func handleTimeChange() {
         // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
         let now = TimeInterval(player.time.intValue) / 1000
+        // VLCKit does not always report a distinct .playing state (opening → buffering → ticks), so the
+        // resume seek must also be applied here, on the first tick, or playback starts from zero.
+        if !appliedStart, let start = item?.startAt, start > 0, now >= 0 {
+            appliedStart = true
+            seek(to: start)
+            return
+        }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
         if let length = player.media?.length.intValue, length > 0 {
             let seconds = TimeInterval(length) / 1000

@@ -27,6 +27,8 @@ struct ItemRow: View {
     var wide = false
     var subtitle: ((MediaItem) -> String)? = nil
     var seeAll: (() -> Void)? = nil
+    /// When set, tapping a card does this (e.g. resume playback) instead of navigating to the detail page.
+    var onTap: ((MediaItem) -> Void)? = nil
     @Binding var fixMatchTarget: MediaItem?
 
     var body: some View {
@@ -40,8 +42,12 @@ struct ItemRow: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 10) {
                         ForEach(items, id: \.itemKey) { item in
-                            NavigationLink(value: item.itemKey) {
-                                PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118)
+                            Group {
+                                if let onTap {
+                                    Button { onTap(item) } label: { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
+                                } else {
+                                    NavigationLink(value: item.itemKey) { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
+                                }
                             }
                             .buttonStyle(.plain)
                             .itemContextMenu(item, fixMatchTarget: $fixMatchTarget)

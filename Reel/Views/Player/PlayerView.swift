@@ -14,7 +14,6 @@ struct PlayerView: View {
 struct PlayerContentView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var library: LibraryStore
     @ObservedObject var engine: VLCPlaybackEngine
 
     @State private var controlsVisible = true
