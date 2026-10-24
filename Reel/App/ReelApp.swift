@@ -58,7 +58,16 @@ struct ReelApp: App {
     private func open(_ url: URL) {
         if url.isFileURL { player.playExternal(url, settings: settings); return }
         let scheme = url.scheme?.lowercased() ?? ""
-        guard scheme == "reel" || scheme == "vlc-x-callback" else { return }
+        guard ["reel", "vlc-x-callback", "vlc", "vlcx"].contains(scheme) else { return }
+        // The plain VLC form embeds the stream after the scheme: vlc://http://host/path or vlc://smb://…
+        if scheme == "vlc" || scheme == "vlcx", url.host != "x-callback-url" {
+            let raw = String(url.absoluteString.dropFirst(scheme.count + 3))
+            if let target = URL(string: raw) ?? URL(string: raw.removingPercentEncoding ?? raw), target.scheme != nil {
+                Diagnostics.log("app", "opened via \(scheme): \(Diagnostics.safe(target))")
+                player.playExternal(target, settings: settings)
+                return
+            }
+        }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let action = (url.host == "x-callback-url" ? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : url.host) ?? ""
         // reel://play?url=…  reel://x-callback-url/play?url=…  vlc-x-callback://x-callback-url/stream?url=… (and /download)

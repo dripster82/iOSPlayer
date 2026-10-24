@@ -75,7 +75,7 @@ targets:
           # They only know a fixed list of players, so answering VLC's scheme is the only way into their menus.
           # When VLC itself is installed iOS picks one of the two; nothing Reel can do about that.
           - CFBundleURLName: uk.co.ketelle.reel.vlc-compat
-            CFBundleURLSchemes: [vlc-x-callback]
+            CFBundleURLSchemes: [vlc-x-callback, vlc, vlcx]
         # Matroska has no system UTI; declaring it lets .mkv files route here.
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: org.matroska.mkv
