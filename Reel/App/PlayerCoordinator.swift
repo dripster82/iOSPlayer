@@ -21,6 +21,17 @@ final class PlayerCoordinator: ObservableObject {
     /// Set instead of `isPresented` when the file should play through AVPlayer (AirPlay, native container).
     struct NativePlayback: Identifiable { var itemKey: String; var url: URL; var startAt: TimeInterval; var id: String { itemKey } }
     @Published var nativePlayback: NativePlayback?
+    /// Fill (crop) remembered for this show, applied by the player view when it appears.
+    @Published private(set) var preferredFill: Bool?
+    /// Speed remembered for this show, applied once playback has begun (VLC resets it on load).
+    private var pendingRate: Float?
+    /// Intro window learned from the viewer's own skips, for shows whose chapters do not say.
+    @Published private(set) var learnedIntro: IntroMemory.Window?
+
+    enum SleepTimer: Hashable { case minutes(Int), endOfEpisode }
+    @Published private(set) var sleepTimer: SleepTimer?
+    @Published private(set) var sleepFiresAt: Date?
+    private var sleepTask: Task<Void, Never>?
 
     /// True when AirPlay is the current audio route and AVFoundation can stream this URL itself.
     static func prefersNativePlayer(for url: URL) -> Bool {
@@ -42,12 +53,51 @@ final class PlayerCoordinator: ObservableObject {
         statusWatcher = engine.$status.sink { [weak self] status in
             guard let self else { return }
             switch status {
+            case .playing:
+                if let rate = self.pendingRate { self.pendingRate = nil; self.engine.setRate(rate) }
             case .paused: self.saveProgress()
             case .ended: self.saveProgress(markWatched: true); self.handleEnded()
             default: break
             }
         }
+        engine.onUserSeek = { [weak self] from, to in self?.noteUserSeek(from: from, to: to) }
     }
+
+    /// A forward jump inside the first ten minutes, 20 s to 4 min long, is probably the viewer skipping
+    /// the titles; remember it for the show and see whether two such jumps agree.
+    private func noteUserSeek(from: TimeInterval, to: TimeInterval) {
+        guard let current, current.kind == .episode, let show = current.show, from < 600, to - from >= 20, to - from <= 240 else { return }
+        // Skips the app made for the viewer (the button, a learned window) teach nothing new.
+        if let intro = engine.chapters.intro, abs(to - (intro.start + intro.duration)) < 1 { return }
+        if let learned = learnedIntro, abs(to - learned.end) < 1 { return }
+        IntroMemory.record(showKey: show.itemKey, from: from, to: to)
+        let window = IntroMemory.window(showKey: show.itemKey)
+        if window != learnedIntro {
+            learnedIntro = window
+            if let window { Diagnostics.log("player", "learned intro for \(show.title.prefix(40)): \(Int(window.start))–\(Int(window.end))s") }
+        }
+    }
+
+    // MARK: - Sleep timer
+
+    func setSleepTimer(_ timer: SleepTimer?) {
+        sleepTask?.cancel(); sleepTask = nil
+        sleepTimer = timer
+        sleepFiresAt = nil
+        guard case .minutes(let m) = timer else { return }
+        sleepFiresAt = Date().addingTimeInterval(TimeInterval(m * 60))
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(m * 60))
+            guard !Task.isCancelled, let self else { return }
+            Diagnostics.log("player", "sleep timer: pausing after \(m) min")
+            self.engine.pause()
+            self.saveProgress()
+            self.sleepTimer = nil
+            self.sleepFiresAt = nil
+        }
+    }
+    /// True while a timer says the current episode is the last one tonight.
+    var stopsAfterCurrent: Bool { sleepTimer == .endOfEpisode }
 
     /// A playback URL resolved ahead of time for the next episode (see `prepareNext`).
     private var prepared: (fileID: PersistentIdentifier, url: URL, subs: [URL], at: Date)?
@@ -105,6 +155,10 @@ final class PlayerCoordinator: ObservableObject {
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)
                 let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume,
                                                 externalSubtitles: subs + SubtitleStore.subtitles(for: item.itemKey), itemKey: item.itemKey)
+                let memory = TrackMemory.choice(for: Self.memoryKey(item))
+                preferredFill = memory?.fill
+                pendingRate = memory?.rate.flatMap { $0 == 1 ? nil : $0 }
+                learnedIntro = item.kind == .episode ? item.show.flatMap { IntroMemory.window(showKey: $0.itemKey) } : nil
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
@@ -119,11 +173,15 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
-    /// Twenty seconds into a play, make the scrubber's preview frames if this title has none yet.
+    /// A minute into a play, make the scrubber's preview frames if this title has none yet. Each frame
+    /// is another open of the stream, so none are made on cellular, in Low Power Mode or on a hot device.
     private func scheduleScrubThumbnails(key: String, url: URL) {
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: .seconds(60))
             guard let self, self.current?.itemKey == key, self.engine.status == .playing else { return }
+            guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
+                Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
+            }
             ScrubThumbnails.shared.ensure(key: key, url: url)
         }
     }
@@ -137,6 +195,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredAudioLanguage = settings.audioLanguage
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        opts.dialogueBoost = settings.dialogueBoost
         Self.applySubtitleStyle(&opts, settings)
         if let choice = TrackMemory.choice(for: Self.memoryKey(item)) {
             if let audio = choice.audioLanguage { opts.preferredAudioLanguage = audio }
@@ -155,6 +214,36 @@ final class PlayerCoordinator: ObservableObject {
         opts.subtitleColor = UInt32(settings.subtitleColor, radix: 16) ?? 0xFFFFFF
         opts.subtitleBackground = settings.subtitleBackground
         opts.subtitleMargin = settings.subtitleRaised ? 90 : 0
+    }
+
+    func rememberRate(_ rate: Float) {
+        guard let current else { return }
+        TrackMemory.update(Self.memoryKey(current)) { $0.rate = rate == 1 ? nil : rate }
+    }
+    func rememberFill(_ fill: Bool) {
+        guard let current else { return }
+        TrackMemory.update(Self.memoryKey(current)) { $0.fill = fill }
+    }
+
+    /// Reloads the current title at the current position so a changed media option (dialogue boost)
+    /// takes effect; VLC applies audio filters when the media opens.
+    func reapplyOptions(settings: AppSettings) {
+        guard let current else { return }
+        saveProgress()
+        let at = engine.time
+        if let externalURL, currentFile == nil { playExternal(externalURL, title: current.title, settings: settings) }
+        else { play(current, file: currentFile, settings: settings) }
+        _ = at
+    }
+
+    /// For "Copy details" on the error card: the title and file, then the engine's own report.
+    func failureReport() -> String {
+        var lines = ["Reel playback report, \(Date().formatted(date: .abbreviated, time: .standard))"]
+        if let current { lines.append("title: \(current.kind == .episode ? "\(current.show?.title ?? "") \(current.episodeCode ?? "")" : current.title)") }
+        if let currentFile { lines.append("file: \(currentFile.fileName) (\(MediaFormat.bytes(currentFile.size)), \(currentFile.source?.type.rawValue ?? "?") source)") ; if let v = currentFile.videoCodec { lines.append("probe: \([currentFile.resolution, v, currentFile.audioSummary].compactMap { $0 }.joined(separator: " · "))") } }
+        if let loadError { lines.append("load error: \(loadError)") }
+        lines.append(engine.sessionReport())
+        return lines.joined(separator: "\n")
     }
 
     func rememberAudioChoice(language: String?) {
@@ -189,7 +278,9 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredAudioLanguage = settings.audioLanguage
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
+        opts.dialogueBoost = settings.dialogueBoost
         Self.applySubtitleStyle(&opts, settings)
+        preferredFill = nil; pendingRate = nil; learnedIntro = nil
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
         scheduleScrubThumbnails(key: key, url: url)
         nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
@@ -234,6 +325,8 @@ final class PlayerCoordinator: ObservableObject {
         current = nil
         currentFile = nil
         externalURL = nil
+        learnedIntro = nil
+        if case .minutes = sleepTimer { } else { setSleepTimer(nil) }
     }
 
     // MARK: -
@@ -256,6 +349,8 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     private func handleEnded() {
+        // The sleep timer's "end of episode": this was the last one tonight.
+        if sleepTimer == .endOfEpisode { setSleepTimer(nil); Diagnostics.log("player", "sleep timer: stopping at the end of the episode"); dismiss(); return }
         // The player view shows the Up Next card; auto-advance is its job so the countdown is visible.
         if upNext == nil { dismiss() }
     }

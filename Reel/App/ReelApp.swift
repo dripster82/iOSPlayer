@@ -87,6 +87,8 @@ struct ReelApp: App {
         nonmutating set { UserDefaults.standard.set(newValue, forKey: "reel.lastForegroundScan") }
     }
 
+    @State private var hasActivated = false
+
     private func scanForNewMediaIfDue() {
         guard settings.scanOnLaunch, settings.hasCompletedOnboarding, !library.isScanning,
               Date().timeIntervalSince(lastForegroundScan) > 10 * 60, !library.sources().isEmpty else { return }
@@ -106,7 +108,12 @@ struct ReelApp: App {
                 .environmentObject(smart)
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
-                .task { library.purgePendingDeletions(); await ImageLoader.shared.enforceLimit() }
+                .task {
+                    library.purgePendingDeletions()
+                    // Launch work that nobody is waiting for runs after Home has drawn its first rows.
+                    try? await Task.sleep(for: .seconds(2))
+                    await ImageLoader.shared.enforceLimit()
+                }
                 .task {
                     // Siri: act on a route an intent left, and keep the show list Siri's picker reads current.
                     ReelRoutes.onPending = { runPendingRoute() }
@@ -116,7 +123,10 @@ struct ReelApp: App {
                 .onReceive(library.objectWillChange.debounce(for: .seconds(5), scheduler: DispatchQueue.main)) { _ in
                     ReelRoutes.writeShowsSnapshot(library.items(kind: .show).map { ($0.itemKey, $0.title) })
                 }
-                .task(priority: .background) { if let tmdb = settings.tmdb { await library.backfillCollections(tmdb: tmdb) } }
+                .task(priority: .background) {
+                    try? await Task.sleep(for: .seconds(4))
+                    if let tmdb = settings.tmdb { await library.backfillCollections(tmdb: tmdb) }
+                }
                 .onOpenURL { url in open(url) }
                 .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in
                     Task { await sync.fetchNow() }
@@ -132,7 +142,10 @@ struct ReelApp: App {
                         Task { await sync.sendNow(); UIApplication.shared.endBackgroundTask(assertion) }
                     }
                     if phase == .active {
-                        Task { await sync.fetchNow(); sync.pushPendingChanges() }
+                        // The first activation is launch: give the first frame a second before the fetch.
+                        let delay: Duration = hasActivated ? .zero : .seconds(1.5)
+                        hasActivated = true
+                        Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
                         scanForNewMediaIfDue()
                     }
                     guard phase == .background else { return }

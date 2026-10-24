@@ -69,6 +69,10 @@ struct SettingsView: View {
                     VStack(alignment: .leading) { Text("Network buffer"); Text("Raise if streaming stutters. Seeks take longer.").font(.caption).foregroundStyle(.secondary) }
                 }
                 Toggle("Auto-play next episode", isOn: $settings.autoPlayNext)
+                if settings.autoPlayNext {
+                    Picker("Up Next countdown", selection: $settings.autoPlayCountdown) { ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) s").tag($0) } }
+                }
+                Toggle(isOn: $settings.dialogueBoost) { VStack(alignment: .leading) { Text("Dialogue boost"); Text("Lifts quiet speech and tames loud scenes, for speakers at night. Also in the player's More sheet.").font(.caption).foregroundStyle(.secondary) } }
                 Toggle(isOn: $settings.backgroundAudio) { VStack(alignment: .leading) { Text("Play audio in background"); Text("Video pauses, audio continues").font(.caption).foregroundStyle(.secondary) } }
             }
 
@@ -78,6 +82,7 @@ struct SettingsView: View {
                 NavigationLink(value: LibraryRoute.favourites) { Label("Favourites", systemImage: "heart") }
                 NavigationLink(value: LibraryRoute.collections) { Label("Collections", systemImage: "rectangle.stack") }
                 NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }
+                NavigationLink { CodecsView() } label: { Label("Codecs and formats", systemImage: "waveform.badge.magnifyingglass") }
                 NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(hiddenCount)") }
                 NavigationLink { HistoryView() } label: { Text("Watch history") }
             }
@@ -128,6 +133,28 @@ struct SettingsView: View {
         .alert("TMDb API key", isPresented: $showKeyHelp) { Button("OK") {} } message: {
             Text("Create a free account at themoviedb.org, open Settings → API, and request a v3 developer key. Personal, non-commercial use is free. Paste the key here.")
         }
+    }
+}
+
+/// What the player has found in the files it has opened. Nothing is probed during a scan.
+struct CodecsView: View {
+    @EnvironmentObject private var library: LibraryStore
+    @State private var summary = LibraryStore.CodecSummary()
+    var body: some View {
+        List {
+            Section {
+                ForEach(summary.codecs, id: \.name) { c in LabeledContent(c.name, value: "\(c.count)") }
+                if summary.codecs.isEmpty { Text("Nothing probed yet. Codecs are read the first time a file plays.").foregroundStyle(.secondary) }
+            } header: { Text("Video codecs") } footer: {
+                Text("\(summary.probed) files probed, \(summary.unprobed) not played yet. Files are never opened during a scan.")
+            }
+            Section("From file names") {
+                LabeledContent("4K (2160p)", value: "\(summary.uhd)")
+                LabeledContent("HDR / Dolby Vision", value: "\(summary.hdr)")
+            }
+        }
+        .navigationTitle("Codecs and formats")
+        .refreshFromLibrary { summary = library.codecSummary() }
     }
 }
 

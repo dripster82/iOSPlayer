@@ -17,7 +17,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func setStatus(_ new: PlaybackStatus) {
         guard new != status else { return }
         status = new
-        Diagnostics.log("player", "status \(new) at \(Int(clock.time))s")
+        log("status \(new) at \(Int(clock.time))s")
     }
     /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
     /// `duration` everywhere else.
@@ -26,6 +26,42 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// an audio summary ("DTS 5.1 · AAC 2.0"), a subtitle summary, and the duration in seconds.
     public struct Probe: Sendable, Equatable { public var videoCodec: String?; public var audio: String?; public var subtitles: String?; public var duration: TimeInterval }
     public var onProbe: ((String, Probe) -> Void)?
+    /// Every seek the viewer asked for (scrubber, double-tap, skip buttons), as (from, to). Internal
+    /// seeks (resume, reconnect) do not report. Used to learn where a show's titles end.
+    public var onUserSeek: ((TimeInterval, TimeInterval) -> Void)?
+
+    /// The last 40 things this engine logged, for the failure report.
+    private var events: [String] = []
+    private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
+    private func log(_ message: String) {
+        Diagnostics.log("player", message)
+        events.append("\(Self.stamp.string(from: Date())) \(message)")
+        if events.count > 40 { events.removeFirst(events.count - 40) }
+    }
+
+    /// Everything known about this playback session, for "Copy details" on the error card: what was
+    /// playing, where it got to, how often it reconnected, VLC's counters, the tracks, and the log.
+    public func sessionReport() -> String {
+        var lines = ["status: \(status)", "position: \(Int(clock.time))s of \(Int(clock.duration))s, rate \(rate)"]
+        if let item { lines.append("url: \(Diagnostics.safe(item.url))"); lines.append("start at: \(Int(item.startAt))s, external subtitles: \(item.externalSubtitles.count)") }
+        lines.append("reconnects: \(recoveries), open timeouts: \(openTimeouts), player rebuilt: \(rebuilds)")
+        lines.append("options: hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms boost=\(options.dialogueBoost) audio=\(options.preferredAudioLanguage ?? "-") subs=\(options.subtitlesOnByDefault ? options.preferredSubtitleLanguage ?? "on" : "off")")
+        if let s = player.media?.statistics {
+            lines.append("video: decoded \(s.decodedVideo), shown \(s.displayedPictures), lost \(s.lostPictures)")
+            lines.append("audio: decoded \(s.decodedAudio), played \(s.playedAudioBuffers), lost \(s.lostAudioBuffers)")
+            lines.append("demux: read \(s.demuxReadBytes / 1_000_000) MB, corrupted \(s.demuxCorrupted), discontinuities \(s.demuxDiscontinuity), input \(Int(s.inputBitrate * 8000)) kbit/s")
+        }
+        lines.append("video tracks: " + (player.videoTracks.map(\.trackName).joined(separator: ", ").nilIfEmpty ?? "none"))
+        lines.append("audio tracks: " + (audioTracks.map { "\($0.name)\($0.id == currentAudioTrack ? " ✓" : "")" }.joined(separator: ", ").nilIfEmpty ?? "none"))
+        lines.append("subtitle tracks: " + (subtitleTracks.map { "\($0.name)\($0.id == currentSubtitleTrack ? " ✓" : "")" }.joined(separator: ", ").nilIfEmpty ?? "none"))
+        lines.append("chapters: \(chapters.count), picture in picture: \(isPictureInPictureActive)")
+        lines.append("thermal: \(ProcessInfo.processInfo.thermalState.rawValue), low power: \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        lines.append("")
+        lines.append("events:")
+        lines.append(contentsOf: events)
+        return lines.joined(separator: "\n")
+    }
+    private var rebuilds = 0
     private var probed = false
     public var time: TimeInterval { clock.time }
     public var duration: TimeInterval { clock.duration }
@@ -66,6 +102,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// a read sometimes never finishes, and the player then serialises every later open behind it,
     /// so the only way out is a new player. The drawable and PiP bridge move across.
     private func rebuildPlayer(reason: String) {
+        rebuilds += 1
         let old = player
         let drawable = old.drawable
         old.delegate = nil
@@ -85,7 +122,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         pipController = nil
         canStartPictureInPicture = false
         isPictureInPictureActive = false
-        Diagnostics.log("player", "rebuilt VLC player: \(reason)")
+        log("rebuilt VLC player: \(reason)")
     }
 
     private weak var pipController: (any VLCPictureInPictureWindowControlling)?
@@ -137,7 +174,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard var current = item else { return }
         guard recoveries < 2 else {
             let host = current.url.host.map { " to \($0)" } ?? ""
-            Diagnostics.log("player", "gave up reconnecting\(host)")
+            log("gave up reconnecting\(host)")
             stopRequested = true
             player.stop()
             setStatus(.failed("Lost the connection\(host) and couldn't get it back. Check the server, then retry."))
@@ -145,14 +182,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
         recoveries += 1
         current.startAt = max(0, position ?? clock.time)
-        Diagnostics.log("player", "reconnect \(recoveries)/2 at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
+        log("reconnect \(recoveries)/2 at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
         performLoad(current, options: options)
     }
 
     private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
         stop()
         if player.state == .stopping { rebuildPlayer(reason: "previous input still stopping") }
-        Diagnostics.log("player", "load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
+        log("load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
         self.item = item
         self.options = options
         tracksLoaded = false
@@ -189,6 +226,18 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // Asking VLC for a subtitle language makes it switch that track on, so only do it when subtitles
         // should be on by default; the preference is still used to pick a track when the user turns them on.
         if options.subtitlesOnByDefault, let lang = options.preferredSubtitleLanguage { media.addOption(":sub-language=\(lang)") }
+        if options.dialogueBoost {
+            // VLC's dynamic range compressor, set to lift quiet dialogue without letting the loud parts
+            // clip: squash anything over −20 dB by 8:1 and add 12 dB back. The usual "night mode".
+            media.addOption(":audio-filter=compressor")
+            media.addOption(":compressor-rms-peak=0.0")
+            media.addOption(":compressor-attack=25")
+            media.addOption(":compressor-release=100")
+            media.addOption(":compressor-threshold=-20")
+            media.addOption(":compressor-ratio=8")
+            media.addOption(":compressor-knee=2.5")
+            media.addOption(":compressor-makeup-gain=12")
+        }
         player.media = media
         loadedAt = Date()
         setStatus(.opening)
@@ -204,6 +253,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func seek(to seconds: TimeInterval) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
+        onUserSeek?(clock.time, clamped)
         player.time = VLCTime(int: Int32(clamped * 1000))
         clock.time = clamped
         // VLC keeps reporting the old position for a few ticks after a seek; don't let those drag the
@@ -245,7 +295,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard let self, self.status == .playing, let now = self.player.media?.statistics else { return }
             let after = Int(now.displayedPictures) + Int(now.playedAudioBuffers)
             if after == before {
-                Diagnostics.log("player", "no output since returning to the foreground; reconnecting at \(Int(position))s")
+                log("no output since returning to the foreground; reconnecting at \(Int(position))s")
                 self.reconnect(at: position)
             }
         }
@@ -262,7 +312,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         lastPicturesAt = Date()
         stallWatchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                // Reading VLC's statistics is cheap, but a hot device gets left alone as much as possible.
+                let hot: Bool = { switch ProcessInfo.processInfo.thermalState { case .serious, .critical: true; default: false } }()
+                try? await Task.sleep(for: .seconds(hot ? 15 : 5))
                 guard let self, !Task.isCancelled else { return }
                 guard self.status == .playing, let stats = self.player.media?.statistics else { continue }
                 let pictures = Int(stats.displayedPictures)
@@ -272,7 +324,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 } else if !self.player.videoTracks.isEmpty, count != self.lastProgressCount,
                           Date().timeIntervalSince(self.lastPicturesAt) > 6, Date().timeIntervalSince(self.lastSeekAt) > 15,
                           !self.isPictureInPictureActive {
-                    Diagnostics.log("player", "video stalled: no picture for \(Int(Date().timeIntervalSince(self.lastPicturesAt)))s while audio ran (decoded \(stats.decodedVideo), shown \(stats.displayedPictures), lost \(stats.lostPictures), read \(stats.demuxReadBytes / 1_000_000) MB); reloading at \(Int(self.lastPicturesTime))s")
+                    log("video stalled: no picture for \(Int(Date().timeIntervalSince(self.lastPicturesAt)))s while audio ran (decoded \(stats.decodedVideo), shown \(stats.displayedPictures), lost \(stats.lostPictures), read \(stats.demuxReadBytes / 1_000_000) MB); reloading at \(Int(self.lastPicturesTime))s")
                     self.reconnect(at: self.lastPicturesTime)
                     continue
                 }
@@ -283,7 +335,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                     continue
                 }
                 if Date().timeIntervalSince(self.lastProgressAt) > 15, Date().timeIntervalSince(self.lastSeekAt) > 15 {
-                    Diagnostics.log("player", "stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s")
+                    log("stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s")
                     self.reconnect(at: self.lastProgressTime)
                 }
             }
@@ -304,7 +356,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard self.status != .paused, self.status != .idle, self.status != .ended else { return }
             if case .failed = self.status { return }
             let target = self.item?.url.host.map { "on \($0)" } ?? "the file"
-            Diagnostics.log("player", "open timed out after 20s \(target)")
+            log("open timed out after 20s \(target)")
             self.openTimeouts += 1
             if self.openTimeouts == 1, let current = self.item {
                 // First timeout: assume the player wedged (it usually has, when the share answered the
@@ -335,7 +387,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, self.status != .paused, self.status != .idle, self.status != .ended else { return }
             if self.lastTickAt < issuedAt, var current = self.item {
-                Diagnostics.log("player", "seek to \(Int(target))s never landed; reloading there")
+                log("seek to \(Int(target))s never landed; reloading there")
                 current.startAt = target
                 self.performLoad(current, options: self.options)
             }
@@ -533,11 +585,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             if isPictureInPictureActive || pipEndedRecently { setStatus(.paused); recoverAfterPictureInPicture(); break }
             // A stop well short of the end is the stream dying (the server dropped the connection),
             // not the film finishing: reopen where we were rather than marking it watched.
-            if state == .stopped, duration > 0, duration - time > 20 { Diagnostics.log("player", "stream stopped \(Int(duration - time))s before the end"); reconnect(); break }
+            if state == .stopped, duration > 0, duration - time > 20 { log("stream stopped \(Int(duration - time))s before the end"); reconnect(); break }
             setStatus(.ended)
             canStartPictureInPicture = false
         case .error:
-            Diagnostics.log("player", "VLC error state (hasPlayed=\(hasPlayed))")
+            log("VLC error state (hasPlayed=\(hasPlayed))")
             if hasPlayed, time > 0 { reconnect() } else { setStatus(.failed("VLC couldn't play this file.")) }
         @unknown default: break
         }
@@ -673,3 +725,7 @@ import AppKit
 typealias PlatformView = NSView
 #endif
 #endif
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}

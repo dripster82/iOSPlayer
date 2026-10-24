@@ -52,6 +52,9 @@ final class AppSettings: ObservableObject {
     @Published var artworkLimitBytes: Int { didSet { d.set(artworkLimitBytes, forKey: "reel.artworkLimit") } }
     @Published var hasCompletedOnboarding: Bool { didSet { d.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") } }
     @Published var autoPlayNext: Bool { didSet { d.set(autoPlayNext, forKey: "autoPlayNext") } }
+    @Published var dialogueBoost: Bool { didSet { d.set(dialogueBoost, forKey: "dialogueBoost") } }
+    /// Seconds shown on the Up Next card before the next episode starts on its own.
+    @Published var autoPlayCountdown: Int { didSet { d.set(autoPlayCountdown, forKey: "autoPlayCountdown") } }
 
     init() {
         tmdbAPIKey = d.string(forKey: "tmdbAPIKey") ?? ""
@@ -80,6 +83,8 @@ final class AppSettings: ObservableObject {
         artworkLimitBytes = d.object(forKey: "reel.artworkLimit") as? Int ?? 2_000_000_000
         hasCompletedOnboarding = d.bool(forKey: "hasCompletedOnboarding")
         autoPlayNext = d.object(forKey: "autoPlayNext") as? Bool ?? true
+        dialogueBoost = d.bool(forKey: "dialogueBoost")
+        autoPlayCountdown = d.object(forKey: "autoPlayCountdown") as? Int ?? 10
     }
 
     /// nil until the user has entered a key.

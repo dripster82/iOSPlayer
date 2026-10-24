@@ -50,6 +50,8 @@ final class ScrubThumbnails: ObservableObject {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             var made = 0
             for i in missing {
+                // Stop (and pick up next play) if the device heated up or went to Low Power Mode meanwhile.
+                guard DeviceConditions.allowsBackgroundWork else { break }
                 guard let image = await Self.frame(url: url, position: Float(Self.fractions[i])) else { continue }
                 let ui = UIImage(cgImage: image)
                 if let data = ui.jpegData(compressionQuality: 0.7) { try? data.write(to: dir.appendingPathComponent("\(i).jpg")) }

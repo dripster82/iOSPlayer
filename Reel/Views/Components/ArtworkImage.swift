@@ -8,6 +8,8 @@ struct ArtworkImage: View {
     var aspect: CGFloat = 2 / 3
     var cornerRadius: CGFloat = 10
     @State private var image: UIImage?
+    /// The box's longest side in pixels, measured once laid out; the decode is sized to it.
+    @State private var maxPixel = 0
 
     var body: some View {
         // The box is sized by "fit" from whichever dimension the caller fixes; the artwork fills that box
@@ -25,11 +27,20 @@ struct ArtworkImage: View {
             }
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .task(id: url) {
-            image = nil
-            guard let url else { return }
-            image = await ImageLoader.shared.image(for: url)
+            .background(GeometryReader { g in
+                Color.clear.onAppear { measure(g.size) }.onChange(of: g.size) { _, size in measure(size) }
+            })
+        .task(id: "\(url?.absoluteString ?? "")|\(ImageLoader.bucket(maxPixel))") {
+            guard let url, maxPixel > 0 else { image = nil; return }
+            // A larger bucket only re-decodes; the smaller picture stays up meanwhile instead of flashing the placeholder.
+            if let next = await ImageLoader.shared.image(for: url, maxPixel: maxPixel) { image = next } else { image = nil }
         }
+    }
+
+    private func measure(_ size: CGSize) {
+        let px = Int((max(size.width, size.height) * UIScreen.main.scale).rounded(.up))
+        // Only grow: a cell that shrinks a few points during a layout pass need not re-decode.
+        if px > maxPixel { maxPixel = px }
     }
 
     struct Placeholder: View {

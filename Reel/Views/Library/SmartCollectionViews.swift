@@ -9,19 +9,21 @@ struct SmartCollectionView: View {
     let id: UUID
     @State private var items: [MediaItem] = []
     @State private var editing = false
+    @AppStorage("hideWatchedInCollections") private var hideWatched = false
     var body: some View {
         let rule = smart.all.first { $0.id == id }
+        let shown = library.visible(items, hideWatched: hideWatched)
         ScrollView {
             if let rule {
                 Text(rule.summary).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.top, 8)
-                if items.isEmpty { ContentUnavailableView("Nothing matches yet", systemImage: "sparkles").padding(.top, 60) }
-                else { ItemGrid(items: items, fixMatchTarget: .constant(nil)).padding(.vertical) }
+                if shown.isEmpty { ContentUnavailableView(items.isEmpty ? "Nothing matches yet" : "All watched", systemImage: items.isEmpty ? "sparkles" : "checkmark.circle").padding(.top, 60) }
+                else { ItemGrid(items: shown, fixMatchTarget: .constant(nil)).padding(.vertical) }
             } else {
                 ContentUnavailableView("Smart collection removed", systemImage: "sparkles")
             }
         }
         .navigationTitle(rule?.name ?? "Smart collection")
-        .toolbar { if rule != nil { Button("Edit") { editing = true } } }
+        .toolbar { HideWatchedButton(); if rule != nil { Button("Edit") { editing = true } } }
         .sheet(isPresented: $editing) { if let rule { SmartCollectionEditor(rule: rule) } }
         .refreshFromLibrary { items = rule?.matches(in: library) ?? [] }
         .onReceive(smart.$all) { all in items = all.first { $0.id == id }?.matches(in: library) ?? [] }

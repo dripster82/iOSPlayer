@@ -87,6 +87,7 @@ struct LibraryRouteDestination: View {
     @EnvironmentObject private var library: LibraryStore
     let route: LibraryRoute
     @State private var fixMatchTarget: MediaItem?
+    @AppStorage("hideWatchedInCollections") private var hideWatched = false
     var body: some View {
         switch route {
         case .favourites: FavouritesView()
@@ -99,7 +100,8 @@ struct LibraryRouteDestination: View {
         case .smart(let id): SmartCollectionView(id: id)
         case .collection(let id):
             if let c = library.collections().first(where: { $0.id == id }) {
-                ScrollView { ItemGrid(items: c.itemKeys.compactMap { library.item($0) }, fixMatchTarget: $fixMatchTarget).padding(.vertical) }
+                ScrollView { ItemGrid(items: library.visible(c.itemKeys.compactMap { library.item($0) }, hideWatched: hideWatched), fixMatchTarget: $fixMatchTarget).padding(.vertical) }
+                    .toolbar { HideWatchedButton() }
                     .navigationTitle(c.name)
                     .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
             } else {

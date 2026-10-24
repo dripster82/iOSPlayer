@@ -66,6 +66,9 @@ struct ItemMenuContent: View {
             Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
             Button { item.episodes.forEach { library.setWatched(false, itemKey: $0.itemKey) } } label: { Label("Mark all unwatched", systemImage: "circle") }
             let seasons = Array(Set(item.episodes.compactMap(\.seasonNumber))).sorted()
+            if seasons.count > 1 {
+                Menu { ForEach(seasons, id: \.self) { s in Button("Season \(s)") { library.setWatched(true, itemKeys: item.episodes.filter { $0.seasonNumber == s }.map(\.itemKey)) } } } label: { Label("Mark season watched", systemImage: "checkmark.circle.badge.questionmark") }
+            }
             if !seasons.isEmpty {
                 Menu { ForEach(seasons, id: \.self) { s in Button("Season \(s)") { downloads.enqueue(season: s, of: item) } } } label: { Label("Download season", systemImage: "arrow.down.circle") }
             }
@@ -239,6 +242,8 @@ struct FilmDetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
+        // Pull down to rescan just this film's folder (a replaced or removed file), not the whole source.
+        .refreshable { await library.rescan(folderOf: film, providers: settings.providers) }
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
         .task(id: film.itemKey) {
             guard let tmdb = settings.tmdb else { return }
@@ -270,7 +275,10 @@ struct ShowDetailView: View {
     @State private var states: [String: WatchState] = [:]
     @State private var next: MediaItem?
     @State private var unwatched = 0
+    @State private var unwatchedBySeason: [Int: Int] = [:]
     @State private var refreshTask: Task<Void, Never>?
+    /// An episode tapped while part-way through: ask Resume or Start over rather than guessing.
+    @State private var resumePrompt: MediaItem?
 
     private var selected: Int { season ?? initialSeason ?? next?.seasonNumber ?? seasons.first ?? 1 }
     private var episodes: [MediaItem] { episodesBySeason[selected] ?? [] }
@@ -282,6 +290,12 @@ struct ShowDetailView: View {
         states = library.watchStates(for: eps.map(\.itemKey))
         next = library.nextEpisode(of: show)
         unwatched = eps.filter { states[$0.itemKey]?.watched != true }.count
+        unwatchedBySeason = episodesBySeason.mapValues { $0.filter { states[$0.itemKey]?.watched != true }.count }
+    }
+
+    /// Resume straight away from Play; from a row, ask when there is something to resume.
+    private func tapped(_ ep: MediaItem) {
+        if states[ep.itemKey]?.isInProgress == true { resumePrompt = ep } else { player.play(ep, settings: settings) }
     }
     private func scheduleRefresh() {
         refreshTask?.cancel()
@@ -307,9 +321,15 @@ struct ShowDetailView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HeroHeader(item: show, subtitle: [show.year.map(String.init), show.seasonsLabel, show.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)
                 if let next {
-                    Button { player.play(next, settings: settings) } label: {
-                        Label("Play \(next.episodeCode ?? "")", systemImage: "play.fill").frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent).controlSize(.large).padding(.horizontal)
+                    let ws = states[next.itemKey]
+                    HStack(spacing: 8) {
+                        Button { player.play(next, settings: settings) } label: {
+                            Label(ws?.isInProgress == true ? "Resume \(next.episodeCode ?? "") at \(MediaFormat.clock(ws!.position))" : "Play \(next.episodeCode ?? "")", systemImage: "play.fill").frame(maxWidth: .infinity)
+                        }.buttonStyle(.borderedProminent).controlSize(.large)
+                        if ws?.isInProgress == true {
+                            Button("Start over") { player.play(next, fromStart: true, settings: settings) }.buttonStyle(.bordered).controlSize(.large)
+                        }
+                    }.padding(.horizontal)
                 }
                 Facts(facts: [
                     show.rating.map { ("★ \(String(format: "%.1f", $0))", nil) },
@@ -323,12 +343,21 @@ struct ShowDetailView: View {
                     Text("Episodes").font(.headline).padding(.horizontal)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(seasons, id: \.self) { s in FilterBar.Chip(text: "Season \(s)", on: s == selected) { season = s } }
+                            ForEach(seasons, id: \.self) { s in
+                                let left = unwatchedBySeason[s] ?? 0
+                                FilterBar.Chip(text: "Season \(s)" + (left > 0 ? " · \(left)" : " ✓"), on: s == selected) { season = s }
+                                    .contextMenu {
+                                        let keys = (episodesBySeason[s] ?? []).map(\.itemKey)
+                                        Button { library.setWatched(true, itemKeys: keys) } label: { Label("Mark season \(s) watched", systemImage: "checkmark.circle") }
+                                        Button { library.setWatched(false, itemKeys: keys) } label: { Label("Mark season \(s) unwatched", systemImage: "circle") }
+                                        Button { downloads.enqueue(season: s, of: show) } label: { Label("Download season \(s)", systemImage: "arrow.down.circle") }
+                                    }
+                            }
                         }.padding(.horizontal)
                     }
                     ForEach(episodes, id: \.itemKey) { ep in
                         EpisodeRow(episode: ep, state: states[ep.itemKey], downloaded: downloads.isDownloaded(ep.itemKey), downloading: downloads.entry(for: ep.itemKey)?.progress).padding(.horizontal)
-                            .onTapGesture { player.play(ep, settings: settings) }
+                            .onTapGesture { tapped(ep) }
                             .contextMenu {
                                 let watched = states[ep.itemKey]?.watched == true
                                 Button { library.setWatched(!watched, itemKey: ep.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: "checkmark.circle") }
@@ -349,6 +378,13 @@ struct ShowDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refresh() }
         .onReceive(library.objectWillChange) { _ in scheduleRefresh() }
+        // Pull down to rescan just this show's folder: new episodes show up in seconds.
+        .refreshable { await library.rescan(folderOf: show, providers: settings.providers) }
+        .confirmationDialog(resumePrompt.map { "\($0.episodeCode ?? "") · \($0.title)" } ?? "", isPresented: Binding(get: { resumePrompt != nil }, set: { if !$0 { resumePrompt = nil } }), titleVisibility: .visible, presenting: resumePrompt) { ep in
+            Button("Resume from \(MediaFormat.clock(states[ep.itemKey]?.position ?? 0))") { player.play(ep, settings: settings) }
+            Button("Start over") { player.play(ep, fromStart: true, settings: settings) }
+            Button("Cancel", role: .cancel) {}
+        }
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
     }
 }

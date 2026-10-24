@@ -31,6 +31,7 @@ struct PlayerContentView: View {
     @State private var brightnessOverlay: Double?
     /// Level at the start of a vertical drag; the drag is applied as an offset from it, not accumulated.
     @State private var dragStartLevel: Double?
+    @State private var copiedReport = false
 
     enum Sheet: Identifiable { case audio, subtitles, chapters, speed, more; var id: Int { hashValue } }
 
@@ -63,7 +64,8 @@ struct PlayerContentView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .preferredColorScheme(.dark)
-        .onAppear { scheduleHide() }
+        .onAppear { scheduleHide(); applyRememberedFill(player.preferredFill) }
+        .onChange(of: player.preferredFill) { _, f in applyRememberedFill(f) }
         .onChange(of: controlsVisible) { _, visible in
             if !visible, let t = scrubTime { engine.seek(to: t); scrubTime = nil }
         }
@@ -90,6 +92,12 @@ struct PlayerContentView: View {
     }
 
     private var failure: String? { if case .failed(let m) = engine.status { return m } else { return nil } }
+
+    /// The fill the viewer chose last time for this show, when the player opens or the title changes.
+    private func applyRememberedFill(_ remembered: Bool?) {
+        let wanted = remembered ?? false
+        if wanted != fill { fill = wanted; engine.setFill(fill) }
+    }
 
     // MARK: - Gestures
 
@@ -135,7 +143,7 @@ struct PlayerContentView: View {
                 dragStartLevel = nil
                 Task { try? await Task.sleep(for: .milliseconds(700)); volumeOverlay = nil; brightnessOverlay = nil }
             },
-            onPinchEnded: { scale in guard !locked else { return }; fill = scale > 1; engine.setFill(fill) }
+            onPinchEnded: { scale in guard !locked else { return }; fill = scale > 1; engine.setFill(fill); player.rememberFill(fill) }
         )
     }
 
@@ -174,7 +182,8 @@ struct PlayerContentView: View {
                         tag("Chapters") { sheet = .chapters }
                         circle("forward.frame", size: 30) { jumpChapter(+1) }
                     }
-                    tag(fill ? "Fill" : "Fit") { fill.toggle(); engine.setFill(fill) }
+                    tag(fill ? "Fill" : "Fit") { fill.toggle(); engine.setFill(fill); player.rememberFill(fill) }
+                    if player.sleepTimer != nil { tag("Sleep", on: true) { sheet = .more } }
                     Spacer()
                     circle("lock") { locked = true; controlsVisible = false }
                 }
@@ -225,7 +234,7 @@ struct PlayerContentView: View {
             Button("") { engine.skip(by: 60) }.keyboardShortcut(.rightArrow, modifiers: .shift)
             Button("") { sheet = .subtitles }.keyboardShortcut("s", modifiers: [])
             Button("") { sheet = .audio }.keyboardShortcut("a", modifiers: [])
-            Button("") { fill.toggle(); engine.setFill(fill) }.keyboardShortcut("f", modifiers: [])
+            Button("") { fill.toggle(); engine.setFill(fill); player.rememberFill(fill) }.keyboardShortcut("f", modifiers: [])
             Button("") { player.dismiss() }.keyboardShortcut(.escape, modifiers: [])
             Button("") { player.playNext(settings: settings) }.keyboardShortcut("n", modifiers: [])
         }
@@ -282,6 +291,14 @@ struct PlayerContentView: View {
                     }
                     Button("Back") { player.dismiss() }.buttonStyle(.bordered)
                 }
+                HStack(spacing: 12) {
+                    Button(copiedReport ? "Copied" : "Copy details") {
+                        UIPasteboard.general.string = player.failureReport()
+                        copiedReport = true
+                        Task { try? await Task.sleep(for: .seconds(2)); copiedReport = false }
+                    }.font(.footnote)
+                    ShareLink(item: player.failureReport(), subject: Text("Reel playback report")) { Label("Share report", systemImage: "square.and.arrow.up").font(.footnote) }
+                }.padding(.top, 4)
             }
             .padding(20).frame(maxWidth: 380).background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 16)).foregroundStyle(.white)
         }
@@ -333,8 +350,8 @@ struct TimedOverlays: View {
 
     var body: some View {
         ZStack {
-            if let intro = engine.chapters.intro, now >= intro.start, now < intro.start + intro.duration, !locked {
-                Button("Skip intro") { engine.seek(to: intro.start + intro.duration) }
+            if let intro = introWindow, now >= intro.start, now < intro.end, !locked {
+                Button("Skip intro") { engine.seek(to: intro.end) }
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
             }
@@ -351,6 +368,13 @@ struct TimedOverlays: View {
         .onChange(of: engine.status) { _, s in if s == .ended { startCountdown() } }
     }
 
+    /// Chapters first (a named intro, or the unnamed-chapter shape rule); otherwise what the viewer's
+    /// own skips have taught the app about this show.
+    private var introWindow: IntroMemory.Window? {
+        if let c = engine.chapters.intro { return IntroMemory.Window(start: c.start, end: c.start + c.duration) }
+        return player.learnedIntro
+    }
+
     private func upNextCard(_ next: MediaItem) -> some View {
         HStack(spacing: 10) {
             ArtworkImage(url: ArtworkURL.still(next.stillPath) ?? ArtworkURL.poster(next.posterPath), title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90, height: 90 * 9 / 16)
@@ -359,7 +383,11 @@ struct TimedOverlays: View {
                 Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)
                 HStack(spacing: 6) {
                     Button("Play now") { player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
-                    Button("Stop") { upNextCountdown = nil; player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
+                    if upNextCountdown != nil {
+                        Button("Cancel") { upNextCountdown = nil }.buttonStyle(.bordered).controlSize(.small)
+                    } else {
+                        Button("Stop") { player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
+                    }
                 }
             }
         }
@@ -370,8 +398,8 @@ struct TimedOverlays: View {
     }
 
     private func startCountdown() {
-        guard player.upNext != nil, settings.autoPlayNext else { return }
-        upNextCountdown = 15
+        guard player.upNext != nil, settings.autoPlayNext, !player.stopsAfterCurrent else { return }
+        upNextCountdown = max(3, settings.autoPlayCountdown)
         Task {
             while let c = upNextCountdown, c > 0 { try? await Task.sleep(for: .seconds(1)); if upNextCountdown != nil { upNextCountdown = c - 1 } }
             if upNextCountdown == 0 { upNextCountdown = nil; player.playNext(settings: settings) }
@@ -469,9 +497,24 @@ struct TrackSheet: View {
                 case .chapters:
                     ForEach(engine.chapters) { c in row(c.title, sub: MediaFormat.clock(c.start), on: engine.time >= c.start && engine.time < c.start + c.duration) { engine.seek(to: c.start); dismiss() } }
                 case .speed:
-                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in row("\(r.formatted())×", sub: r == 1 ? "Normal" : nil, on: engine.rate == Float(r)) { engine.setRate(Float(r)); dismiss() } }
+                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in row("\(r.formatted())×", sub: r == 1 ? "Normal" : nil, on: engine.rate == Float(r)) { engine.setRate(Float(r)); player.rememberRate(Float(r)); dismiss() } }
+                    Text("Remembered for this show.").font(.footnote).foregroundStyle(.secondary)
                 case .more:
-                    Toggle("Fill screen", isOn: $fill).onChange(of: fill) { _, _ in onFill() }
+                    Toggle("Fill screen", isOn: $fill).onChange(of: fill) { _, f in onFill(); player.rememberFill(f) }
+                    Toggle(isOn: Binding(get: { settings.dialogueBoost }, set: { settings.dialogueBoost = $0; player.reapplyOptions(settings: settings) })) {
+                        VStack(alignment: .leading) { Text("Dialogue boost"); Text("Lifts quiet speech, tames loud scenes. Reloads the stream at this position.").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Picker(selection: Binding(get: { player.sleepTimer }, set: { player.setSleepTimer($0) })) {
+                        Text("Off").tag(PlayerCoordinator.SleepTimer?.none)
+                        ForEach([15, 30, 45, 60, 90], id: \.self) { m in Text("\(m) minutes").tag(PlayerCoordinator.SleepTimer?.some(.minutes(m))) }
+                        Text("End of this episode").tag(PlayerCoordinator.SleepTimer?.some(.endOfEpisode))
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("Sleep timer")
+                            if let at = player.sleepFiresAt { Text("Pauses \(at.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary) }
+                            else if player.sleepTimer == .endOfEpisode { Text("Stops when this episode ends; no auto-play.").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
                     Button { engine.startPictureInPicture(); dismiss() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
                         .disabled(!engine.canStartPictureInPicture)
                     Label("With an AirPlay speaker or TV selected before you press Play, MP4/MOV files over HTTP or from Downloads stream natively; MKV and SMB mirror the screen.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)

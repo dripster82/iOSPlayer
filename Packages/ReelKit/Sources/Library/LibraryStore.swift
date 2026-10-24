@@ -189,6 +189,43 @@ public final class LibraryStore: ObservableObject {
 
     public func scanAll(providers: MetadataProviders) { sources().forEach { scan($0, providers: providers) } }
 
+    /// Rescans just the folder(s) this title's files live in: new episodes, a replaced file, a deleted
+    /// one. Seconds instead of the minutes a whole source takes. Waits for the result.
+    public func rescan(folderOf item: MediaItem, providers: MetadataProviders) async {
+        let files = item.kind == .show ? item.episodes.flatMap(\.files) : item.files
+        var folders: [UUID: String] = [:]
+        for f in files {
+            guard let s = f.source else { continue }
+            let dir = (f.relativePath as NSString).deletingLastPathComponent
+            folders[s.id] = folders[s.id].map { Self.commonFolder($0, dir) } ?? dir
+        }
+        for (id, folder) in folders {
+            guard scanTasks[id] == nil else { continue }   // a full scan of that source is already running
+            let scanner = LibraryScanner(modelContainer: container)
+            Diagnostics.log("scan", "rescan folder \(folder.isEmpty ? "/" : folder)")
+            do {
+                let dropped = try await scanner.scan(sourceID: id, credentials: CredentialStore.shared.load(for: id), providers: providers, scope: folder) { p in
+                    Task { @MainActor [weak self] in self?.publishProgress(p) }
+                }
+                if !dropped.isEmpty { syncHooks?.deleted(dropped) }
+            } catch {
+                Diagnostics.log("scan", "rescan of \(folder) failed: \(error.localizedDescription)")
+                lastError = error.localizedDescription
+            }
+        }
+        objectWillChange.send()
+        notifySync()
+    }
+
+    /// "A/B/Season 1" and "A/B/Season 2" share "A/B".
+    static func commonFolder(_ a: String, _ b: String) -> String {
+        var out: [Substring] = []
+        for (x, y) in zip(a.split(separator: "/"), b.split(separator: "/")) {
+            if x == y { out.append(x) } else { break }
+        }
+        return out.joined(separator: "/")
+    }
+
     // MARK: - Items
 
     public func items(kind: MediaKind, includeHidden: Bool = false) -> [MediaItem] {
@@ -374,6 +411,39 @@ public final class LibraryStore: ObservableObject {
         if let s = subtitles, s != file.subtitleSummary { file.subtitleSummary = s; changed = true }
         if duration > 0, abs((file.duration ?? 0) - duration) > 1 { file.duration = duration; changed = true }
         if changed { file.pendingSync = true; file.updatedAt = Date(); try? context.save() }
+    }
+
+    /// What the player has learned about the files so far: codecs by count, 4K and HDR (from the file
+    /// names) counts, and how many files have not been played yet, so nothing is known about them.
+    /// Files are only probed when they play; a scan never opens them.
+    public struct CodecSummary: Sendable {
+        public var codecs: [(name: String, count: Int)] = []
+        public var uhd = 0
+        public var hdr = 0
+        public var probed = 0
+        public var unprobed = 0
+        public init() {}
+    }
+    public func codecSummary() -> CodecSummary {
+        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { !$0.ignored && $0.item != nil })
+        let files = (try? context.fetch(d)) ?? []
+        var out = CodecSummary()
+        var counts: [String: Int] = [:]
+        for f in files {
+            if f.resolution == "2160p" { out.uhd += 1 }
+            if f.qualityTags.contains(where: { ["hdr", "hdr10", "hdr10+", "dv", "dolby vision", "dovi"].contains($0.lowercased()) }) { out.hdr += 1 }
+            if let v = f.videoCodec, !v.isEmpty {
+                out.probed += 1
+                let name = v.lowercased().contains("hevc") || v.lowercased().contains("h265") || v.lowercased().contains("x265") ? "HEVC" :
+                           v.lowercased().contains("h264") || v.lowercased().contains("avc") || v.lowercased().contains("x264") ? "H.264" :
+                           v.lowercased().contains("av1") ? "AV1" : v.uppercased()
+                counts[name, default: 0] += 1
+            } else {
+                out.unprobed += 1
+            }
+        }
+        out.codecs = counts.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
+        return out
     }
 
     /// Remembers which copy to play for a title with several; nil goes back to the best resolution.
@@ -658,6 +728,26 @@ public final class LibraryStore: ObservableObject {
         try? context.save()
         objectWillChange.send()
         notifySync()
+    }
+
+    /// One save and one sync push for a whole season or show.
+    public func setWatched(_ watched: Bool, itemKeys: [String]) {
+        for key in itemKeys {
+            let ws = watchState(key) ?? { let w = WatchState(itemKey: key, deviceID: deviceID); context.insert(w); return w }()
+            ws.watched = watched
+            if !watched { ws.position = 0 }
+            ws.updatedAt = Date(); ws.pendingSync = true
+        }
+        try? context.save()
+        notifySync()
+    }
+
+    /// A film that is watched, or a show with no unwatched episodes.
+    public func isFullyWatched(_ item: MediaItem) -> Bool {
+        switch item.kind {
+        case .show: !item.episodes.isEmpty && unwatchedCount(item) == 0
+        default: watchState(item.itemKey)?.watched == true
+        }
     }
 
     public func setWatched(_ watched: Bool, itemKey: String) {

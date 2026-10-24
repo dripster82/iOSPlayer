@@ -30,7 +30,9 @@ public actor LibraryScanner {
 
     /// Returns the CloudKit record names of files dropped because they sit outside the chosen folders.
     @discardableResult
-    public func scan(sourceID: UUID, credentials: Credentials?, providers: MetadataProviders, progress: ProgressHandler? = nil) async throws -> [String] {
+    /// `scope` limits the pass to one folder (and its subfolders): the detail page's pull to refresh.
+    /// Files elsewhere on the source are neither listed nor judged gone.
+    public func scan(sourceID: UUID, credentials: Credentials?, providers: MetadataProviders, scope: String? = nil, progress: ProgressHandler? = nil) async throws -> [String] {
         guard let record = try fetchSource(sourceID) else { throw SourceError.notFound(sourceID.uuidString) }
         var report = ScanProgress(sourceID: sourceID, sourceName: record.name, filesSeen: 0, filesNew: 0, matched: 0, needsReview: 0, phase: .connecting)
         progress?(report)
@@ -50,7 +52,7 @@ public actor LibraryScanner {
 
         // Roots: tagged folders that are included, or the source root when none are tagged.
         let roots = record.folderRules.filter(\.includeInScan).map(\.folderPath)
-        var queue = roots.isEmpty ? [""] : roots
+        var queue = scope.map { [$0] } ?? (roots.isEmpty ? [""] : roots)
         var seenPaths = Set<String>()
         /// Every folder that listed without error, with the names it contained. A file is only treated
         /// as gone when a listing that should have shown it (or one of its parent folders) did not;
@@ -93,13 +95,17 @@ public actor LibraryScanner {
                     report.filesNew += 1
                 }
             }
-            if report.filesSeen % 50 == 0 { progress?(report); try modelContext.save() }
+            // One folder, one save, then a breath: the main context merges each save, and a few hundred
+            // rows at a time keeps that merge (and the screens it redraws) short while the scan runs.
+            try modelContext.save()
+            if report.filesSeen % 50 == 0 { progress?(report) }
+            await Task.yield()
         }
 
         // Files outside every included root (rules changed, or a merged source record briefly had none)
         // leave the library; the next device learns through the sync deletions.
         var droppedKeys: [String] = []
-        if !roots.isEmpty {
+        if scope == nil, !roots.isEmpty {
             let excluded = record.folderRules.filter { !$0.includeInScan }.map(\.folderPath)
             func under(_ path: String, _ folders: [String]) -> Bool {
                 folders.contains { $0.isEmpty || path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
@@ -162,7 +168,8 @@ public actor LibraryScanner {
             progress?(report)
             let matcher = Matcher(context: modelContext, tmdb: tmdb, providers: providers)
             // Review files are tried too when the classifier had a guess; the matcher only accepts a sure hit for them.
-            for file in record.files where file.item == nil && !file.ignored && !file.reviewed && (file.classificationRaw != "review" || file.guessKindRaw != nil) {
+            func inScope(_ path: String) -> Bool { scope.map { $0.isEmpty || path.hasPrefix($0 + "/") } ?? true }
+            for file in record.files where inScope(file.relativePath) && file.item == nil && !file.ignored && !file.reviewed && (file.classificationRaw != "review" || file.guessKindRaw != nil) {
                 try Task.checkCancellation()
                 let outcome = await matcher.match(file)
                 switch outcome {

@@ -46,6 +46,8 @@ public struct PlaybackOptions: Sendable {
     public var subtitleColor: UInt32 = 0xFFFFFF
     public var subtitleBackground = false
     public var subtitleMargin = 0
+    /// Dynamic range compression that lifts quiet dialogue ("night mode").
+    public var dialogueBoost = false
     public init() {}
 }
 

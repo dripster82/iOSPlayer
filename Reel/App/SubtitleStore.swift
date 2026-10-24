@@ -44,6 +44,10 @@ enum TrackMemory {
         var audioLanguage: String?
         /// Language of the chosen subtitle track, "off" when the viewer turned subtitles off, nil when untouched.
         var subtitle: String?
+        /// Playback speed picked in the Speed sheet; nil means normal.
+        var rate: Float?
+        /// Fill (crop to the screen) rather than fit; nil means untouched.
+        var fill: Bool?
     }
     private static let key = "reel.trackMemory"
 
