@@ -30,6 +30,7 @@ struct ArtworkPickerView: View {
     @State private var mode: Mode = .single
     @State private var tmdb: [Slot: [Candidate]] = [:]
     @State private var fanart: [Slot: [Candidate]] = [:]
+    @State private var tvdb: [Slot: [Candidate]] = [:]
     @State private var titles: [TitleRow] = []
     /// TMDb's images for the collection itself (film series only).
     @State private var collectionPosters: [Candidate] = []
@@ -59,6 +60,7 @@ struct ArtworkPickerView: View {
                     case .item:
                         section("TMDb", tmdb[slot] ?? [])
                         if settings.fanart != nil { section("fanart.tv", fanart[slot] ?? []) }
+                        if case .item(let i) = target, i.kind == .show, settings.tvdb != nil { section("TheTVDB", tvdb[slot] ?? []) }
                         else if slot != .poster { Text("Add a fanart.tv key in Settings for more logos and backgrounds.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
                     case .collection:
                         if titles.isEmpty, !loading { Text("This collection has no titles yet. Add films or shows from their menu, then come back.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
@@ -202,6 +204,11 @@ struct ArtworkPickerView: View {
                 tmdb[.backdrop] = (imgs.backdrops ?? []).prefix(40).compactMap { ArtworkURL.backdrop($0.filePath, size: .small) }.map { Candidate(url: $0, source: "tmdb") }
                 tmdb[.logo] = (imgs.logos ?? []).prefix(40).compactMap { ArtworkURL.logo($0.filePath, size: .medium) }.map { Candidate(url: $0, source: "tmdb") }
             } catch { self.error = error.localizedDescription }
+            if item.kind == .show, let tv = settings.tvdb, let tvdbID = item.tvdbID, let art = try? await tv.artwork(seriesID: tvdbID) {
+                tvdb[.poster] = art.posters.compactMap(URL.init).map { Candidate(url: $0, source: "tvdb") }
+                tvdb[.backdrop] = art.backgrounds.compactMap(URL.init).map { Candidate(url: $0, source: "tvdb") }
+                tvdb[.logo] = art.logos.compactMap(URL.init).map { Candidate(url: $0, source: "tvdb") }
+            }
             if let fa = settings.fanart {
                 let art: FanartArt?
                 if item.kind == .show, let tvdb = item.tvdbID { art = try? await fa.show(tvdbID: tvdb) }

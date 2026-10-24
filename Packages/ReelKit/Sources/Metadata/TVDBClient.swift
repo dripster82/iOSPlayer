@@ -52,6 +52,16 @@ public actor TVDBClient {
         self.limiter = limiter
     }
 
+    /// Every poster, background and clear logo TheTVDB holds for a series (absolute URLs), for the
+    /// artwork picker. Type ids per TheTVDB's artwork types: 2 poster, 3 background, 23 clear logo.
+    public struct Artwork: Sendable, Hashable { public var posters: [String]; public var backgrounds: [String]; public var logos: [String] }
+    public func artwork(seriesID: Int) async throws -> Artwork {
+        let page: Envelope<ExtendedSeries> = try await get("series/\(seriesID)/extended", [URLQueryItem(name: "meta", value: "translations")], label: "series artwork")
+        let arts = (page.data.artworks ?? []).sorted { ($0.score ?? 0) > ($1.score ?? 0) }
+        func urls(_ type: Int) -> [String] { arts.filter { $0.type == type }.compactMap(\.image).prefix(20).map { $0 } }
+        return Artwork(posters: urls(2), backgrounds: urls(3), logos: urls(23))
+    }
+
     public func searchSeries(query: String, year: Int? = nil) async throws -> [TVDBSeries] {
         var items = [URLQueryItem(name: "query", value: query), URLQueryItem(name: "type", value: "series"), URLQueryItem(name: "limit", value: "10")]
         if let year { items.append(URLQueryItem(name: "year", value: String(year))) }
@@ -68,6 +78,8 @@ public actor TVDBClient {
 
     private struct Envelope<T: Decodable>: Decodable { var data: T }
     private struct LoginData: Decodable { var token: String }
+    private struct ExtendedSeries: Decodable { var artworks: [ArtworkRow]? }
+    private struct ArtworkRow: Decodable { var image: String?; var type: Int?; var score: Double? }
     private struct RemoteID: Decodable { var id: String; var sourceName: String? }
     private struct SearchResult: Decodable {
         var tvdbID: String?

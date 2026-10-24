@@ -165,6 +165,8 @@ public final class MediaItem {
     public var collectionName: String? = nil
     public var collectionCheckedAt: Date? = nil
     /// TMDb production companies and keywords; `Universes` turns them into Marvel, Pixar, Star Wars…
+    /// The file the user chose in Versions, by id; nil means the best resolution. Synced.
+    public var preferredFileID: UUID? = nil
     /// Artwork the user picked in Edit artwork (absolute URLs, any source); nil means automatic.
     public var posterOverrideURL: String? = nil
     public var backdropOverrideURL: String? = nil

@@ -143,7 +143,6 @@ struct FilmDetailView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     let film: MediaItem
     @State private var fixMatchTarget: MediaItem?
-    @State private var chosenFile: MediaFile?
     /// Films TMDb lists in the same collection that are not in the library, by title and year.
     @State private var missingFromCollection: [String] = []
 
@@ -159,7 +158,7 @@ struct FilmDetailView: View {
 
     @ViewBuilder private var content: some View {
         let ws = library.watchState(film.itemKey)
-        let file = chosenFile ?? library.preferredFile(film)
+        let file = library.preferredFile(film)
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HeroHeader(item: film, subtitle: [film.year.map(String.init), film.runtimeMinutes.map { "\($0) min" }, film.genres.prefix(2).joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), fixMatchTarget: $fixMatchTarget)
@@ -205,9 +204,9 @@ struct FilmDetailView: View {
                 }
                 if film.files.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack { Text("Versions").font(.headline); Spacer(); Text("Tap to choose").font(.caption).foregroundStyle(.secondary) }
+                        HStack { Text("Versions").font(.headline); Spacer(); Text(film.preferredFileID == nil ? "Best quality plays · tap to choose" : "Your choice is remembered").font(.caption).foregroundStyle(.secondary) }
                         ForEach(film.files, id: \.id) { f in
-                            Button { chosenFile = f } label: {
+                            Button { library.setPreferredFile(f, for: film) } label: {
                                 HStack {
                                     VStack(alignment: .leading) {
                                         Text([f.resolution, f.qualityTags.first { ["hevc", "x265", "x264", "av1", "h264"].contains($0) }?.uppercased(), (f.fileName as NSString).pathExtension.uppercased()].compactMap { $0 }.joined(separator: " · ")).font(.subheadline.weight(.semibold))

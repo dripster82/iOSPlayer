@@ -364,6 +364,14 @@ public final class LibraryStore: ObservableObject {
         return out
     }
 
+    /// Remembers which copy to play for a title with several; nil goes back to the best resolution.
+    public func setPreferredFile(_ file: MediaFile?, for item: MediaItem) {
+        item.preferredFileID = file?.id
+        item.updatedAt = Date(); item.pendingSync = true
+        try? context.save()
+        notifySync(); objectWillChange.send()
+    }
+
     // MARK: - Artwork overrides
 
     public enum ArtworkSlot { case poster, backdrop, logo }
@@ -813,7 +821,8 @@ public final class LibraryStore: ObservableObject {
 
     /// Highest resolution first; ties broken by size.
     public func preferredFile(_ item: MediaItem) -> MediaFile? {
-        item.files.filter { !$0.ignored }.max { a, b in
+        if let id = item.preferredFileID, let chosen = item.files.first(where: { $0.id == id && !$0.ignored }) { return chosen }
+        return item.files.filter { !$0.ignored }.max { a, b in
             (Self.resolutionRank(a.resolution), a.size) < (Self.resolutionRank(b.resolution), b.size)
         }
     }
