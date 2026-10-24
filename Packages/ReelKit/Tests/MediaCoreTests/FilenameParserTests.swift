@@ -149,4 +149,43 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertNil(r.episode)
         XCTAssertEqual(r.year, 2017)
     }
+
+    // MARK: - Year and country belong to the show, not the title (330 files were stuck on this)
+
+    func testShowYearInEpisodeFilename() {
+        let r = p("Torrents/Stargate Atlantis (2004) S01-S05/Stargate Atlantis (2004) S01/Stargate Atlantis (2004) - S01E09 - Home (1080p BluRay x265).mkv")
+        XCTAssertEqual(r.title, "Stargate Atlantis")
+        XCTAssertEqual(r.year, 2004)
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 9)
+    }
+
+    func testCountryTagAndYearStripped() {
+        let r = p("Torrents/2 Sort/Ghosts (US) (2021) Season 2 S02 (1080p WEB-DL)/Ghosts (US) (2021) - S02E01 - Spies.mkv")
+        XCTAssertEqual(r.title, "Ghosts")
+        XCTAssertEqual(r.year, 2021)
+        XCTAssertEqual(r.season, 2)
+    }
+
+    func testShowFolderYearUsedForBareEpisodes() {
+        let r = p("Tv/Archer (2009)/Season 3/03 - El Contador.mkv")
+        XCTAssertEqual(r.title, "Archer")
+        XCTAssertEqual(r.year, 2009)
+        XCTAssertEqual(r.season, 3)
+        XCTAssertEqual(r.episode, 3)
+    }
+
+    func testDigitsOnlyFilenameUnderSeasonFolder() {
+        let r = p("Tv/Grimm (2011)/Season 2/0003.mts")
+        XCTAssertEqual(r.title, "Grimm")
+        XCTAssertEqual(r.season, 2)
+        XCTAssertEqual(r.episode, 3)
+    }
+
+    func testLeadingSiteTagStripped() {
+        let r = p("Torrents/2 Sort/[TorrentCouch.com].The.Boss.Baby.Back.in.Business.S01.Complete.720p/[TorrentCouch.com].The.Boss.Baby.Back.in.Business.S01E03.720p.WEB-HD.x264.mkv")
+        XCTAssertEqual(r.title, "The Boss Baby Back in Business")
+        XCTAssertEqual(r.season, 1)
+        XCTAssertEqual(r.episode, 3)
+    }
 }

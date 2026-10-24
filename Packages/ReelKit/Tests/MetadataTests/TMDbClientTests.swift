@@ -87,4 +87,25 @@ final class MatchScorerTests: XCTestCase {
     func testArticlesIgnored() {
         XCTAssertEqual(MatchScorer.normalise("The Last Projectionist"), MatchScorer.normalise("Last Projectionist"))
     }
+
+    // Weaker evidence is accepted as autoLow (flagged "?") rather than sent to Needs Review.
+
+    func testSingleResultFromAlternativeTitleIsLow() {
+        // "Shingeki no Kyojin" → TMDb's only hit is "Attack on Titan": no title overlap at all.
+        let d = MatchScorer.decideMovie([movie(1, "Attack on Titan", 2013, pop: 56)], parsed: ParsedName(title: "Shingeki no Kyojin"))
+        XCTAssertEqual(d.pick?.id, 1)
+        XCTAssertEqual(d.confidence, .autoLow)
+    }
+
+    func testSimilarTitleAmongSeveralIsLow() {
+        let d = MatchScorer.decideMovie([movie(1, "Ninjago: Masters of Spinjitzu", 2011, pop: 20), movie(2, "Ninjago Dragons Rising", 2023, pop: 30)], parsed: ParsedName(title: "LEGO Ninjago Masters of Spinjitzu"))
+        XCTAssertEqual(d.pick?.id, 1)
+        XCTAssertEqual(d.confidence, .autoLow)
+    }
+
+    func testSingleResultWithClashingYearStaysUnmatched() {
+        let d = MatchScorer.decideMovie([movie(1, "Blackadder", 1983, pop: 29)], parsed: ParsedName(title: "Some Other Thing", year: 2021))
+        XCTAssertNil(d.pick)
+        XCTAssertEqual(d.confidence, .unmatched)
+    }
 }

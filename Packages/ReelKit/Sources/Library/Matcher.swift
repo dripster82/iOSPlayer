@@ -35,7 +35,7 @@ struct Matcher {
                 var confidence: MatchConfidence = .autoHigh
                 if let forced = override?.forcedTMDbID { showID = forced; confidence = .manual }
                 else {
-                    let results = try await tmdb.searchShows(query: parsed.title, year: parsed.year)
+                    let results = try await searchShowsShortening(parsed)
                     let d = MatchScorer.decideShow(results, parsed: parsed)
                     guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
                     showID = pick.id
@@ -65,6 +65,19 @@ struct Matcher {
         } catch {
             // Network or decode failure: leave the file pending so the next scan retries.
             return .skipped(error.localizedDescription)
+        }
+    }
+
+    /// "Sword Art Online Alicization War of Underworld" is a season, not a show, so TMDb returns nothing.
+    /// Drop trailing words until something comes back, as Kodi and Plex do; the scorer still has to agree.
+    private func searchShowsShortening(_ parsed: ParsedName) async throws -> [TMDbShowSummary] {
+        var words = parsed.title.split(separator: " ").map(String.init)
+        var query = parsed.title
+        while true {
+            let results = try await tmdb.searchShows(query: query, year: parsed.year)
+            if !results.isEmpty || words.count <= 2 { return results }
+            words.removeLast()
+            query = words.joined(separator: " ")
         }
     }
 

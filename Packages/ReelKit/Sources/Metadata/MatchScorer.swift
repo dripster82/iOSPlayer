@@ -41,6 +41,12 @@ public enum MatchScorer {
 
         if best.1 >= 12 && best.1 - runnerUp >= 4 { return Decision(pick: best.0, confidence: .autoHigh, alternatives: alternatives) }
         if best.1 >= 8 { return Decision(pick: best.0, confidence: .autoLow, alternatives: alternatives) }
+        // Weaker evidence still beats Needs Review, as long as it is flagged "?" and fixable:
+        // any title relationship (prefix or similar, e.g. "Ninjago: Masters of Spinjitzu" for "LEGO Ninjago
+        // Masters of Spinjitzu"), or TMDb's single hit for a query it understood through an alternative
+        // title ("Shingeki no Kyojin" → Attack on Titan). A year that clearly disagrees still blocks it.
+        let yearClash = parsed.year.map { py in best.0[keyPath: year].map { abs(py - $0) > 1 } ?? false } ?? false
+        if !yearClash, best.1 >= 4 || results.count == 1 { return Decision(pick: best.0, confidence: .autoLow, alternatives: alternatives) }
         return Decision(pick: nil, confidence: .unmatched, alternatives: alternatives)
     }
 

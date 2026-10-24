@@ -46,8 +46,8 @@ public enum FilenameParser {
     private static let seasonFolderPattern = try! NSRegularExpression(pattern: #"(?i)^(?:Season|Series|S)\s?(\d{1,2})$"#)
     // "OVA", "OVAs", "Specials", "Extras" folders hold season 0.
     private static let specialsFolderPattern = try! NSRegularExpression(pattern: #"(?i)^(?:OVAs?|OADs?|Specials?|Extras?)$"#)
-    // E05 or 05 - Title or 05. Title, only trusted when the parent folder is a season folder.
-    private static let bareEpisodePattern = try! NSRegularExpression(pattern: #"(?i)^(?:E|Ep|Episode\s?)?(\d{1,3})(?:\s*[-._]\s*|\s+)"#)
+    // E05, 05 - Title, 05. Title, or just 0003: only trusted when a folder above names the season.
+    private static let bareEpisodePattern = try! NSRegularExpression(pattern: #"(?i)^(?:E|Ep|Episode\s?)?(\d{1,4})(?:\s*[-._]\s*|\s+|$)"#)
 
     // Anime / fansub shapes, tried only when nothing above matched.
     // "OVA 01", "Special 2" → season 0.
@@ -86,12 +86,15 @@ public enum FilenameParser {
 
         var result = ParsedName(title: "")
 
-        // 1. Episode pattern on the filename.
+        // 1. Episode pattern on the filename. "Stargate Atlantis (2004) - S01E09": the year belongs to the
+        //    show, not the title, and TMDb needs it separately to tell Ghosts (2019) from Ghosts (2021).
         if let ep = matchEpisode(in: stem) {
             result.season = ep.season
             result.episode = ep.episode
             result.episodeEnd = ep.end
-            result.title = clean(String(stem[..<ep.range.lowerBound]))
+            let stripped = stripYear(stripCountry(String(stem[..<ep.range.lowerBound])))
+            result.title = clean(stripped.text)
+            result.year = stripped.year
         }
 
         // 2. Season folder + bare episode number ("Season 2/05 - Title.mkv", "OVA/01 - Title.mkv").
@@ -108,7 +111,9 @@ public enum FilenameParser {
         if result.episode == nil, let ep = matchLooseEpisode(in: stem) {
             result.season = ep.season
             result.episode = ep.episode
-            result.title = clean(ep.title)
+            let stripped = stripYear(stripCountry(ep.title))
+            result.title = clean(stripped.text)
+            result.year = stripped.year
             if result.season == nil {
                 // "Title 2nd Season - 01": the season lives in the title or the folder, else assume 1.
                 let split = splitSeason(fromName: result.title)
@@ -124,10 +129,12 @@ public enum FilenameParser {
                 showFolder = parents.dropLast().last
             }
             if let showFolder, !isGenericFolder(showFolder) {
-                // "My Hero Academia Complete Season 2" names the show and the season.
-                let split = splitSeason(fromName: stripYear(showFolder).text)
-                result.folderTitle = clean(split.text)
+                // "My Hero Academia Complete Season 2" names the show and the season; "Archer (2009)" its year.
+                let stripped = stripYear(stripCountry(showFolder))
+                let split = splitSeason(fromName: stripped.text)
+                result.folderTitle = clean(splitQuality(clean(split.text)).0)
                 if result.title.isEmpty { result.title = result.folderTitle ?? "" }
+                if result.year == nil { result.year = stripped.year }
             }
         }
 
@@ -204,6 +211,11 @@ public enum FilenameParser {
         let season = (1...3).lazy.compactMap { Int(substring(name, m.range(at: $0))) }.first
         let text = (name as NSString).replacingCharacters(in: m.range, with: " ")
         return (text, season)
+    }
+
+    /// "Ghosts (US)", "The Office (UK)": the country tag is not part of the title TMDb knows.
+    private static func stripCountry(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\s*[\[(](?:US|UK|AU|CA|NZ|JP|FR|DE|IT|ES|KR)[\])]"#, with: " ", options: [.regularExpression, .caseInsensitive])
     }
 
     private static func stripLeadingGroup(_ text: String) -> String {
