@@ -164,6 +164,10 @@ public final class MediaItem {
     public var collectionID: Int? = nil
     public var collectionName: String? = nil
     public var collectionCheckedAt: Date? = nil
+    /// Fix Match left this item with no files. It is hidden now and deleted at the next launch:
+    /// deleting it at once invalidated the object under an open detail page, which SwiftData
+    /// punishes with a trap on the next property read (and `isDeleted` does not say so).
+    public var pendingDeletion: Bool = false
 
     // Episode fields
     public var seasonNumber: Int?

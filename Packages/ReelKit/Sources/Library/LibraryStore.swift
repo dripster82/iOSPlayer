@@ -299,13 +299,29 @@ public final class LibraryStore: ObservableObject {
             f.item = nil
         }
         var deleted: [String] = []
-        if item.files.isEmpty, item.kind != .show { deleted.append(SyncKeys.item(item.itemKey)); context.delete(item) }
+        if item.files.isEmpty, item.kind != .show {
+            // Not deleted here: the detail page under the Fix Match sheet still holds this object.
+            deleted.append(SyncKeys.item(item.itemKey))
+            item.pendingDeletion = true
+            item.hidden = true
+        }
         try context.save()
         let matcher = Matcher(context: context, tmdb: tmdb)
         for f in files { _ = await matcher.match(f) }
         try context.save()
         if !deleted.isEmpty { syncHooks?.deleted(deleted) }
+        invalidateCaches()
         notifySync()
+        Diagnostics.log("library", "fix match: \(item.title.prefix(40)) → tmdb \(tmdbID) (\(files.count) files)")
+    }
+
+    /// Deletes the orphans Fix Match left behind. Called once at launch, before any page can hold one.
+    public func purgePendingDeletions() {
+        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingDeletion })
+        guard let orphans = try? context.fetch(d), !orphans.isEmpty else { return }
+        for o in orphans where o.files.isEmpty { context.delete(o) }
+        try? context.save()
+        Diagnostics.log("library", "purged \(orphans.count) rematched orphans")
     }
 
     private func override(for file: MediaFile) -> ItemOverride {

@@ -134,7 +134,7 @@ struct FilmDetailView: View {
     var body: some View {
         // Fix Match re-points the files and deletes this object; the page under the sheet must not
         // touch a deleted model (SwiftData traps on any property read). Show a stub until it pops.
-        if film.isDeleted {
+        if film.isDeleted || film.pendingDeletion {
             ContentUnavailableView("Rematched", systemImage: "arrow.triangle.2.circlepath", description: Text("This title was matched to a different entry. Go back and open it again."))
         } else {
             content
@@ -263,7 +263,7 @@ struct ShowDetailView: View {
     var body: some View {
         // Fix Match re-points the files and deletes this object; the page under the sheet must not
         // touch a deleted model (SwiftData traps on any property read). Show a stub until it pops.
-        if show.isDeleted {
+        if show.isDeleted || show.pendingDeletion {
             ContentUnavailableView("Rematched", systemImage: "arrow.triangle.2.circlepath", description: Text("This title was matched to a different entry. Go back and open it again."))
         } else {
             content
