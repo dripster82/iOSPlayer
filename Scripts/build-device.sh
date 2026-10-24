@@ -22,12 +22,20 @@ cd "$ROOT"
 restore() { git checkout -- Reel/Reel.entitlements 2>/dev/null || true; }
 trap restore EXIT
 
+if ! xcrun devicectl list devices --timeout 10 2>/dev/null | grep -Eq "$DEVICE.*(available|connected)"; then
+  echo "✗ device $DEVICE is not available to CoreDevice (unplugged, locked, untrusted, or Wi-Fi only)."
+  xcrun devicectl list devices 2>/dev/null | grep "$DEVICE" || true
+  exit 1
+fi
+
+# Build for the generic iOS target: it doesn't need the device to be reachable and produces the same Debug-iphoneos app.
+set -o pipefail
 xcodebuild build -project Reel.xcodeproj -scheme Reel \
-  -destination "id=$DEVICE" -derivedDataPath "$DD" \
+  -destination "generic/platform=iOS" -derivedDataPath "$DD" \
   CODE_SIGN_ENTITLEMENTS=Reel/Reel-NoiCloud.entitlements \
-  | grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)" || true
+  | grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)"
 
 APP="$DD/Build/Products/Debug-iphoneos/Reel.app"
 [[ -d "$APP" ]] || { echo "✗ no app at $APP"; exit 1; }
-xcrun devicectl device install app --device "$DEVICE" "$APP" | grep -E "installed|rror" || true
-echo "==> installed; unlock the phone and launch Reel (or: xcrun devicectl device process launch --device $DEVICE uk.co.ketelle.reel)"
+xcrun devicectl device install app --device "$DEVICE" "$APP" | grep -E "installed|rror"
+echo "==> installed; launch Reel on the phone (or: xcrun devicectl device process launch --device $DEVICE uk.co.ketelle.reel)"
