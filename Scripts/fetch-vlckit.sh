@@ -1,54 +1,77 @@
 #!/bin/zsh
-# Fetch VideoLAN's official MobileVLCKit binary (LGPL 2.1 build) into Packages/ReelKit/Vendor/.
-# The xcframework is ~260 MB compressed and is kept OUT of git; run this once per checkout
-# before opening Reel.xcodeproj. Pinned by version + sha256.
+# Fetch VideoLAN's official VLCKit 4 binary (LGPL 2.1 build) into Packages/ReelKit/Vendor/.
+# VLCKit 4 is still a prerelease (4.0.0aNN on download.videolan.org/pub/cocoapods/unstable); it is
+# the first VLCKit with Picture in Picture, which is why Reel moved off MobileVLCKit 3.7.3.
+# The archive is ~520 MB and covers every Apple platform; only the two iOS slices are kept
+# (~140 MB on disk once dSYMs are stripped). The xcframework stays OUT of git; run this once per checkout before opening
+# Reel.xcodeproj. Pinned by version + sha256.
 #
 # Usage: Scripts/fetch-vlckit.sh
+#        VLCKIT_ARCHIVE=/path/to/VLCKit-4.0.0a19-....tar.xz Scripts/fetch-vlckit.sh   # reuse a download
 set -euo pipefail
 
-VERSION="3.7.3-319ed2c0-79128878"
-URL="https://download.videolan.org/pub/cocoapods/prod/MobileVLCKit-$VERSION.tar.xz"
+VERSION="4.0.0a19-d7597c1706-85a537d69"
+URL="https://download.videolan.org/pub/cocoapods/unstable/VLCKit-$VERSION.tar.xz"
 
-SHA256="0d04059906962ddc9a7bd1ebaa12e1f9ae85eb2466116a97a2f46886dd27a0a9"
+SHA256="1172078a43150af202c31feb62db3d6687f242d3aa048cce1b899f51c4f14142"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/Packages/ReelKit/Vendor"
+FRAMEWORK="VLCKit.xcframework"
 
-if [[ -d "$DEST/MobileVLCKit.xcframework" ]]; then
-  echo "MobileVLCKit already present at $DEST — delete it to re-fetch."
+if [[ -d "$DEST/$FRAMEWORK" ]]; then
+  echo "VLCKit already present at $DEST — delete it to re-fetch."
   exit 0
 fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "==> downloading MobileVLCKit $VERSION (~260 MB)"
-curl -fL --progress-bar -o "$WORK/vlckit.tar.xz" "$URL"
-ACTUAL="$(shasum -a 256 "$WORK/vlckit.tar.xz" | cut -d' ' -f1)"
+if [[ -n "${VLCKIT_ARCHIVE:-}" && -f "$VLCKIT_ARCHIVE" ]]; then
+  echo "==> using local archive $VLCKIT_ARCHIVE"
+  ARCHIVE="$VLCKIT_ARCHIVE"
+else
+  echo "==> downloading VLCKit $VERSION (~520 MB)"
+  curl -fL --progress-bar -o "$WORK/vlckit.tar.xz" "$URL"
+  ARCHIVE="$WORK/vlckit.tar.xz"
+fi
+ACTUAL="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
 if [[ -n "$SHA256" && "$ACTUAL" != "$SHA256" ]]; then
   echo "✗ checksum mismatch — refusing to install"; exit 1
 fi
 echo "    sha256 $ACTUAL"
 
 echo "==> extracting"
-tar xf "$WORK/vlckit.tar.xz" -C "$WORK"
-SRC="$(find "$WORK" -maxdepth 2 -name 'MobileVLCKit.xcframework' -print -quit)"
-[[ -n "$SRC" ]] || { echo "✗ MobileVLCKit.xcframework not found in archive"; ls -R "$WORK" | head -40; exit 1; }
+tar xf "$ARCHIVE" -C "$WORK"
+SRC="$(find "$WORK" -maxdepth 2 -name "$FRAMEWORK" -print -quit)"
+[[ -n "$SRC" ]] || { echo "✗ $FRAMEWORK not found in archive"; ls -R "$WORK" | head -40; exit 1; }
 
 mkdir -p "$DEST"
+# Stale MobileVLCKit 3.x from an older checkout would otherwise sit next to the new framework.
+rm -rf "$DEST/MobileVLCKit.xcframework"
 cp -R "$SRC" "$DEST/"
 cp "$(dirname "$SRC")/COPYING.txt" "$DEST/" 2>/dev/null || true   # LGPL 2.1 text (shipped in Settings → Licences)
-# Drop the debug symbols (~hundreds of MB) and the Info.plist keys that point at them,
-# otherwise Xcode refuses the xcframework with "Missing path ... DebugSymbolsPath".
-find "$DEST/MobileVLCKit.xcframework" -name dSYMs -type d -prune -exec rm -rf {} +
-/usr/bin/python3 - "$DEST/MobileVLCKit.xcframework/Info.plist" <<'PY'
-import plistlib, sys
-p = sys.argv[1]
-d = plistlib.load(open(p, "rb"))
-for lib in d["AvailableLibraries"]:
-    lib.pop("DebugSymbolsPath", None)
-plistlib.dump(d, open(p, "wb"))
-PY
 
-echo "==> installed $DEST/MobileVLCKit.xcframework"
-ls "$DEST/MobileVLCKit.xcframework"
+# Keep only the iOS device + simulator slices and drop the debug symbols (hundreds of MB), then
+# rewrite Info.plist to match: Xcode refuses an xcframework whose plist points at missing paths
+# ("Missing path ... DebugSymbolsPath").
+/usr/bin/python3 - "$DEST/$FRAMEWORK" <<'PY'
+import plistlib, shutil, sys, os
+root = sys.argv[1]
+plist = os.path.join(root, "Info.plist")
+d = plistlib.load(open(plist, "rb"))
+keep = []
+for lib in d["AvailableLibraries"]:
+    if lib["SupportedPlatform"] == "ios":
+        lib.pop("DebugSymbolsPath", None)
+        keep.append(lib)
+    else:
+        shutil.rmtree(os.path.join(root, lib["LibraryIdentifier"]), ignore_errors=True)
+d["AvailableLibraries"] = keep
+plistlib.dump(d, open(plist, "wb"))
+PY
+find "$DEST/$FRAMEWORK" -name dSYMs -type d -prune -exec rm -rf {} +
+
+echo "==> installed $DEST/$FRAMEWORK"
+ls "$DEST/$FRAMEWORK"
+file "$DEST/$FRAMEWORK/ios-arm64/VLCKit.framework/VLCKit"

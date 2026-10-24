@@ -34,7 +34,7 @@ PLAN.md                 Product plan + solution design. §11 = architecture, §1
 README.md               Human-facing build/run instructions.
 HANDOVER.md             This file.
 project.yml             XcodeGen spec → generates Reel.xcodeproj (gitignored).
-Scripts/fetch-vlckit.sh Downloads VideoLAN's MobileVLCKit 3.7.3 xcframework into Packages/ReelKit/Vendor (gitignored).
+Scripts/fetch-vlckit.sh Downloads VideoLAN's VLCKit 4.0.0a19 xcframework (iOS slices) into Packages/ReelKit/Vendor (gitignored).
 Scripts/build-device.sh No-iCloud Debug build + install on the paired iPhone; restores Reel.entitlements afterwards (§3).
 prototype/index.html    Clickable HTML prototype of every screen. Open in a browser. The app UI follows it.
 
@@ -45,7 +45,8 @@ Reel/                   SwiftUI app target
                         DetailViews (HeroHeader, FilmDetailView, ShowDetailView, EpisodeRow, FlowLayout),
                         SearchView, NeedsReviewView (+FixMatchView)
   Views/Sources/        SourcesView (+SourceDetailView, TagSheet, FileBrowserView), AddSourceView
-  Views/Player/         PlayerView (PlayerView → PlayerContentView, Scrubber, TrackSheet, AirPlayButton, VolumeControl), VLCVideoView
+  Views/Player/         PlayerView (PlayerView → PlayerContentView, Scrubber, TrackSheet, AirPlayButton, VolumeControl),
+                        VLCVideoView (VLCDrawableView: the UIView VLC paints into + VLCPictureInPictureDrawable)
   Views/Settings/       SettingsView (+HiddenItemsView, HistoryView, LicencesView, AttributionView)
   Views/Components/     ArtworkImage (+Palette placeholder), PosterCard (+ItemContextMenu), FilterBar, ItemGrid (+ItemRow, ItemDestination, itemNavigation())
   Views/OnboardingView.swift
@@ -59,7 +60,7 @@ Packages/ReelKit/       ONE Swift package, SIX modules (keeps Xcode happy, lets 
   Sources/MediaSources  MediaSource (protocol, SourceConfig, SourceFactory, withRetries), LocalSource,
                         WebDAVSource (+PropfindParser), SMBSource (#if canImport(AMSMB2)), CredentialStore, SourceDiscovery
   Sources/Playback      PlaybackState (protocol + PlaybackItem/Options), VLCPlaybackEngine, NowPlayingBridge
-  Vendor/               MobileVLCKit.xcframework + COPYING.txt (gitignored; binaryTarget declared only when present)
+  Vendor/               VLCKit.xcframework + COPYING.txt (gitignored; binaryTarget declared only when present)
   Sources/Library       Models (SwiftData @Model classes + LibrarySchema), LibraryScanner (@ModelActor),
                         Matcher, LibraryStore (@MainActor façade), ImageLoader
   Sources/Sync          SyncEngine (CKSyncEngine delegate)
@@ -76,7 +77,7 @@ Module dependency graph: `MediaCore ← Metadata, MediaSources, Playback ← Lib
 ```sh
 cd <repo>
 brew install xcodegen            # if missing
-Scripts/fetch-vlckit.sh          # MobileVLCKit 3.7.3 → Packages/ReelKit/Vendor (gitignored, ~260 MB)
+Scripts/fetch-vlckit.sh          # VLCKit 4.0.0a19 → Packages/ReelKit/Vendor (gitignored, ~520 MB download, ~140 MB kept)
 xcodegen generate                # → Reel.xcodeproj
 open Reel.xcodeproj
 ```
@@ -147,6 +148,50 @@ Pulled the SwiftData store off the phone with `xcrun devicectl device copy from 
   with a guess are now tried by the matcher and accepted only on an unambiguous hit.
 - **Fill mode shrank the video to a third.** `scaleFactor` is in pixels, not points. Fill now uses
   `videoCropGeometry` and is re-applied on layout.
+
+## 3.5 VLCKit 4 and Picture in Picture (24 Oct 2026)
+
+Paul wanted the video to keep playing in a floating window when he swipes to the home screen, like
+YouTube. MobileVLCKit 3.x has no PiP API at all, so the engine moved to **VLCKit 4.0.0a19** (prerelease,
+LGPL, dynamic) which ships its own `AVSampleBufferDisplayLayer` + `AVPictureInPictureController` bridge.
+
+What changed:
+- `Scripts/fetch-vlckit.sh` pulls `VLCKit-4.0.0a19-….tar.xz` from `download.videolan.org/pub/cocoapods/unstable`
+  (sha256-pinned, ~520 MB), keeps only the `ios-arm64` and `ios-arm64_x86_64-simulator` slices, strips the
+  dSYMs and rewrites `Info.plist` to match (~140 MB on disk). `VLCKIT_ARCHIVE=/path` reuses a download.
+  `Package.swift` declares the `VLCKit` binary target (still only when the folder exists) and links AVKit.
+- `VLCPlaybackEngine` is written against the VLCKit 4 API: `VLCMediaPlayer.Track` arrays
+  (`audioTracks`/`textTracks`, `isSelectedExclusively`, `deselectAll…Tracks`) with the array index as the
+  `MediaTrack.id`; `chapterDescriptions(ofTitle:)` returning `VLCMediaPlayer.ChapterDescription`;
+  `setCropRatioWithNumerator(_:denominator:)` for Fill (0/0 resets); `mediaPlayerStateChanged(_ state:)`,
+  `mediaPlayerLengthChanged`, `mediaPlayerTrackAdded`/`TrackSelected` delegate methods. VLC 4 has no
+  `ended` state — a stream that runs out goes `stopping → stopped`; the engine reports `.ended` when that
+  happens without its own `stop()` having been called. `VLCMedia(url:)` is now failable.
+- PiP: `VLCDrawableView` (the UIView VLC paints into) conforms to `VLCPictureInPictureDrawable`. VLC's
+  video output asks it for a `mediaController` (the engine's `pictureInPictureMediaController`, a small
+  nonisolated object that drives `VLCMediaPlayer` directly because AVKit calls it off the main thread) and
+  calls `pictureInPictureReady` with a `VLCPictureInPictureWindowControlling` once the first frame is up;
+  the engine stores it weakly and publishes `canStartPictureInPicture` / `isPictureInPictureActive`.
+  VLCKit's controller sets `canStartPictureInPictureAutomaticallyFromInline`, so iOS starts PiP by itself
+  when the app is backgrounded mid-playback; `PlayerContentView` also calls `startPictureInPicture()` on
+  `.background` as a belt-and-braces and `stopPictureInPicture()` on `.active`. There is a `pip.enter`
+  button in the top controls and a row in the More sheet.
+- No new Info.plist keys were needed beyond the existing `UIBackgroundModes: [audio]`.
+
+Verified:
+- Device build (`Scripts/build-device.sh`) compiles warning-free in our code and installs on the iPhone.
+- `swift test` — 37 tests pass.
+- iPad Pro 11" simulator: the MKV plays through VLCKit 4's sample-buffer display; pressing Home starts PiP
+  automatically (AVKit log: `alwaysStartsAutomaticallyWhenEnteringBackground YES`, `pictureInPictureActive YES`);
+  playback keeps running in the background and the in-app view resumes at the right time when the app
+  is foregrounded. The simulator's PiP window itself stays black (frames are enqueued at 30 fps but
+  `displayed: 0, evicted: 180` — the simulator doesn't composite the sample-buffer layer into the PiP
+  window) and draws no overlay controls, so play/pause/seek from the PiP window could only be checked
+  by code inspection. **The iPhone simulator reports `isPictureInPictureSupported NO`**, so VLCKit never
+  offers a controller there and the button doesn't appear; test on an iPad simulator or a device.
+
+Still to confirm on the real phone (needs Paul): the PiP window shows video, its play/pause/±15 s
+controls work (they go through `jumpWithOffset:completion:`), and Fit/Fill with the new crop-ratio API.
 
 ## 4. Device smoke test (your second task)
 
@@ -219,7 +264,7 @@ Phase 3
 - [ ] Playlists / Up Next queue beyond next-episode.
 
 Phase 4
-- [ ] Picture in Picture via `AVSampleBufferDisplayLayer` bridge (risky; cut if it fails — see PLAN §11.11).
+- [x] Picture in Picture — done via VLCKit 4 (§3.5). Auto-starts on swipe-home during playback; `pip.enter` button in the player.
 - [ ] Scrub thumbnails (`VLCMediaThumbnailer`, 10 s intervals, cached per file).
 - [ ] Subtitle style editor (size/colour/position) — VLC `--freetype-*` options at load time.
 - [ ] Accessibility pass: VoiceOver labels on player controls, Dynamic Type in grids, reduced motion.

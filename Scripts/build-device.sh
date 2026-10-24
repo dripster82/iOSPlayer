@@ -16,7 +16,7 @@ DEVICE="${1:-D83F0EFF-F81B-5BDF-ADC5-09FC08796658}"
 DD="${DERIVED_DATA:-$ROOT/DerivedData}"   # gitignored
 
 cd "$ROOT"
-[[ -d Packages/ReelKit/Vendor/MobileVLCKit.xcframework ]] || Scripts/fetch-vlckit.sh
+[[ -d Packages/ReelKit/Vendor/VLCKit.xcframework ]] || Scripts/fetch-vlckit.sh
 [[ -d Reel.xcodeproj ]] || xcodegen generate
 
 restore() { git checkout -- Reel/Reel.entitlements 2>/dev/null || true; }
