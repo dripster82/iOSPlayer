@@ -137,38 +137,34 @@ struct CollectionsView: View {
     @EnvironmentObject private var library: LibraryStore
     @State private var newName = ""
     @State private var adding = false
-    @State private var collections: [MediaCollection] = []
-    @State private var universes: [(name: String, count: Int)] = []
-    @State private var series: [(id: Int, name: String, count: Int)] = []
+    /// Built once per library change, off the render path: the old body re-fetched and re-grouped
+    /// every film for every card on every redraw, which made the screen crawl on a big library.
+    @State private var mine: [Card] = []
+    @State private var universes: [Card] = []
+    @State private var series: [Card] = []
     private let columns = [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)]
+
+    struct Card: Identifiable {
+        var id: String
+        var title: String
+        var subtitle: String
+        var route: LibraryRoute
+        var icon: CollectionIcon.Kind
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                section("My collections", footer: collections.isEmpty ? "Tap + to make one, then add titles from their menu." : nil) {
-                    ForEach(collections, id: \.id) { c in
-                        card(c.name, "\(c.itemKeys.count) items", route: .collection(c.id), icon: .mosaic(c.itemKeys.compactMap { library.item($0)?.posterPath }))
-                    }
-                }
+                section("My collections", cards: mine, footer: mine.isEmpty ? "Tap + to make one, then add titles from their menu." : nil)
                 if !universes.isEmpty {
-                    section("Universes", footer: "Studios and franchises, from TMDb's companies and keywords. A universe appears once two of its films are in the library.") {
-                        ForEach(universes, id: \.name) { u in
-                            let logo = library.logoPath(forUniverse: u.name)
-                            card(u.name, "\(u.count) films", route: .universe(u.name), icon: ArtworkURL.logo(logo) != nil ? .logo(logo!) : .mosaic(library.films(inUniverse: u.name).compactMap(\.posterPath)))
-                        }
-                    }
+                    section("Universes", cards: universes, footer: "Studios and franchises, from TMDb's companies and keywords. A universe appears once two of its films are in the library.")
                 }
                 if !series.isEmpty {
-                    section("Film series", footer: "TMDb's collections: sequels and trilogies with two or more films here.") {
-                        ForEach(series, id: \.id) { s in
-                            let films = library.films(inCollection: s.id, excluding: "")
-                            card(s.name, "\(s.count) films", route: .filmCollection(s.id), icon: films.first?.collectionPosterPath.map { .poster($0) } ?? .mosaic(films.compactMap(\.posterPath)))
-                        }
-                    }
+                    section("Film series", cards: series, footer: "TMDb's collections: sequels and trilogies with two or more films here.")
                 }
             }.padding(.vertical)
         }
-        .refreshFromLibrary { collections = library.collections(); universes = library.universes(); series = library.filmCollections() }
+        .refreshFromLibrary { rebuild() }
         .itemNavigation()
         .navigationTitle("Collections")
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
@@ -179,23 +175,38 @@ struct CollectionsView: View {
         }
     }
 
-    private func section<Content: View>(_ title: String, footer: String?, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.title3.bold()).padding(.horizontal)
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) { content() }.padding(.horizontal)
-            if let footer { Text(footer).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
+    private func rebuild() {
+        mine = library.collections().map { c in
+            Card(id: "c:\(c.id)", title: c.name, subtitle: "\(c.itemKeys.count) items", route: .collection(c.id),
+                 icon: .mosaic(c.itemKeys.compactMap { library.item($0)?.posterPath }))
+        }
+        let index = library.groupIndex()
+        universes = index.universes.map { g in
+            Card(id: "u:\(g.name)", title: g.name, subtitle: "\(g.films.count) films", route: .universe(g.name),
+                 icon: ArtworkURL.logo(g.logoPath) != nil ? .logo(g.logoPath!) : .mosaic(g.films.compactMap(\.posterPath)))
+        }
+        series = index.series.map { s in
+            Card(id: "s:\(s.id)", title: s.group.name, subtitle: "\(s.group.films.count) films", route: .filmCollection(s.id),
+                 icon: s.group.posterPath.map { .poster($0) } ?? .mosaic(s.group.films.compactMap(\.posterPath)))
         }
     }
 
-    /// A poster-shaped card, like the film grid, with the grouping's picture and a title and count under it.
-    private func card(_ title: String, _ subtitle: String, route: LibraryRoute, icon: CollectionIcon.Kind) -> some View {
-        NavigationLink(value: route) {
-            VStack(alignment: .leading, spacing: 6) {
-                CollectionIcon(kind: icon, title: title).aspectRatio(2 / 3, contentMode: .fit)
-                Text(title).font(.footnote.weight(.semibold)).lineLimit(1).foregroundStyle(.primary)
-                Text(subtitle).font(.caption2).foregroundStyle(.secondary)
-            }
-        }.buttonStyle(.plain)
+    private func section(_ title: String, cards: [Card], footer: String?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.title3.bold()).padding(.horizontal)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                ForEach(cards) { card in
+                    NavigationLink(value: card.route) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            CollectionIcon(kind: card.icon, title: card.title).aspectRatio(2 / 3, contentMode: .fit)
+                            Text(card.title).font(.footnote.weight(.semibold)).lineLimit(1).foregroundStyle(.primary)
+                            Text(card.subtitle).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }.buttonStyle(.plain)
+                }
+            }.padding(.horizontal)
+            if let footer { Text(footer).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
+        }
     }
 }
 

@@ -358,6 +358,42 @@ public final class LibraryStore: ObservableObject {
 
     // MARK: - Universes
 
+    /// Everything the Collections screen needs in one pass over the films: universes and TMDb series
+    /// with two or more films, each with its films (oldest first) and, for a universe, a studio logo.
+    public struct GroupIndex: Sendable {
+        public struct Group: Sendable { public var name: String; public var films: [MediaItem]; public var logoPath: String?; public var posterPath: String? }
+        public var universes: [Group] = []
+        public var series: [(id: Int, group: Group)] = []
+    }
+    public func groupIndex() -> GroupIndex {
+        var byUniverse: [String: [MediaItem]] = [:]
+        var logos: [String: String] = [:]
+        var bySeries: [Int: (String, String?, [MediaItem])] = [:]
+        for f in items(kind: .film) {
+            for u in Universes.universes(studios: f.studios, keywords: f.keywords) {
+                byUniverse[u, default: []].append(f)
+                if logos[u] == nil {
+                    for (i, s) in f.studios.enumerated() where Universes.universeName(forStudio: s) == u && i < f.studioLogos.count && !f.studioLogos[i].isEmpty { logos[u] = f.studioLogos[i]; break }
+                }
+            }
+            if let id = f.collectionID {
+                var e = bySeries[id] ?? (f.collectionName ?? "Collection", nil, [])
+                if e.1 == nil { e.1 = f.collectionPosterPath }
+                e.2.append(f)
+                bySeries[id] = e
+            }
+        }
+        let byYear: (MediaItem, MediaItem) -> Bool = { ($0.year ?? 0) < ($1.year ?? 0) }
+        var index = GroupIndex()
+        index.universes = byUniverse.filter { $0.value.count >= 2 }
+            .map { GroupIndex.Group(name: $0.key, films: $0.value.sorted(by: byYear), logoPath: logos[$0.key], posterPath: nil) }
+            .sorted { $0.films.count != $1.films.count ? $0.films.count > $1.films.count : $0.name < $1.name }
+        index.series = bySeries.filter { $0.value.2.count >= 2 }
+            .map { ($0.key, GroupIndex.Group(name: $0.value.0, films: $0.value.2.sorted(by: byYear), logoPath: nil, posterPath: $0.value.1)) }
+            .sorted { $0.group.films.count != $1.group.films.count ? $0.group.films.count > $1.group.films.count : $0.group.name < $1.group.name }
+        return index
+    }
+
     /// Every universe with at least two library films, biggest first.
     public func universes() -> [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
