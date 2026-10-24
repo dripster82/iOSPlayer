@@ -106,6 +106,8 @@ public struct TMDbMovieDetail: Decodable, Sendable {
 public struct TMDbCompany: Decodable, Sendable, Hashable {
     public var id: Int
     public var name: String
+    public var logoPath: String?
+    enum CodingKeys: String, CodingKey { case id, name; case logoPath = "logo_path" }
 }
 
 public struct TMDbKeywordList: Decodable, Sendable, Hashable {

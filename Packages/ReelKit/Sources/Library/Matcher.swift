@@ -207,7 +207,9 @@ struct Matcher {
         item.collectionName = d.belongsToCollection?.name
         item.collectionCheckedAt = Date()
         item.studios = d.productionCompanies?.map(\.name) ?? []
+        item.studioLogos = d.productionCompanies?.map { $0.logoPath ?? "" } ?? []
         item.keywords = d.keywords?.names ?? []
+        item.collectionPosterPath = d.belongsToCollection?.posterPath
         item.universeCheckedAt = Date()
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)

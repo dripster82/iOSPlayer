@@ -166,7 +166,11 @@ public final class MediaItem {
     public var collectionCheckedAt: Date? = nil
     /// TMDb production companies and keywords; `Universes` turns them into Marvel, Pixar, Star Wars…
     public var studios: [String] = []
+    /// TMDb logo paths parallel to `studios` ("" when none), for the Collections icons.
+    public var studioLogos: [String] = []
     public var keywords: [String] = []
+    /// Poster of the TMDb collection this film belongs to.
+    public var collectionPosterPath: String? = nil
     public var universeCheckedAt: Date? = nil
     /// Fix Match left this item with no files. It is hidden now and deleted at the next launch:
     /// deleting it at once invalidated the object under an open detail page, which SwiftData

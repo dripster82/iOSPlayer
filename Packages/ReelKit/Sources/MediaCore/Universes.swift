@@ -53,6 +53,10 @@ public enum Universes {
         "studiocanal": "StudioCanal", "working title films": "Working Title", "merchant ivory productions": "Merchant Ivory",
     ]
 
+    public static func universeName(forStudio studio: String) -> String? {
+        studioNames[studio.lowercased().trimmingCharacters(in: .whitespaces)]
+    }
+
     /// The universes one film belongs to, from its TMDb production companies and keywords.
     public static func universes(studios: [String], keywords: [String]) -> [String] {
         var out: [String] = []

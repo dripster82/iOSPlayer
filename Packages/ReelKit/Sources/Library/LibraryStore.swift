@@ -365,6 +365,16 @@ public final class LibraryStore: ObservableObject {
         return counts.filter { $0.value >= 2 }.map { ($0.key, $0.value) }.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
     }
 
+    /// A studio logo for a universe, from any of its films whose company maps to it.
+    public func logoPath(forUniverse name: String) -> String? {
+        for f in films(inUniverse: name) {
+            for (i, s) in f.studios.enumerated() where Universes.universeName(forStudio: s) == name && i < f.studioLogos.count && !f.studioLogos[i].isEmpty {
+                return f.studioLogos[i]
+            }
+        }
+        return nil
+    }
+
     public func films(inUniverse name: String) -> [MediaItem] {
         items(kind: .film).filter { Universes.universes(studios: $0.studios, keywords: $0.keywords).contains(name) }.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
     }
@@ -410,7 +420,9 @@ public final class LibraryStore: ObservableObject {
                 film.collectionID = d.belongsToCollection?.id
                 film.collectionName = d.belongsToCollection?.name
                 film.studios = d.productionCompanies?.map(\.name) ?? []
+                film.studioLogos = d.productionCompanies?.map { $0.logoPath ?? "" } ?? []
                 film.keywords = d.keywords?.names ?? []
+                film.collectionPosterPath = d.belongsToCollection?.posterPath
                 if film.collectionID != nil || !Universes.universes(studios: film.studios, keywords: film.keywords).isEmpty { found += 1 }
             }
             film.collectionCheckedAt = Date()

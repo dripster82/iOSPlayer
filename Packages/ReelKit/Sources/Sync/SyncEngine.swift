@@ -450,6 +450,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             r["overview"] = i.overview; r["posterPath"] = i.posterPath; r["backdropPath"] = i.backdropPath; r["stillPath"] = i.stillPath
             r["rating"] = i.rating; r["runtimeMinutes"] = i.runtimeMinutes; r["genres"] = Self.list(i.genres); r["cast"] = Self.list(i.cast); r["castProfiles"] = Self.list(i.castProfiles); r["castIDs"] = i.castIDs
             r["studios"] = Self.list(i.studios); r["keywords"] = Self.list(i.keywords)
+            r["studioLogos"] = Self.list(i.studioLogos); r["collectionPosterPath"] = i.collectionPosterPath
             r["confidence"] = i.confidenceRaw; r["addedAt"] = i.addedAt; r["hidden"] = i.hidden ? 1 : 0
             r["seasonNumber"] = i.seasonNumber; r["episodeNumber"] = i.episodeNumber; r["airDate"] = i.airDate
             r["showKey"] = i.show?.itemKey ?? i.showKeyHint; r["seasonCount"] = i.seasonCount
@@ -576,6 +577,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let ids = r["castIDs"] as? [Int], ids.count == i.cast.count { i.castIDs = ids }
             if let s = r["studios"] as? [String] { i.studios = s }
             if let k = r["keywords"] as? [String] { i.keywords = k }
+            if let l = r["studioLogos"] as? [String], l.count == i.studios.count { i.studioLogos = l }
+            if let cp = r["collectionPosterPath"] as? String { i.collectionPosterPath = cp }
             i.confidenceRaw = (r["confidence"] as? String) ?? i.confidenceRaw
             i.addedAt = (r["addedAt"] as? Date) ?? i.addedAt; i.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             i.seasonNumber = r["seasonNumber"] as? Int; i.episodeNumber = r["episodeNumber"] as? Int; i.airDate = r["airDate"] as? Date
