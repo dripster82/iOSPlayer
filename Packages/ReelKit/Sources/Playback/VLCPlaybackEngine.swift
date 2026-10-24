@@ -167,8 +167,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard let media = VLCMedia(url: item.url) else { setStatus(.failed("VLC couldn't open this URL.")); return }
         media.addOption(":network-caching=\(options.networkCachingMS)")
         media.addOption(":file-caching=1000")
-        media.addOption(":clock-jitter=0")
-        media.addOption(":clock-synchro=0")
+        // Keep VLC's default clock. The scaffold disabled clock sync and jitter handling, which made a
+        // decoder that fell behind drop every frame as late, forever, while audio played on: the
+        // frozen-picture-with-sound report. Late frames are shown rather than dropped, so a slow
+        // stretch catches up visibly instead of freezing.
+        media.addOption(":no-drop-late-frames")
+        media.addOption(":no-skip-frames")
         if options.hardwareDecoding {
             media.addOption(":codec=avcodec")
             media.addOption(":avcodec-hw=videotoolbox")
@@ -266,9 +270,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 if pictures != self.lastPictures {
                     self.lastPictures = pictures; self.lastPicturesAt = Date(); self.lastPicturesTime = self.clock.time
                 } else if !self.player.videoTracks.isEmpty, count != self.lastProgressCount,
-                          Date().timeIntervalSince(self.lastPicturesAt) > 10, Date().timeIntervalSince(self.lastSeekAt) > 15,
+                          Date().timeIntervalSince(self.lastPicturesAt) > 6, Date().timeIntervalSince(self.lastSeekAt) > 15,
                           !self.isPictureInPictureActive {
-                    Diagnostics.log("player", "video stalled: no picture for \(Int(Date().timeIntervalSince(self.lastPicturesAt)))s while audio ran; reloading at \(Int(self.lastPicturesTime))s")
+                    Diagnostics.log("player", "video stalled: no picture for \(Int(Date().timeIntervalSince(self.lastPicturesAt)))s while audio ran (decoded \(stats.decodedVideo), shown \(stats.displayedPictures), lost \(stats.lostPictures), read \(stats.demuxReadBytes / 1_000_000) MB); reloading at \(Int(self.lastPicturesTime))s")
                     self.reconnect(at: self.lastPicturesTime)
                     continue
                 }
