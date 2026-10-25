@@ -179,7 +179,7 @@ struct FilmDetailView: View {
                     file?.resolution.map { ($0, nil) },
                     file.map { (($0.fileName as NSString).pathExtension.uppercased(), nil) },
                     ws?.watched == true ? ("Watched", .green) : nil,
-                    film.confidence == .autoLow ? ("Low-confidence match", .yellow) : nil,
+                    film.confidence == .autoLow ? ("Low-confidence match", .yellow) : film.confidence == .unmatched ? ("Not matched yet · Needs Review", .orange) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = film.overview { Text(o).font(.subheadline).padding(.horizontal) }
                 CastRow(names: film.cast, profiles: film.castProfiles, ids: film.castIDs).padding(.horizontal)
@@ -334,7 +334,7 @@ struct ShowDetailView: View {
                 Facts(facts: [
                     show.rating.map { ("★ \(String(format: "%.1f", $0))", nil) },
                     ("\(unwatched) unwatched", nil),
-                    show.confidence == .autoLow ? ("Low-confidence match", .yellow) : nil,
+                    show.confidence == .autoLow ? ("Low-confidence match", .yellow) : show.confidence == .unmatched ? ("Not matched yet · Needs Review", .orange) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = show.overview { Text(o).font(.subheadline).padding(.horizontal) }
                 CastRow(names: show.cast, profiles: show.castProfiles, ids: show.castIDs).padding(.horizontal)

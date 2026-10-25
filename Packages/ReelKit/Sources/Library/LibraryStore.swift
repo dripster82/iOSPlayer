@@ -875,9 +875,29 @@ public final class LibraryStore: ObservableObject {
         return (try? context.fetch(d)) ?? []
     }
 
+    /// Files with no match plus titles matched on a weak signal: both wait in Needs Review.
     public func reviewCount() -> Int {
         let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.reviewed && !$0.ignored })
-        return (try? context.fetchCount(d)) ?? 0
+        return ((try? context.fetchCount(d)) ?? 0) + lowConfidenceItems().count
+    }
+
+    /// Films and shows the matcher took on a weak signal (`autoLow`), for the viewer to confirm or fix.
+    public func lowConfidenceItems() -> [MediaItem] {
+        let low = MatchConfidence.autoLow.rawValue
+        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.confidenceRaw == low && !$0.hidden && !$0.pendingDeletion && ($0.kindRaw == "film" || $0.kindRaw == "show") }, sortBy: [SortDescriptor(\.sortTitle)])
+        return (try? context.fetch(d)) ?? []
+    }
+
+    /// The viewer looked at a weak match and kept it.
+    public func confirmMatch(_ item: MediaItem) throws {
+        item.confidenceRaw = MatchConfidence.manual.rawValue
+        item.pendingSync = true; item.updatedAt = Date()
+        for f in (item.kind == .show ? item.episodes.flatMap(\.files) : item.files) {
+            if f.classificationRaw == "episode-low" { f.classificationRaw = "episode" }
+            f.reviewed = true; f.pendingSync = true; f.updatedAt = Date()
+        }
+        try context.save()
+        notifySync()
     }
 
     /// The show page's Play button: the episode still in progress if there is one, else the one after

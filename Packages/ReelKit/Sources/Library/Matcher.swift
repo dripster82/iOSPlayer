@@ -70,7 +70,7 @@ struct Matcher {
                     if let pick = d.pick, !isReview || d.confidence == .autoHigh { showID = pick.id; confidence = d.confidence }
                     else if let viaTVDB = try await resolveShowViaTVDB(parsed) { showID = viaTVDB; confidence = .autoLow }
                     else if decided {
-                        let show = try upsertLocalShow(parsed)
+                        let show = try upsertLocalShow(parsed, confidence: .manual)
                         file.item = try upsertLocalEpisode(show: show, parsed: parsed, season: s, episode: e)
                         file.classificationRaw = "episode"
                         file.pendingSync = true; file.updatedAt = Date()
@@ -80,7 +80,9 @@ struct Matcher {
                 }
                 let show = try await upsertShow(id: showID, confidence: confidence)
                 let episodeItem = try await upsertEpisode(show: show, season: season, episode: episode)
+                let placeholder = file.item
                 file.item = episodeItem
+                retirePlaceholder(placeholder, replacedBy: episodeItem)
                 file.classificationRaw = confidence == .autoLow ? "episode-low" : "episode"
                 file.pendingSync = true; file.updatedAt = Date()
                 return .matched
@@ -95,7 +97,7 @@ struct Matcher {
                     let d = MatchScorer.decideMovie(results, parsed: parsed)
                     guard let pick = d.pick, !isReview || d.confidence == .autoHigh else {
                         guard decided else { return markReview(file) }
-                        file.item = try upsertLocalFilm(parsed)
+                        file.item = try upsertLocalFilm(parsed, confidence: .manual)
                         file.classificationRaw = "film"
                         file.pendingSync = true; file.updatedAt = Date()
                         return .matched
@@ -104,7 +106,9 @@ struct Matcher {
                     confidence = d.confidence
                 }
                 let film = try await upsertFilm(id: movieID, confidence: confidence)
+                let placeholder = file.item
                 file.item = film
+                retirePlaceholder(placeholder, replacedBy: film)
                 file.classificationRaw = "film"
                 file.pendingSync = true; file.updatedAt = Date()
                 return .matched
@@ -202,10 +206,37 @@ struct Matcher {
         }
     }
 
+    /// Needs Review, and meanwhile a placeholder in Films or TV Shows named from the file, so the
+    /// library shows everything it has even before the viewer has settled what it is.
     private func markReview(_ file: MediaFile) -> Outcome {
         file.classificationRaw = "review"
         file.pendingSync = true; file.updatedAt = Date()
+        if file.item == nil || file.item?.itemKey.hasPrefix("local-") == true {
+            let parsed = ParsedName(title: file.guessTitle ?? "", year: file.guessYear, season: file.guessSeason, episode: file.guessEpisode)
+            if !parsed.title.isEmpty {
+                let previous = file.item
+                if let s = parsed.season, let e = parsed.episode, file.guessKindRaw != MediaKind.film.rawValue {
+                    if let show = try? upsertLocalShow(parsed, confidence: .unmatched), let ep = try? upsertLocalEpisode(show: show, parsed: parsed, season: s, episode: e) { file.item = ep }
+                } else if let film = try? upsertLocalFilm(parsed, confidence: .unmatched) {
+                    file.item = film
+                }
+                if let previous, previous !== file.item { retirePlaceholder(previous, replacedBy: file.item) }
+            }
+        }
         return .review
+    }
+
+    /// A placeholder the file has moved on from is hidden and marked for the launch-time purge
+    /// (a page may still hold it); its show goes too when no episode has a file left.
+    private func retirePlaceholder(_ previous: MediaItem?, replacedBy item: MediaItem?) {
+        guard let previous, previous !== item, previous.itemKey.hasPrefix("local-") else { return }
+        if previous.files.isEmpty || previous.files.allSatisfy({ $0.item !== previous }) {
+            previous.pendingDeletion = true; previous.hidden = true; previous.pendingSync = true; previous.updatedAt = Date()
+            if let show = previous.show, show !== item?.show, show.itemKey.hasPrefix("local-"),
+               show.episodes.allSatisfy({ $0.pendingDeletion || $0.files.isEmpty }) {
+                show.pendingDeletion = true; show.hidden = true; show.pendingSync = true; show.updatedAt = Date()
+            }
+        }
     }
 
     // MARK: - Upserts
@@ -285,19 +316,27 @@ struct Matcher {
 
     // MARK: Items TMDb does not know
 
-    func upsertLocalFilm(_ parsed: ParsedName) throws -> MediaItem {
+    func upsertLocalFilm(_ parsed: ParsedName, confidence: MatchConfidence) throws -> MediaItem {
         let key = ItemKey.localFilm(title: parsed.title, year: parsed.year)
-        if let existing = try fetchItem(key) { return existing }
-        let item = MediaItem(itemKey: key, kind: .film, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: .manual)
+        if let existing = try fetchItem(key) {
+            if confidence == .manual, existing.confidence != .manual { existing.confidenceRaw = confidence.rawValue; existing.pendingSync = true; existing.updatedAt = Date() }
+            if existing.pendingDeletion { existing.pendingDeletion = false; existing.hidden = false }
+            return existing
+        }
+        let item = MediaItem(itemKey: key, kind: .film, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: confidence)
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
     }
 
-    func upsertLocalShow(_ parsed: ParsedName) throws -> MediaItem {
+    func upsertLocalShow(_ parsed: ParsedName, confidence: MatchConfidence) throws -> MediaItem {
         let key = ItemKey.localShow(title: parsed.title)
-        if let existing = try fetchItem(key) { return existing }
-        let item = MediaItem(itemKey: key, kind: .show, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: .manual)
+        if let existing = try fetchItem(key) {
+            if confidence == .manual, existing.confidence != .manual { existing.confidenceRaw = confidence.rawValue; existing.pendingSync = true; existing.updatedAt = Date() }
+            if existing.pendingDeletion { existing.pendingDeletion = false; existing.hidden = false }
+            return existing
+        }
+        let item = MediaItem(itemKey: key, kind: .show, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: confidence)
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
@@ -305,8 +344,11 @@ struct Matcher {
 
     func upsertLocalEpisode(show: MediaItem, parsed: ParsedName, season: Int, episode: Int) throws -> MediaItem {
         let key = ItemKey.localEpisode(showTitle: parsed.title, season: season, episode: episode)
-        if let existing = try fetchItem(key) { return existing }
-        let item = MediaItem(itemKey: key, kind: .episode, title: "Episode \(episode)", year: show.year, tmdbID: nil, confidence: .manual)
+        if let existing = try fetchItem(key) {
+            if existing.pendingDeletion { existing.pendingDeletion = false; existing.hidden = false }
+            return existing
+        }
+        let item = MediaItem(itemKey: key, kind: .episode, title: "Episode \(episode)", year: show.year, tmdbID: nil, confidence: show.confidence)
         item.seasonNumber = season
         item.episodeNumber = episode
         item.show = show

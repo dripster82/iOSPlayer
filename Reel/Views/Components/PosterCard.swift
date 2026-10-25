@@ -55,7 +55,7 @@ struct PosterCard: View {
     private var watched: Bool { item.kind != .show && library.watchState(item.itemKey)?.watched == true }
     private var badge: (text: String, low: Bool)? {
         if item.kind == .show { let n = library.unwatchedCount(item); return n > 0 ? ("\(n)", false) : nil }
-        if item.confidence == .autoLow { return ("?", true) }
+        if item.confidence == .autoLow || item.confidence == .unmatched { return ("?", true) }
         if item.kind != .episode, item.addedAt > Date().addingTimeInterval(-7 * 86400), library.watchState(item.itemKey)?.watched != true { return ("New", false) }
         return nil
     }
