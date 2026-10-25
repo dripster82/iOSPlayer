@@ -344,8 +344,10 @@ struct ShowDetailView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(seasons, id: \.self) { s in
-                                let left = unwatchedBySeason[s] ?? 0
-                                FilterBar.Chip(text: "Season \(s)" + (left > 0 ? " · \(left)" : " ✓"), on: s == selected) { season = s }
+                                // The season's size, not what is left: a shrinking number read as missing episodes.
+                                let count = episodesBySeason[s]?.count ?? 0
+                                let done = (unwatchedBySeason[s] ?? 0) == 0 && count > 0
+                                FilterBar.Chip(text: "Season \(s) · \(count)" + (done ? " ✓" : ""), on: s == selected) { season = s }
                                     .contextMenu {
                                         let keys = (episodesBySeason[s] ?? []).map(\.itemKey)
                                         Button { library.setWatched(true, itemKeys: keys) } label: { Label("Mark season \(s) watched", systemImage: "checkmark.circle") }
