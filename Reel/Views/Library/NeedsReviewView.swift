@@ -37,6 +37,8 @@ struct NeedsReviewView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text((f.relativePath as NSString).lastPathComponent).font(.footnote.weight(.semibold))
                             Text("Best guess: \(guess(f))").font(.caption).foregroundStyle(f.guessTitle == nil ? .red : .yellow)
+                            // What TMDb has for the file name, so the usual answer is one tap away.
+                            CandidateRow(file: f) { id, kind in resolve(f, kind: kind, tmdbID: id) }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
                                     Button("Accept") { resolve(f, kind: f.guessSeason != nil ? .episode : .film) }.buttonStyle(.borderedProminent)
@@ -98,10 +100,65 @@ struct NeedsReviewView: View {
         return "Film · \(t)" + (f.guessYear.map { " (\($0))" } ?? "")
     }
 
-    private func resolve(_ f: MediaFile, kind: MediaKind) {
+    private func resolve(_ f: MediaFile, kind: MediaKind, tmdbID: Int? = nil) {
         guard let tmdb = settings.tmdb else { library.lastError = "Add a TMDb API key in Settings first."; return }
         busy = f.id
-        Task { try? await library.resolveReview(f, as: kind, tmdbID: nil, tmdb: tmdb); busy = nil }
+        Task { try? await library.resolveReview(f, as: kind, tmdbID: tmdbID, tmdb: tmdb, providers: settings.providers); busy = nil }
+    }
+
+    /// TMDb's top results for the file's name (films, or shows when the name carries an episode
+    /// number), as tappable posters. Loaded when the row appears; nothing is chosen on its own.
+    struct CandidateRow: View {
+        @EnvironmentObject private var settings: AppSettings
+        let file: MediaFile
+        let choose: (Int, MediaKind) -> Void
+        struct Candidate: Identifiable { var id: Int; var title: String; var year: Int?; var poster: String? }
+        @State private var candidates: [Candidate]?
+        @State private var kind: MediaKind = .film
+
+        var body: some View {
+            Group {
+                if let candidates {
+                    if candidates.isEmpty {
+                        Text("TMDb has nothing for “\(FixMatchView.seed(for: file).title)”.").font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(alignment: .top, spacing: 10) {
+                                ForEach(candidates) { c in
+                                    Button { choose(c.id, kind) } label: {
+                                        VStack(spacing: 4) {
+                                            ArtworkImage(url: ArtworkURL.poster(c.poster), title: c.title, cornerRadius: 6).frame(width: 64, height: 96)
+                                            Text(c.title).font(.caption2).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(.primary)
+                                            if let y = c.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
+                                        }.frame(width: 84)
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Looking up TMDb…").font(.caption2).foregroundStyle(.secondary) }
+                }
+            }
+            .task(id: file.id) { await load() }
+        }
+
+        private func load() async {
+            guard let tmdb = settings.tmdb else { candidates = []; return }
+            let seed = FixMatchView.seed(for: file)
+            kind = seed.season != nil ? .show : .film
+            do {
+                if kind == .show {
+                    var r = try await tmdb.searchShows(query: seed.title, year: seed.year)
+                    if r.isEmpty, seed.year != nil { r = try await tmdb.searchShows(query: seed.title, year: nil) }
+                    candidates = r.prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath) }
+                } else {
+                    var r = try await tmdb.searchMovies(query: seed.title, year: seed.year)
+                    if r.isEmpty, seed.year != nil { r = try await tmdb.searchMovies(query: seed.title, year: nil) }
+                    candidates = r.prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath) }
+                }
+            } catch { candidates = [] }
+        }
     }
 }
 
@@ -212,10 +269,13 @@ struct FixMatchView: View {
             .overlay { if applying { ZStack { Color.black.opacity(0.2).ignoresSafeArea(); ProgressView("Rematching \(max(1, selected.count)) files…").padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)) } } }
             .interactiveDismissDisabled(applying)
             .onAppear {
-                let sample = file ?? files.first
-                query = (item?.kind == .episode ? item?.show?.title : item?.title) ?? sample?.guessTitle ?? ""
-                year = ((item?.kind == .episode ? item?.show?.year : item?.year) ?? sample?.guessYear).map(String.init) ?? ""
-                kind = (item?.kind == .show || item?.kind == .episode || sample?.guessSeason != nil) ? .show : .film
+                // The file's own name seeds the search, not the current match: when the match is
+                // wrong its title is exactly what not to search for.
+                let sample = file ?? files.first ?? item?.files.first ?? item?.episodes.first?.files.first
+                let seed = sample.map(Self.seed(for:))
+                query = seed?.title ?? (item?.kind == .episode ? item?.show?.title : item?.title) ?? ""
+                year = (seed?.year ?? (item?.kind == .episode ? item?.show?.year : item?.year)).map(String.init) ?? ""
+                kind = (item?.kind == .show || item?.kind == .episode || seed?.season != nil) ? .show : .film
                 if let series {
                     seriesFiles = series.episodes.flatMap(\.files).sorted { ($0.item?.seasonNumber ?? 0, $0.item?.episodeNumber ?? 0, $0.relativePath) < ($1.item?.seasonNumber ?? 0, $1.item?.episodeNumber ?? 0, $1.relativePath) }
                     selected = Set(seriesFiles.map(\.id))
@@ -226,6 +286,14 @@ struct FixMatchView: View {
     }
 
     @State private var searchedAnime = false
+
+    /// Title, year and episode numbers read from a file's name and folders; the bare name without
+    /// its extension when the parser finds no title at all.
+    static func seed(for file: MediaFile) -> ParsedName {
+        var parsed = FilenameParser.parse(relativePath: file.relativePath)
+        if parsed.title.isEmpty { parsed.title = (file.fileName as NSString).deletingPathExtension.replacingOccurrences(of: ".", with: " ") }
+        return parsed
+    }
 
     private func search() {
         guard let tmdb = settings.tmdb else { error = "Add a TMDb API key in Settings first."; return }
