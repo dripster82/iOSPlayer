@@ -85,7 +85,7 @@ enum DeepLinks {
             guard let item = find() else { return false }
             PlayerCoordinator.debugForceAirPlay = true
             let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
-            if let target { player.play(target, settings: settings) }
+            if let target { player.play(target, fromStart: q["fromStart"] == "1", settings: settings) }
             return true
             #else
             return false

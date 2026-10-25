@@ -125,7 +125,7 @@ struct ReelApp: App {
                     // Launch work that nobody is waiting for runs after Home has drawn its first rows.
                     try? await Task.sleep(for: .seconds(2))
                     await ImageLoader.shared.enforceLimit()
-                    AirPlayRemuxer.sweep()
+                    HLSRemuxer.sweep()
                     // TMDB's terms: nothing cached beyond six months.
                     let purged = await MetadataCache().purgeExpired()
                     if purged > 0 { Diagnostics.log("library", "metadata cache: \(purged) entries older than six months removed") }

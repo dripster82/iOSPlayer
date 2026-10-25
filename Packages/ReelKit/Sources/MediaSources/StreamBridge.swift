@@ -41,6 +41,29 @@ public actor StreamBridge {
         var contentType: String
         var fileName: String
     }
+    /// A folder of files (an HLS playlist with its init and segments), served by name. The playlist
+    /// is re-read on every request, so a growing one is always current.
+    struct Folder { var token: String; var directory: URL }
+    private var folder: Folder?
+
+    public func register(directory: URL) async throws -> URL {
+        try await start()
+        let token = UUID().uuidString.lowercased()
+        if let old = entry { await old.source.disconnect(); entry = nil }
+        folder = Folder(token: token, directory: directory)
+        let host = Self.preferLoopback ? "127.0.0.1" : (Self.wifiAddress() ?? "127.0.0.1")
+        Diagnostics.log("bridge", "serving folder \(directory.lastPathComponent) at \(host):\(port)")
+        return URL(string: "http://\(host):\(port)/\(token)/")!
+    }
+
+    private static func contentType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "m3u8": "application/vnd.apple.mpegurl"
+        case "mp4", "m4s", "m4v": "video/mp4"
+        case "mov": "video/quicktime"
+        default: "application/octet-stream"
+        }
+    }
 
     /// Serves `path` from `source` (already connected) and returns the local URL for it.
     public func register(source: any MediaSource, path: String, size: Int64) async throws -> URL {
@@ -89,6 +112,7 @@ public actor StreamBridge {
         listener = nil
         if let e = entry { await e.source.disconnect() }
         entry = nil
+        folder = nil
         Diagnostics.log("bridge", "stopped")
     }
 
@@ -141,6 +165,17 @@ public actor StreamBridge {
         let method = parts[0], target = parts[1]
         var headers: [String: String] = [:]
         for l in lines.dropFirst() { if let i = l.firstIndex(of: ":") { headers[l[..<i].trimmingCharacters(in: .whitespaces).lowercased()] = l[l.index(after: i)...].trimmingCharacters(in: .whitespaces) } }
+        // A folder request: one file by name, no path components, read fresh each time.
+        if let folder, target.hasPrefix("/" + folder.token + "/") {
+            let name = String(target.dropFirst(folder.token.count + 2)).removingPercentEncoding ?? ""
+            guard !name.isEmpty, !name.contains("/"), !name.contains(".."),
+                  let data = try? Data(contentsOf: folder.directory.appendingPathComponent(name)) else {
+                await send(connection, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                return
+            }
+            await serve(connection, data: data, contentType: Self.contentType(forExtension: (name as NSString).pathExtension), method: method, range: headers["range"])
+            return
+        }
         guard let entry, target.hasPrefix("/" + entry.token + "/") else {
             await send(connection, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             return
@@ -177,6 +212,30 @@ public actor StreamBridge {
             guard await send(connection, data) else { return }
             offset += Int64(data.count)
         }
+    }
+
+    /// One in-memory file, with Range support.
+    private func serve(_ connection: NWConnection, data: Data, contentType: String, method: String, range: String?) async {
+        let size = Int64(data.count)
+        var start: Int64 = 0, end: Int64 = size - 1
+        var partial = false
+        if let r = range, r.hasPrefix("bytes=") {
+            let spec = r.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+            if spec.count == 2 {
+                if spec[0].isEmpty, let suffix = Int64(spec[1]) { start = max(0, size - suffix) }
+                else if let s = Int64(spec[0]) { start = s; if let e = Int64(spec[1]) { end = min(e, size - 1) } }
+                partial = true
+            }
+        }
+        if size == 0 || start > end || start >= size {
+            await send(connection, "HTTP/1.1 \(size == 0 ? "200 OK" : "416 Range Not Satisfiable")\r\nContent-Type: \(contentType)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            return
+        }
+        let length = end - start + 1
+        var head = partial ? "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes \(start)-\(end)/\(size)\r\n" : "HTTP/1.1 200 OK\r\n"
+        head += "Content-Type: \(contentType)\r\nContent-Length: \(length)\r\nAccept-Ranges: bytes\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n"
+        guard await send(connection, head), method != "HEAD" else { return }
+        _ = await send(connection, data.subdata(in: Int(start)..<Int(end + 1)))
     }
 
     private func readHead(_ connection: NWConnection) async -> String? {

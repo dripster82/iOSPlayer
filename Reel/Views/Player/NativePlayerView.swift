@@ -39,8 +39,9 @@ struct NativePlayerView: View {
             endWatcher = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in close(markWatched: true) }
             // Why a black screen, when it is one: the item's status and error go to the log.
             statusWatcher = p.currentItem?.observe(\.status, options: [.new]) { item, _ in
-                let message = item.error.map { " error: \($0.localizedDescription)" } ?? ""
+                let message = item.error.map { " error: \(String(describing: $0))" } ?? ""
                 Diagnostics.log("player", "native item status \(item.status.rawValue)\(message)")
+                for ev in item.errorLog()?.events ?? [] { Diagnostics.log("player", "native error log \(ev.errorStatusCode) \(ev.errorComment ?? "") \(ev.uri ?? "")") }
             }
             Diagnostics.log("player", "native AirPlay playback of \(Diagnostics.safe(playback.url))")
         }
@@ -51,7 +52,11 @@ struct NativePlayerView: View {
         guard let p = avPlayer else { return }
         let pos = p.currentTime().seconds
         let dur = p.currentItem?.duration.seconds ?? 0
-        if dur.isFinite, dur > 0 { library.recordProgress(itemKey: playback.itemKey, position: markWatched ? dur : pos, duration: dur) }
+        // An HLS stream started part-way runs its own clock from zero; a still-growing one reports its length so far.
+        if dur.isFinite, dur > 0 {
+            let total = max(dur + playback.timeOffset, playback.knownDuration)
+            library.recordProgress(itemKey: playback.itemKey, position: markWatched ? total : pos + playback.timeOffset, duration: total)
+        }
     }
 
     private func close(markWatched: Bool = false) {

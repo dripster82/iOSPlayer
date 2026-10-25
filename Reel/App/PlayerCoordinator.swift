@@ -20,7 +20,9 @@ final class PlayerCoordinator: ObservableObject {
     @Published private(set) var previous: MediaItem?
     @Published var isLoading = false
     /// Set instead of `isPresented` when the file should play through AVPlayer (AirPlay, native container).
-    struct NativePlayback: Identifiable { var itemKey: String; var url: URL; var startAt: TimeInterval; var id: String { itemKey } }
+    /// `timeOffset` is added to the player's clock when saving progress: an AirPlay stream of an MKV
+    /// that was started part-way has its own clock from zero.
+    struct NativePlayback: Identifiable { var itemKey: String; var url: URL; var startAt: TimeInterval; var timeOffset: TimeInterval = 0; var knownDuration: TimeInterval = 0; var id: String { itemKey } }
     @Published var nativePlayback: NativePlayback?
     /// Fill (crop) remembered for this show, applied by the player view when it appears.
     @Published private(set) var preferredFill: Bool?
@@ -68,19 +70,20 @@ final class PlayerCoordinator: ObservableObject {
         nativePlayback = playback
     }
 
-    /// Copies an MKV into an AirPlay-ready MP4 with progress in the loading overlay, and serves it
-    /// through the bridge. Nil when it failed or the user backed out (the notice says why).
-    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem) async -> URL? {
+    /// Starts an HLS copy of an MKV near `startAt` and serves it through the bridge. Returns the
+    /// playlist URL and the time offset the stream's clock starts from, or nil when it failed or the
+    /// user backed out (the notice says why). A copy from the start is kept for next time; one
+    /// started part-way is not, so the offset is zero whenever a kept copy exists.
+    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem, startAt: TimeInterval) async -> (URL, TimeInterval)? {
         let key = file?.id.uuidString ?? url.absoluteString
-        let duration = file?.duration ?? engine.duration.nonZero ?? TimeInterval((item.runtimeMinutes ?? 45) * 60)
         isLoading = true
-        loadingMessage = AirPlayRemuxer.existing(for: key) == nil ? "Preparing for AirPlay… this copies the file once, about as long as the download takes" : "Preparing for AirPlay…"
+        loadingMessage = "Preparing for AirPlay…"
         do {
-            let local = try await AirPlayRemuxer.shared.remux(source: url, key: key, duration: duration) { [weak self] p in
-                self?.loadingMessage = "Preparing for AirPlay… \(Int(p * 100))%"
-            }
+            let offset: TimeInterval = HLSRemuxer.completed(for: key) != nil ? 0 : max(0, startAt - 5)
+            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset)
             loadingMessage = nil
-            return try await StreamBridge.shared.register(fileURL: local)
+            let base = try await StreamBridge.shared.register(directory: dir)
+            return (base.appendingPathComponent("index.m3u8"), offset)
         } catch is CancellationError {
             loadingMessage = nil
             return nil
@@ -116,17 +119,18 @@ final class PlayerCoordinator: ObservableObject {
         Task {
             do {
                 let target: URL
+                var startAt = at, offset: TimeInterval = 0
                 if Self.isNativeContainer(url) {
                     target = try await nativeURL(for: file, playbackURL: url)
                 } else {
-                    // An MKV: the sound keeps going on the TV while the MP4 copy is made, then the picture follows.
-                    guard let t = await prepareForAirPlay(file: file, url: url, item: item) else { isLoading = false; return }
-                    target = t
+                    // An MKV: the sound keeps going on the TV for the few seconds the stream takes to start.
+                    guard let (t, o) = await prepareForAirPlay(file: file, url: url, item: item, startAt: at) else { isLoading = false; return }
+                    target = t; offset = o; startAt = o > 0 ? 0 : at
                 }
                 guard current?.itemKey == item.itemKey else { return }
                 engine.stop()
                 ScrubPreview.shared.stop()
-                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: at))
+                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: startAt, timeOffset: offset, knownDuration: engine.duration))
             } catch {
                 isLoading = false
                 show(notice: "Couldn't move to AirPlay: \(error.localizedDescription)")
@@ -141,6 +145,7 @@ final class PlayerCoordinator: ObservableObject {
         nativePlayback = nil
         bridgeLive = false
         Self.debugForceAirPlay = false
+        HLSRemuxer.shared.cancel()
         Task { await StreamBridge.shared.stop() }
     }
     private var bridgeLive = false
@@ -269,9 +274,10 @@ final class PlayerCoordinator: ObservableObject {
                     return
                 }
                 if Self.airPlayActive, !Self.isNativeContainer(url), !ExternalDisplay.shared.isConnected {
-                    // An MKV: copy it into an MP4 first (no re-encoding), then Apple's player streams it.
-                    if let target = await prepareForAirPlay(file: file, url: url, item: item) {
-                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: resume))
+                    // An MKV: start an HLS copy (no re-encoding) near the resume point, then Apple's player streams it.
+                    if let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: resume) {
+                        let known = file.duration ?? TimeInterval((item.runtimeMinutes ?? 0) * 60)
+                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: 0, timeOffset: offset, knownDuration: known))
                         return
                     }
                     guard current?.itemKey == item.itemKey else { return }   // backed out while preparing
@@ -445,7 +451,7 @@ final class PlayerCoordinator: ObservableObject {
     func dismiss() {
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
         saveProgress()
-        AirPlayRemuxer.shared.cancel()
+        HLSRemuxer.shared.cancel()
         Self.debugForceAirPlay = false
         ScrubPreview.shared.stop()
         engine.stop()
