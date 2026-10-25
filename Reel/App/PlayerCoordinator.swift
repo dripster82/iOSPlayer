@@ -103,6 +103,7 @@ final class PlayerCoordinator: ObservableObject {
         if url.isFileURL || scheme == "http" || scheme == "https" { return url }
         guard let file else { throw SourceError.unsupported("AirPlay from \(scheme)") }
         let s = try await library.streamSource(for: file)
+        await bridgeTeardown?.value   // a stop from the last AirPlay play must land before this start
         return try await StreamBridge.shared.register(source: s.source, path: s.path, size: s.size)
     }
 
@@ -132,6 +133,7 @@ final class PlayerCoordinator: ObservableObject {
             let language = playbackOptions(for: item, settings: AppSettings.current).preferredAudioLanguage
             let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language)
             loadingMessage = nil
+            await bridgeTeardown?.value
             let base = try await StreamBridge.shared.register(directory: dir)
             return (base.appendingPathComponent(HLSRemuxer.playlistName(in: dir)), offset)
         } catch is CancellationError {
@@ -215,8 +217,10 @@ final class PlayerCoordinator: ObservableObject {
         bridgeLive = false
         Self.debugForceAirPlay = false
         HLSRemuxer.shared.cancel()
-        Task { await StreamBridge.shared.stop() }
+        bridgeTeardown = Task { await StreamBridge.shared.stop() }
     }
+    /// The bridge stop in flight, so the next AirPlay play waits for it rather than racing it.
+    private var bridgeTeardown: Task<Void, Never>?
     private var bridgeLive = false
     /// What the spinner is waiting on, when it is something slow such as waking a sleeping NAS.
     @Published var loadingMessage: String?
@@ -313,6 +317,11 @@ final class PlayerCoordinator: ObservableObject {
 
     func play(_ item: MediaItem, file: MediaFile? = nil, fromStart: Bool = false, settings: AppSettings) {
         guard let file = file ?? library.preferredFile(item) else { loadError = "No file for \(item.title)."; return }
+        if nativePlayback != nil {
+            // A Siri intent or a tap while Apple's player is up: one playback at a time.
+            Diagnostics.log("player", "play requested while Apple's player was up; replacing it")
+            releaseNative()
+        }
         current = item
         currentFile = file
         upNext = item.kind == .episode ? library.episodeAfter(item) : nil
@@ -467,6 +476,7 @@ final class PlayerCoordinator: ObservableObject {
         let key = ItemKey.unmatched(fileName: url.absoluteString, size: 0, duration: nil)
         let item = MediaItem(itemKey: key, kind: .film, title: name, confidence: .unmatched)
         current = item
+        if nativePlayback != nil { releaseNative() }
         currentFile = nil
         externalURL = url
         upNext = nil

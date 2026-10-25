@@ -88,7 +88,9 @@ struct NativePlayerView: View {
                 }
             }
         }
-        .onDisappear { saveProgress() }
+        // The view can go without close(): the cover closes, or a new stream replaces this one.
+        // The player must not outlive it (a leaked one kept fetching and reporting its time).
+        .onDisappear { saveProgress(); tearDown() }
     }
 
     private func metadata(_ id: AVMetadataIdentifier, _ value: String) -> AVMetadataItem? {
@@ -123,12 +125,17 @@ struct NativePlayerView: View {
 
     private func close(markWatched: Bool = false) {
         saveProgress(markWatched: markWatched)
+        tearDown()
+        player.endNativePlayback()
+    }
+
+    private func tearDown() {
         avPlayer?.pause()
-        if let w = endWatcher { NotificationCenter.default.removeObserver(w) }
+        avPlayer?.replaceCurrentItem(with: nil)
+        if let w = endWatcher { NotificationCenter.default.removeObserver(w); endWatcher = nil }
         statusWatcher = nil
         heartbeat?.cancel(); heartbeat = nil
         avPlayer = nil
-        player.endNativePlayback()
     }
 }
 
