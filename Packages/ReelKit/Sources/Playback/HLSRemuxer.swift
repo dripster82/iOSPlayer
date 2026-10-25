@@ -110,6 +110,11 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         media.addOption(":sout=#\(plan.chain)std{access=file,mux=mp4frag,dst=\(pipe.path)}")
         media.addOption(":no-sout-keep")
         media.addOption(":no-sout-display")
+        // The copy is not shown anywhere, so nothing is "late": never let the decoder drop or skip
+        // frames to catch up with a clock (a converted stream came out at half its frame rate).
+        media.addOption(":no-drop-late-frames")
+        media.addOption(":no-skip-frames")
+        if !plan.chain.isEmpty { media.addOption(":sout-transcode-high-priority") }
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
@@ -176,6 +181,16 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// cannot be read in time is copied as is; the segmenter still checks what arrives.
     /// Debug builds: skip the probe to exercise the copy-then-convert fallback.
     public static var debugSkipProbe = false
+
+    /// Sends VLC's own log to a file (debug builds; truncated each launch). Its messages say why a
+    /// frame was dropped or a stream output stalled, which Reel's log cannot.
+    public static func enableVLCLog(to url: URL, level: Int = 3) {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        let logger = VLCFileLogger(fileHandle: handle)
+        logger.level = VLCLogLevel(rawValue: Int32(level)) ?? .warning
+        VLCLibrary.shared().loggers = [logger]
+    }
 
     @MainActor
     static func plan(for source: URL) async -> Plan {

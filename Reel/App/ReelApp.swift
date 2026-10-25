@@ -47,6 +47,9 @@ struct ReelApp: App {
         BackgroundScans.register(library: store, settings: settings)
         #if canImport(VLCKit)
         VLCDirectorySource.register()   // SFTP and NFS sources, browsed and played through VLC
+        #if DEBUG
+        HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
+        #endif
         #endif
     }
 
