@@ -163,6 +163,9 @@ public actor StreamBridge {
         let parts = lines.first?.split(separator: " ").map(String.init) ?? []
         guard parts.count >= 2 else { return }
         let method = parts[0], target = parts[1]
+        // Who is asking matters: an AirPlay receiver fetches the stream itself, from its own address.
+        let who: String = { if case .hostPort(let host, _) = connection.endpoint { return "\(host)" } else { return "?" } }()
+        Diagnostics.log("bridge", "\(method) \((target as NSString).lastPathComponent) from \(who)")
         var headers: [String: String] = [:]
         for l in lines.dropFirst() { if let i = l.firstIndex(of: ":") { headers[l[..<i].trimmingCharacters(in: .whitespaces).lowercased()] = l[l.index(after: i)...].trimmingCharacters(in: .whitespaces) } }
         // A folder request: one file by name, no path components, read fresh each time.

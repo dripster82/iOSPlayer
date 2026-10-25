@@ -78,7 +78,7 @@ let package = Package(
         // CloudKit sync of watch state, favourites and overrides.
         .target(name: "Sync", dependencies: ["MediaCore", "Library"]),
 
-        .testTarget(name: "MediaCoreTests", dependencies: ["MediaCore", "MediaSources"]),
+        .testTarget(name: "MediaCoreTests", dependencies: ["MediaCore", "MediaSources", "Playback"]),
         .testTarget(name: "MetadataTests", dependencies: ["Metadata"]),
     ] + (hasVLCKit ? [.binaryTarget(name: "VLCKit", path: vlcKitPath)] : [])
 )

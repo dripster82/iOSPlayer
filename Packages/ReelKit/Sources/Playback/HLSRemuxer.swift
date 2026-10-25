@@ -57,10 +57,24 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// Starts the stream for `source` and returns its folder (with index.m3u8) as soon as it can be
     /// played. `startAt` begins the copy near that time; the stream's own clock then starts at zero,
     /// so the caller adds it back when saving progress. A stream started part-way is not kept.
-    public func start(source: URL, key: String, startAt: TimeInterval) async throws -> URL {
-        if startAt <= 0, let done = Self.completed(for: key) { return done }
+    /// A subtitle file to offer alongside the stream: its display name and SRT/VTT text.
+    public struct SubtitleFile: Sendable { public var name: String; public var language: String; public var data: Data
+        public init(name: String, language: String, data: Data) { self.name = name; self.language = language; self.data = data } }
+
+    /// The playlist to hand to the player: master.m3u8 when subtitles were written, else index.m3u8.
+    public static func playlistName(in directory: URL) -> String {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("master.m3u8").path) ? "master.m3u8" : "index.m3u8"
+    }
+
+    /// `audioTrack` is the index among the file's audio tracks to copy (VLC's order); nil leaves it
+    /// to `audioLanguage`, then VLC's default. A copy of a non-default track is not kept.
+    public func start(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile] = [], audioTrack: Int? = nil, audioLanguage: String? = nil) async throws -> URL {
+        if startAt <= 0, audioTrack == nil, let done = Self.completed(for: key) {
+            Self.writeSubtitles(subtitles, in: done, offset: 0, duration: Self.duration(of: done))
+            return done
+        }
         guard player == nil else { throw RemuxError.alreadyRunning }
-        let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 ? "-partial" : ""), isDirectory: true)
+        let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 || audioTrack != nil ? "-partial" : ""), isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pipe = dir.appendingPathComponent("pipe")
@@ -76,6 +90,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
+        if let audioTrack { media.addOption(":audio-track=\(audioTrack)") }
+        else if let audioLanguage { media.addOption(":audio-language=\(audioLanguage)") }
         let p = VLCMediaPlayer()
         p.delegate = self
         player = p
@@ -84,6 +100,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         let seg = Segmenter(directory: dir, pipe: pipe) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
+        // Subtitles are written up front with a generous span; the main playlist grows underneath.
+        Self.writeSubtitles(subtitles, in: dir, offset: startAt, duration: 4 * 3600)
         segmenter = seg
         seg.start()
         Diagnostics.log("airplay", "stream start at \(Int(startAt))s: \(Diagnostics.safe(source))")
@@ -114,14 +132,21 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     private func stop(discard: Bool) {
         if let c = readyContinuation { readyContinuation = nil; c.resume(throwing: CancellationError()) }
-        player?.stop()
         let old = player
         player = nil
-        Task.detached(priority: .userInitiated) { [old] in _ = old }
-        segmenter?.cancel()
+        let seg = segmenter
         segmenter = nil
-        if discard, let dir = currentDirectory { try? FileManager.default.removeItem(at: dir) }
+        let dir = discard ? currentDirectory : nil
         currentDirectory = nil
+        // VLC's stop can wait on a writer blocked on the pipe, and a folder of thousands of segments
+        // takes a moment to delete: neither belongs on the main thread. The reader keeps draining the
+        // pipe until VLC closes it, so that writer is never stuck.
+        Task.detached(priority: .userInitiated) { [old, seg, dir] in
+            seg?.cancel()
+            old?.stop()
+            _ = old
+            if let dir { try? await Task.sleep(for: .seconds(1)); try? FileManager.default.removeItem(at: dir) }
+        }
     }
 
     private func handle(_ event: Segmenter.Event) {
@@ -151,6 +176,30 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
                 self.stop(discard: true)
             }
         }
+    }
+
+    /// WebVTT renditions and a master playlist that lists them next to the video.
+    static func writeSubtitles(_ subtitles: [SubtitleFile], in dir: URL, offset: TimeInterval, duration: TimeInterval) {
+        var media: [String] = []
+        for (i, sub) in subtitles.enumerated() {
+            guard let vtt = SubtitleConversion.webVTT(from: sub.data, shiftingBy: offset) else { continue }
+            let vttName = "sub\(i).vtt", plName = "sub\(i).m3u8"
+            try? vtt.write(to: dir.appendingPathComponent(vttName), atomically: true, encoding: .utf8)
+            let span = Int(duration.rounded(.up))
+            let pl = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:\(span)\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:\(span).000,\n\(vttName)\n#EXT-X-ENDLIST\n"
+            try? pl.write(to: dir.appendingPathComponent(plName), atomically: true, encoding: .utf8)
+            let name = sub.name.replacingOccurrences(of: "\"", with: "")
+            media.append("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"\(name)\",LANGUAGE=\"\(sub.language)\",AUTOSELECT=NO,DEFAULT=NO,URI=\"\(plName)\"")
+        }
+        let master = dir.appendingPathComponent("master.m3u8")
+        guard !media.isEmpty else { try? FileManager.default.removeItem(at: master); return }
+        let text = (["#EXTM3U", "#EXT-X-VERSION:7"] + media + ["#EXT-X-STREAM-INF:BANDWIDTH=20000000,SUBTITLES=\"subs\"", "index.m3u8"]).joined(separator: "\n") + "\n"
+        try? text.write(to: master, atomically: true, encoding: .utf8)
+    }
+
+    private static func duration(of dir: URL) -> TimeInterval {
+        let text = (try? String(contentsOf: dir.appendingPathComponent("index.m3u8"), encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").compactMap { l -> Double? in l.hasPrefix("#EXTINF:") ? Double(l.dropFirst(8).split(separator: ",").first ?? "") : nil }.reduce(0, +)
     }
 
     /// Drops streams older than a week, and every partial one.
@@ -203,10 +252,9 @@ final class Segmenter: @unchecked Sendable {
         t.start()
     }
 
-    func cancel() {
-        cancelled = true
-        if fd >= 0 { close(fd); fd = -1 }
-    }
+    /// Stops producing segments. The pipe is still read to the end so VLC's writer is never blocked
+    /// on it; the file descriptor closes when VLC closes its side.
+    func cancel() { cancelled = true }
 
     private func run() {
         // Opening the read end blocks until VLC opens the write end.
@@ -218,7 +266,13 @@ final class Segmenter: @unchecked Sendable {
         var pendingDuration = 0.0
         var index = 0
         do {
-            while !cancelled {
+            while true {
+                if cancelled {
+                    // Drain and discard until EOF.
+                    var sink = [UInt8](repeating: 0, count: 1 << 16)
+                    while read(fd, &sink, sink.count) > 0 {}
+                    return
+                }
                 guard let header = try readExact(8) else { break }   // EOF: VLC closed the pipe
                 var size = UInt64(UInt32(bigEndian: header.withUnsafeBytes { $0.load(as: UInt32.self) }))
                 let type = String(decoding: header[4..<8], as: UTF8.self)

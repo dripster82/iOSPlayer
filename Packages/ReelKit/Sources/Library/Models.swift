@@ -108,6 +108,14 @@ public final class MediaFile {
     public var ignored: Bool
     public var addedAt: Date
     public var lastSeenAt: Date
+    /// Chapter starts (seconds) and titles, recorded the first time the file plays through VLC, so
+    /// Apple's player (AirPlay) can offer the same chapter list.
+    public var chapterStarts: [Double] = []
+    public var chapterTitles: [String] = []
+    /// Audio tracks as VLC lists them (name and language), recorded on play, so the AirPlay copy can
+    /// offer the same choice.
+    public var audioTrackNames: [String] = []
+    public var audioTrackLanguages: [String] = []
     public var source: SourceRecord?
     public var item: MediaItem?
 

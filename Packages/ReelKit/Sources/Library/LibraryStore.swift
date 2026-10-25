@@ -463,6 +463,45 @@ public final class LibraryStore: ObservableObject {
         return out
     }
 
+    /// Keeps a file's chapter list once VLC has read it. Not synced; each device learns it on play.
+    public func recordChapters(fileID: UUID, chapters: [Chapter]) {
+        guard !chapters.isEmpty else { return }
+        var d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.id == fileID }); d.fetchLimit = 1
+        guard let file = try? context.fetch(d).first, file.chapterStarts != chapters.map(\.start) else { return }
+        file.chapterStarts = chapters.map(\.start)
+        file.chapterTitles = chapters.map(\.title)
+        try? context.save()
+    }
+
+    public func recordAudioTracks(fileID: UUID, names: [String], languages: [String]) {
+        guard !names.isEmpty else { return }
+        var d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.id == fileID }); d.fetchLimit = 1
+        guard let file = try? context.fetch(d).first, file.audioTrackNames != names else { return }
+        file.audioTrackNames = names
+        file.audioTrackLanguages = languages
+        try? context.save()
+    }
+
+    /// The text of each sidecar subtitle next to `file` (SRT, VTT), read from its share.
+    public func sidecarSubtitles(for file: MediaFile) async -> [(name: String, data: Data)] {
+        guard !file.sidecars.isEmpty, let record = file.source else { return [] }
+        let source = SourceFactory.make(record.config)
+        guard (try? await source.connect(credentials: CredentialStore.shared.load(for: record.id))) != nil else { return [] }
+        defer { Task { await source.disconnect() } }
+        var out: [(String, Data)] = []
+        for path in file.sidecars where ["srt", "vtt"].contains((path as NSString).pathExtension.lowercased()) {
+            var data = Data()
+            var offset: Int64 = 0
+            while data.count < 4 * 1024 * 1024 {
+                guard let chunk = try? await source.read(path, offset: offset, length: 256 * 1024), !chunk.isEmpty else { break }
+                data.append(chunk); offset += Int64(chunk.count)
+                if chunk.count < 256 * 1024 { break }
+            }
+            if !data.isEmpty { out.append(((path as NSString).lastPathComponent, data)) } else { Diagnostics.log("airplay", "sidecar \(path) could not be read") }
+        }
+        return out
+    }
+
     /// Remembers which copy to play for a title with several; nil goes back to the best resolution.
     public func setPreferredFile(_ file: MediaFile?, for item: MediaItem) {
         item.preferredFileID = file?.id

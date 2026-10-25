@@ -8,6 +8,8 @@ import MediaSources
 @MainActor
 final class AppSettings: ObservableObject {
     static let cloudContainerID = "iCloud.uk.co.ketelle.reel"
+    /// The one instance the app makes at launch, for code that has no view to read it from.
+    static var current: AppSettings!
 
     enum Theme: String, CaseIterable, Identifiable {
         case system, dark, light
@@ -78,6 +80,7 @@ final class AppSettings: ObservableObject {
     @Published var autoPlayCountdown: Int { didSet { d.set(autoPlayCountdown, forKey: "autoPlayCountdown") } }
 
     init() {
+        defer { AppSettings.current = self }
         tmdbAPIKey = d.string(forKey: "tmdbAPIKey") ?? ""
         tvdbAPIKey = d.string(forKey: "tvdbAPIKey") ?? ""
         tvdbPIN = d.string(forKey: "tvdbPIN") ?? ""

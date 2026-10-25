@@ -21,6 +21,9 @@ struct ReelApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // A write to a pipe whose reader has gone raises SIGPIPE, which kills the process by default;
+        // the AirPlay copy writes to one, and its reader closes first when the stream is cancelled.
+        signal(SIGPIPE, SIG_IGN)
         let container: ModelContainer
         do { container = try LibrarySchema.container() }
         catch {
