@@ -182,7 +182,7 @@ final class PlayerCoordinator: ObservableObject {
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
             }
-            ScrubThumbnails.shared.ensure(key: key, url: url)
+            ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration)
         }
     }
 
