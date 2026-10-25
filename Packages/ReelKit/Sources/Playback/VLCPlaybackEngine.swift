@@ -26,6 +26,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// an audio summary ("DTS 5.1 · AAC 2.0"), a subtitle summary, and the duration in seconds.
     public struct Probe: Sendable, Equatable { public var videoCodec: String?; public var audio: String?; public var subtitles: String?; public var duration: TimeInterval }
     public var onProbe: ((String, Probe) -> Void)?
+    /// What is playing, for a second player that wants the same stream (the scrub preview).
+    public var currentURL: URL? { item?.url }
+    public var currentOptions: PlaybackOptions { options }
     /// Every seek the viewer asked for (scrubber, double-tap, skip buttons), as (from, to). Internal
     /// seeks (resume, reconnect) do not report. Used to learn where a show's titles end.
     public var onUserSeek: ((TimeInterval, TimeInterval) -> Void)?

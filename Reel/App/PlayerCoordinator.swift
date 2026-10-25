@@ -317,6 +317,7 @@ final class PlayerCoordinator: ObservableObject {
     func dismiss() {
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
         saveProgress()
+        ScrubPreview.shared.stop()
         engine.stop()
         externalScopedURL?.stopAccessingSecurityScopedResource(); externalScopedURL = nil
         nowPlaying.detach()

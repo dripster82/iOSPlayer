@@ -174,7 +174,7 @@ struct PlayerContentView: View {
             }
             Spacer()
             VStack(spacing: 6) {
-                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime, itemKey: player.current?.itemKey) { engine.seek(to: $0) }
+                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime, itemKey: player.current?.itemKey, liveURL: engine.currentURL, hardwareDecoding: settings.hardwareDecoding) { engine.seek(to: $0) }
                 HStack(spacing: 8) {
                     tag("\(engine.rate.formatted())×", on: engine.rate != 1) { sheet = .speed }
                     if !engine.chapters.isEmpty {
@@ -413,15 +413,28 @@ struct TimelineBar: View {
     let chapters: [Chapter]
     @Binding var scrubTime: TimeInterval?
     var itemKey: String? = nil
+    /// The stream a live preview can open alongside playback, and how to decode it.
+    var liveURL: URL? = nil
+    var hardwareDecoding = true
     let onSeek: (TimeInterval) -> Void
 
     var body: some View {
         let shown = scrubTime ?? clock.time
-        Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime, itemKey: itemKey) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
+        Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime, itemKey: itemKey, live: liveURL != nil) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
+            .onChange(of: scrubTime) { was, now in
+                guard let liveURL else { return }
+                switch (was, now) {
+                case (nil, let t?): ScrubPreview.shared.begin(url: liveURL, at: t, hardwareDecoding: hardwareDecoding)
+                case (_?, let t?): ScrubPreview.shared.scrub(to: t)
+                case (_?, nil): ScrubPreview.shared.end()
+                default: break
+                }
+            }
+        // The labels keep the live position and what is left; the bubble says where the finger is.
         HStack {
-            Text(MediaFormat.clock(shown)).monospacedDigit()
+            Text(MediaFormat.clock(clock.time)).monospacedDigit()
             Spacer()
-            Text("−" + MediaFormat.clock(clock.duration - shown)).monospacedDigit()
+            Text("−" + MediaFormat.clock(clock.duration - clock.time)).monospacedDigit()
         }.font(.caption).foregroundStyle(.white.opacity(0.8))
     }
 }
@@ -433,6 +446,8 @@ struct Scrubber: View {
     let chapters: [Chapter]
     let preview: TimeInterval?
     var itemKey: String? = nil
+    var live = false
+    @ObservedObject private var livePreview = ScrubPreview.shared
     let onChange: (TimeInterval) -> Void
     let onCommit: (TimeInterval) -> Void
 
@@ -451,15 +466,21 @@ struct Scrubber: View {
                     // The bubble lives inside the 28 pt scrubber row, so it must size itself: left to the
                     // row's proposal, the picture was squeezed to a one-pixel line and only the time showed.
                     VStack(spacing: 4) {
-                        if let frame {
-                            Image(uiImage: frame).resizable().scaledToFill().frame(width: 176, height: 99)
-                                .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.8), lineWidth: 1)).shadow(radius: 4)
+                        if live || frame != nil {
+                            ZStack {
+                                Color.black
+                                // The strip's nearest frame at once; the live picture on top once it has one.
+                                if let frame { Image(uiImage: frame).resizable().scaledToFill() }
+                                if live { LivePreviewView().opacity(livePreview.hasPicture ? 1 : 0) }
+                            }
+                            .frame(width: 176, height: 99)
+                            .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.8), lineWidth: 1)).shadow(radius: 4)
                         }
                         Text(MediaFormat.clock(p)).font(.caption.bold()).monospacedDigit().padding(.horizontal, 8).padding(.vertical, 4)
                             .background(.white, in: RoundedRectangle(cornerRadius: 6)).foregroundStyle(.black)
                     }
                     .fixedSize()
-                    .offset(x: max(0, min(g.size.width - (frame == nil ? 60 : 176), g.size.width * CGFloat(p / duration) - (frame == nil ? 30 : 88))), y: frame == nil ? -30 : -82)
+                    .offset(x: max(0, min(g.size.width - (frame == nil && !live ? 60 : 176), g.size.width * CGFloat(p / duration) - (frame == nil && !live ? 30 : 88))), y: frame == nil && !live ? -30 : -82)
                 }
             }
             .frame(height: 28)
@@ -468,6 +489,21 @@ struct Scrubber: View {
                 .onChanged { v in onChange(max(0, min(duration, Double(v.location.x / g.size.width) * duration))) }
                 .onEnded { v in onCommit(max(0, min(duration, Double(v.location.x / g.size.width) * duration))) })
         }.frame(height: 28)
+    }
+}
+
+/// The view the scrub preview player paints into. Exists only while the bubble is up.
+struct LivePreviewView: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .black
+        v.isUserInteractionEnabled = false
+        ScrubPreview.shared.drawable = v
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        Task { @MainActor in if ScrubPreview.shared.drawable === uiView { ScrubPreview.shared.drawable = nil } }
     }
 }
 
