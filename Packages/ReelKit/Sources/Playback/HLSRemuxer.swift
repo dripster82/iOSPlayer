@@ -27,7 +27,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         public var errorDescription: String? {
             switch self {
             case .alreadyRunning: "Another AirPlay stream is still being prepared."
-            case .failed(let m): "Couldn't prepare this file for AirPlay: \(m)"
+            case .failed(let m): m.hasPrefix("AirPlay can carry") ? m : "Couldn't prepare this file for AirPlay: \(m)"
             case .notFragmented: "Couldn't prepare this file for AirPlay: the copy was not streamable."
             case .timeout: "Couldn't prepare this file for AirPlay: nothing arrived from the file in time."
             }
@@ -216,6 +216,9 @@ final class Segmenter: @unchecked Sendable {
     private var thread: Thread?
 
     private var tracks: [MP4Boxes.Track] = []
+    /// Default sample sizes for every track in the file, dropped audio included: the shared mdat is
+    /// laid out by all of them, so a run's byte count must be right even when it is not kept.
+    private var trexSizes: [UInt32: UInt32] = [:]
     private var subtitleLines: [String] = []
     /// Each track's segments. A fragment cut at a video keyframe can leave a track with a run of no
     /// samples; that run is skipped rather than written, since a zero-length segment makes Apple's
@@ -281,7 +284,20 @@ final class Segmenter: @unchecked Sendable {
                         // VLC's moov as Apple's player needs it: sound entries version 0, HEVC as hvc1.
                         let moov = MP4Boxes.fixInit(headerBytes + body)
                         tracks = MP4Boxes.tracks(in: moov)
+                        trexSizes = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0.trexSize) })
+                        Diagnostics.log("airplay", "tracks: " + tracks.map { "\($0.isVideo ? "video" : "audio") \($0.codec) \($0.language)" }.joined(separator: ", "))
                         guard let video = tracks.first(where: \.isVideo) else { throw RemuxFailure("no video track") }
+                        // Apple's player takes only H.264 and HEVC video, and AAC, AC-3, E-AC-3, ALAC or FLAC audio,
+                        // in a segment; anything else would sit there waiting. Say so instead.
+                        guard MP4Boxes.airPlayVideo.contains(video.codec) else {
+                            throw RemuxFailure("AirPlay can carry only H.264 and HEVC video, and this file is \(MP4Boxes.describe(codec: video.codec)). Turn on Screen Mirroring in Control Centre and Reel will put the picture on the TV.")
+                        }
+                        let unsupportedAudio = tracks.filter { !$0.isVideo && !MP4Boxes.airPlayAudio.contains($0.codec) }
+                        tracks.removeAll { !$0.isVideo && !MP4Boxes.airPlayAudio.contains($0.codec) }
+                        guard tracks.contains(where: { !$0.isVideo }) || unsupportedAudio.isEmpty else {
+                            throw RemuxFailure("AirPlay can carry only AAC, AC-3, E-AC-3, ALAC or FLAC audio, and this file's sound is \(unsupportedAudio.map { MP4Boxes.describe(codec: $0.codec) }.joined(separator: ", ")). Turn on Screen Mirroring in Control Centre and Reel will put the picture and sound on the TV.")
+                        }
+                        if !unsupportedAudio.isEmpty { Diagnostics.log("airplay", "leaving out audio AirPlay cannot carry: \(unsupportedAudio.map(\.codec).joined(separator: ", "))") }
                         videoID = video.id
                         for t in tracks {
                             try (ftyp + MP4Boxes.initSegment(moov, keeping: t.id)).write(to: directory.appendingPathComponent("init-\(t.id).mp4"), options: .atomic)
@@ -298,10 +314,11 @@ final class Segmenter: @unchecked Sendable {
                     guard haveInit else { throw RemuxFailure("mdat before moov: output is not fragmented") }
                     guard let moof = pendingMoof else { throw RemuxFailure("mdat without moof") }
                     // Each track's run becomes its own moof + mdat; the shared mdat is routed as it streams in.
-                    let runs = MP4Boxes.splitMoof(moof, trexSizes: Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0.trexSize) }))
+                    let runs = MP4Boxes.splitMoof(moof, trexSizes: trexSizes)
                     guard !runs.isEmpty else { throw RemuxFailure("fragment without runs") }
+                    let kept = Set(tracks.map(\.id))
                     var handles: [(start: Int, end: Int, handle: FileHandle)] = []
-                    for run in runs where run.samples > 0 {
+                    for run in runs where run.samples > 0 && kept.contains(run.trackID) {
                         let url = directory.appendingPathComponent("\(run.trackID)-\(index).m4s")
                         FileManager.default.createFile(atPath: url.path, contents: nil)
                         let h = try FileHandle(forWritingTo: url)
@@ -321,7 +338,7 @@ final class Segmenter: @unchecked Sendable {
                         left -= chunk.count
                     }
                     for h in handles { try h.handle.close() }
-                    for run in runs where run.samples > 0 {
+                    for run in runs where run.samples > 0 && kept.contains(run.trackID) {
                         let seconds = pendingDurations[run.trackID] ?? 0
                         segments[run.trackID, default: []].append((index, seconds > 0 ? seconds : 0.001))
                     }

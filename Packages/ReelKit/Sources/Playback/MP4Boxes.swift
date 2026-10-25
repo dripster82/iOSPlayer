@@ -234,7 +234,7 @@ enum MP4Boxes {
                                 }
                                 if case .leaf("hdlr", let p) = mb, p.count >= 12 { video = String(decoding: p[(p.startIndex + 8)..<(p.startIndex + 12)], as: UTF8.self) == "vide" }
                                 if case .container("minf", let minf) = mb {
-                                    for s in minf { if case .container("stbl", let stbl) = s { for t in stbl { if case .stsd(_, let entries) = t, let first = entries.first { codec = first.type } } } }
+                                    for s in minf { if case .container("stbl", let stbl) = s { for t in stbl { if case .stsd(_, let entries) = t, let first = entries.first { codec = codecName(of: first) } } } }
                                 }
                             }
                         }
@@ -248,6 +248,48 @@ enum MP4Boxes {
         }
         walk(parse(data))
         return out.map { var t = $0; t.trexSize = trex[t.id] ?? 0; return t }
+    }
+
+    /// The sample entry's type, except that an `mp4a` entry is named by what its esds says it
+    /// carries: "mp4a" for AAC, "mp3" for MPEG audio (OTI 0x69/0x6B), which Apple's player will not
+    /// take in an HLS segment.
+    static func codecName(of entry: Box) -> String {
+        guard case .leaf(let type, let payload) = entry else { return entry.type }
+        guard type == "mp4a", payload.count > 28 else { return type }
+        guard let esds = parse(payload[(payload.startIndex + 28)...]).first(where: { $0.type == "esds" }), case .leaf(_, let p) = esds else { return type }
+        // ES_Descriptor (tag 3) … DecoderConfigDescriptor (tag 4): [tag][length bytes with 0x80 continuation][objectTypeIndication]
+        var i = p.startIndex + 4   // version/flags
+        func skipLength() { while i < p.endIndex, p[i] & 0x80 != 0 { i += 1 }; if i < p.endIndex { i += 1 } }
+        guard i < p.endIndex, p[i] == 0x03 else { return type }
+        i += 1; skipLength()
+        i += 3   // ES_ID (2) + flags (1); dependsOn/URL/OCR fields are absent in VLC's and ffmpeg's output
+        guard i < p.endIndex, p[i] == 0x04 else { return type }
+        i += 1; skipLength()
+        guard i < p.endIndex else { return type }
+        switch p[i] {
+        case 0x69, 0x6B: return "mp3"
+        case 0x40, 0x66, 0x67, 0x68: return "mp4a"
+        default: return "mp4a-\(String(p[i], radix: 16))"
+        }
+    }
+
+    /// What Apple's player can take over AirPlay in an HLS segment, by sample entry type.
+    static let airPlayVideo: Set<String> = ["avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe"]
+    static let airPlayAudio: Set<String> = ["mp4a", "ac-3", "ec-3", "alac", "fLaC"]
+
+    /// A plain-language name for a codec AirPlay refuses.
+    static func describe(codec: String) -> String {
+        switch codec {
+        case "mp4v", "xvid", "XVID", "DX50", "DIVX", "divx": "MPEG-4 Part 2 (XviD/DivX)"
+        case "vp08", "vp09": "VP9"
+        case "av01": "AV1"
+        case "mp3": "MP3"
+        case "Opus": "Opus"
+        case "dtsc", "dtsh", "dtsl", "dtse": "DTS"
+        case "mlpa": "TrueHD"
+        case "mjpg", "jpeg": "Motion JPEG"
+        default: codec
+        }
     }
 
     /// The moov with only track `id` (and its trex), for a one-track init segment.
