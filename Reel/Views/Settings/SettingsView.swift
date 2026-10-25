@@ -32,7 +32,7 @@ struct SettingsView: View {
                 if !settings.tvdbAPIKey.isEmpty {
                     SecureField("TheTVDB subscriber PIN (optional)", text: $settings.tvdbPIN).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                SecureField(AppSettings.BuiltIn.fanart.isEmpty ? "fanart.tv API key (optional)" : "fanart.tv personal key (built in · optional)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField(AppSettings.BuiltIn.fanart.isEmpty ? "fanart.tv API key (optional)" : "fanart.tv personal key (optional, for newer images)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("How do I get a key?") { showKeyHelp = true }
                 Picker("Metadata language", selection: $settings.metadataLanguage) {
                     ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }
@@ -247,7 +247,8 @@ struct AttributionView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("fanart.tv").font(.headline)
-                    Text("Logos, clear art and extra backgrounds are provided by fanart.tv (fanart.tv) when a key is set, under its non-commercial terms.").font(.footnote)
+                    Text("Logos, clear art, extra backgrounds and alternative posters on detail pages and in Edit artwork are images from fanart.tv, contributed by its community, used under its non-commercial terms. Add your own fanart.tv personal key in Settings → Metadata to see newly approved images sooner.").font(.footnote)
+                    Link("fanart.tv", destination: URL(string: "https://fanart.tv")!).font(.footnote)
                 }
             }
             Section {

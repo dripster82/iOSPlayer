@@ -35,13 +35,18 @@ public enum FanartError: Error, LocalizedError, Sendable {
 public actor FanartClient {
     public static let apiBase = URL(string: "https://webservice.fanart.tv/v3")!
     private let apiKey: String
+    /// The user's own personal key, sent as `client_key` alongside the project key, as fanart.tv's
+    /// terms require ("this should be sent in addition to your project key"). Earns the user faster
+    /// access to newly approved images.
+    private let clientKey: String?
     private let language: String
     private let transport: HTTPTransport
     private let cache: MetadataCache
     private let decoder = JSONDecoder()
 
-    public init(apiKey: String, language: String = "en", transport: HTTPTransport = URLSessionTransport(), cache: MetadataCache = MetadataCache()) {
+    public init(apiKey: String, clientKey: String? = nil, language: String = "en", transport: HTTPTransport = URLSessionTransport(), cache: MetadataCache = MetadataCache()) {
         self.apiKey = apiKey
+        self.clientKey = clientKey.flatMap { $0.isEmpty ? nil : $0 }
         self.language = String(language.prefix(2)).lowercased()
         self.transport = transport
         self.cache = cache
@@ -89,7 +94,7 @@ public actor FanartClient {
     private func get<T: Decodable>(_ path: String) async throws -> T {
         guard !apiKey.isEmpty else { throw FanartError.missingAPIKey }
         var comps = URLComponents(url: Self.apiBase.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "api_key", value: apiKey)]
+        comps.queryItems = [URLQueryItem(name: "api_key", value: apiKey)] + (clientKey.map { [URLQueryItem(name: "client_key", value: $0)] } ?? [])
         let url = comps.url!
         let cacheKey = "fanart:" + path
         if let entry = await cache.read(cacheKey), entry.isFresh { return try decode(entry.data) }

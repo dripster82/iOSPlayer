@@ -125,10 +125,13 @@ final class AppSettings: ObservableObject {
     }
 
     /// nil until the user has entered a fanart.tv project key.
+    /// fanart.tv wants the project key on every request and the user's personal key sent alongside
+    /// it, never instead. Without a shipped project key (a development build) the user's key is all
+    /// there is and goes in the project slot.
     var fanart: FanartClient? {
-        let key = effectiveFanartKey
-        guard !key.isEmpty else { return nil }
-        return FanartClient(apiKey: key, language: metadataLanguage)
+        if !BuiltIn.fanart.isEmpty { return FanartClient(apiKey: BuiltIn.fanart, clientKey: fanartAPIKey, language: metadataLanguage) }
+        guard !fanartAPIKey.isEmpty else { return nil }
+        return FanartClient(apiKey: fanartAPIKey, language: metadataLanguage)
     }
 
     /// nil until the user has entered an OpenSubtitles API key. Searching works with the key alone.

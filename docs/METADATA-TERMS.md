@@ -7,7 +7,7 @@ documentation as last known, which should be re-read in a browser before submiss
 | Provider | Used for | Key in the app? | Verdict for a free App Store build |
 |---|---|---|---|
 | TMDB | titles, artwork, episodes, cast, collections | **Yes, one app key** | Allowed for a free app with attribution. Paid app or ads needs a commercial agreement. |
-| fanart.tv | logos, extra backgrounds | **Yes, a project key**; users may add a personal key | Allowed with attribution; the project key is the intended model. Blocked, re-check. |
+| fanart.tv | logos, extra backgrounds | **Yes, a project key**; users may add a personal key, sent alongside | Allowed for a free app with attribution; terms met (see below). |
 | TheTVDB | fallback show search, artwork ids | **Project key yes, but every user must subscribe (PIN)**, or a negotiated licence | Keep as an optional, user-keyed extra, or drop it. Do not ship a key without subscriptions. |
 | OpenSubtitles | subtitle search and download | **App (consumer) key yes**; downloads need the user's own account | Ship the consumer key for search; keep user login for downloads. Blocked, re-check. |
 | AniDB | anime title index (daily dump) | No key. One download a day, identifiable user agent, cached | Allowed. Keep the weekly refresh and the Reel user agent. Blocked, re-check. |
@@ -45,14 +45,34 @@ documentation as last known, which should be re-read in a browser before submiss
   keep it exactly as now (user supplies key and PIN) or remove it before submission. Shipping a project
   key for users without subscriptions would breach the terms.
 
-## fanart.tv (blocked; from the API documentation as last read)
+## fanart.tv (terms of use, provided 25 October 2026)
 
-- Two keys: a **project key** issued to an application, and an optional **personal key** a user can add
-  to get images sooner after approval and higher limits. The project key is intended to be embedded.
-- Free for personal and non-commercial projects; the site asks commercial users to contact them.
-  Attribution ("artwork from fanart.tv" with a link) is expected.
-- Verdict: apply for a project key for Reel and ship it; keep the personal-key field. Re-read
-  fanart.tv/get-an-api-key in a browser and keep a copy of the page in this folder.
+The terms, verbatim:
+
+> If you have a publicly available program, you must inform your users of this website and the images you use.
+> You should allow your users to input their own API key into your application, this should be sent in addition to your project key.
+> Do not use our API methods embedded in your own API for 3rd party use.
+> Do not use our API for commercial use without written consent.
+> Do not perform more requests than are necessary for each user. This means no downloading all of our content. Play nice with our server.
+> Do not directly access our data without using the documented API methods.
+> You MUST keep the email address in your account information current and accurate in case we need to contact you regarding your key.
+
+How Reel meets each one:
+
+- **Inform users of the site and the images.** Settings → About → Data providers names fanart.tv,
+  says which pictures come from it, and links to fanart.tv. The website's data providers section does
+  the same.
+- **Users may add their own key, sent in addition to the project key.** Settings → Metadata keeps a
+  fanart.tv personal key field; it is sent as `client_key` on every request alongside the shipped
+  project key (`api_key`), never instead of it.
+- **No re-serving through our own API.** Reel has no server; every request goes from the device to
+  fanart.tv's documented v3 endpoints.
+- **Non-commercial.** Reel is free with no ads or purchases. If that changes, written consent from
+  fanart.tv is needed first.
+- **Only necessary requests.** One request per title, when its detail page is first opened or Edit
+  artwork is used, cached for seven days (and never past six months); nothing is bulk-fetched.
+- **Documented methods only.** `movies/{tmdbID}` and `tv/{tvdbID}` on webservice.fanart.tv/v3.
+- **Account email.** The project key is registered to the support address; keep it current.
 
 ## OpenSubtitles (blocked; from the REST API documentation as last read)
 
@@ -97,5 +117,5 @@ documentation as last known, which should be re-read in a browser before submiss
 2. Add the TMDB logo to Settings → About → Data providers.
 3. Add a six-month expiry to the metadata and artwork caches.
 4. Decide on TheTVDB: keep it user-keyed or remove it.
-5. Re-read the fanart.tv, OpenSubtitles and AniDB pages in a browser and file copies here.
+5. Re-read the OpenSubtitles and AniDB pages in a browser and file copies here (fanart.tv done).
 6. Open an issue on Anime-Lists asking for a licence statement.

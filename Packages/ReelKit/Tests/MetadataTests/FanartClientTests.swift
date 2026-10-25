@@ -26,6 +26,18 @@ final class FanartClientTests: XCTestCase {
         XCTAssertNil(art.clearArtURL)
     }
 
+    func testPersonalKeyIsSentAlongsideProjectKey() async throws {
+        var seen: URL?
+        let transport = FakeTransport { req in seen = req.url; return self.ok("{}", for: req) }
+        _ = try await FanartClient(apiKey: "project", clientKey: "personal", transport: transport, cache: MetadataCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))).movie(tmdbID: 7)
+        let items = URLComponents(url: seen!, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(items.first { $0.name == "api_key" }?.value, "project")
+        XCTAssertEqual(items.first { $0.name == "client_key" }?.value, "personal")
+        // No personal key: the parameter is left out rather than sent empty.
+        _ = try await FanartClient(apiKey: "project", clientKey: "", transport: transport, cache: MetadataCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))).movie(tmdbID: 8)
+        XCTAssertFalse(seen!.absoluteString.contains("client_key"))
+    }
+
     func testNotFoundIsReadable() async {
         let client = FanartClient(apiKey: "k", transport: FakeTransport { req in self.ok("{}", for: req, status: 404) }, cache: MetadataCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
         do { _ = try await client.movie(tmdbID: 1); XCTFail() } catch { XCTAssertEqual(error.localizedDescription, "fanart.tv has no artwork for this title.") }
