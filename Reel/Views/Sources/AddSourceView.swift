@@ -74,13 +74,20 @@ struct AddSourceView: View {
                 }
             }
             Section {
-                if discovery.hosts.isEmpty { HStack { ProgressView(); Text("Looking for SMB and WebDAV hosts…").font(.footnote).foregroundStyle(.secondary) } }
+                if let status = discovery.sweepStatus {
+                    HStack { ProgressView(); Text(status).font(.footnote).foregroundStyle(.secondary) }
+                } else if discovery.hosts.isEmpty {
+                    Text("Nothing answered. Make sure this device is on the same Wi-Fi as the server, then scan again or enter it below.").font(.footnote).foregroundStyle(.secondary)
+                }
                 ForEach(discovery.hosts) { h in
-                    Button { type = h.type; name = h.name; host = h.host; step = .form } label: {
+                    Button { type = h.type; name = h.name; host = h.host; path = h.path; port = h.port.map(String.init) ?? ""; step = .form } label: {
                         HStack { Circle().fill(.green).frame(width: 9, height: 9); VStack(alignment: .leading) { Text(h.name).foregroundStyle(.primary); Text(h.host).font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(h.type.displayName).font(.caption2.bold()).foregroundStyle(.secondary) }
                     }
                 }
-            } header: { Text("Found on your network") }
+                if discovery.sweepStatus == nil {
+                    Button { discovery.sweepSubnet() } label: { Label("Scan the network again", systemImage: "arrow.clockwise") }
+                }
+            } header: { Text("Found on your network") } footer: { Text("Servers that announce themselves (Bonjour) and every address on this Wi-Fi network checked for SMB, FTP, SFTP, NFS, WebDAV and DLNA.") }
             Section("Or enter manually") {
                 ForEach([SourceType.smb, .webdav, .ftp, .sftp, .nfs, .dlna]) { t in
                     Button { type = t; step = .form } label: { HStack { Text(t.displayName).foregroundStyle(.primary); Spacer(); Text(t.formHint).font(.caption2).foregroundStyle(.secondary) } }

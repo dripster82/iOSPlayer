@@ -349,6 +349,8 @@ Phase 3
       ssh-rsa (SHA-1) host-key algorithm, so SFTP needs a server that still allows it (OpenSSH ≥ 8.8 does not by
       default). Tested against pyftpdlib, MiniDLNA (`brew install minidlna`) and a paramiko SFTP server on the Mac;
       see `Tests/MediaCoreTests/{FTP,DLNA}IntegrationTests` (skip when the servers are down). NFS untested (needs root).
+      Discovery: Bonjour (SMB/WebDAV announcements) plus `SourceDiscovery.sweepSubnet()`, which probes every address
+      of the Wi-Fi /24 for 445/21/22/2049/5005 and sends each a unicast SSDP M-SEARCH (multicast needs an entitlement).
 - [ ] Playlists / Up Next queue beyond next-episode.
 
 Phase 4
