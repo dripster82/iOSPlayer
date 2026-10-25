@@ -21,9 +21,12 @@ struct HomeView: View {
         var favourites: [MediaItem] = []
         var recentlyAdded: [MediaItem] = []
         var unwatchedFilms: [MediaItem] = []
-        var isEmpty = true
+        var isEmpty = false
         var reviewCount = 0
         var unmatched = 0
+        var offlineSource: SourceRecord?
+        /// False until the first pass has run, so the empty-library screen never flashes on launch.
+        var loaded = false
     }
 
     var body: some View {
@@ -42,7 +45,9 @@ struct HomeView: View {
                 ItemRow(title: "Favourites", items: rows.favourites, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Recently Added", items: rows.recentlyAdded, subtitle: { _ in "Added recently" }, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Unwatched Films", items: rows.unwatchedFilms, fixMatchTarget: $fixMatchTarget)
-                if rows.isEmpty {
+                if !rows.loaded {
+                    ProgressView().frame(maxWidth: .infinity).padding(.top, 80)
+                } else if rows.isEmpty {
                     ContentUnavailableView {
                         Label("Your library is empty", systemImage: "film.stack")
                     } description: {
@@ -77,8 +82,31 @@ struct HomeView: View {
         }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
-        .onAppear { refreshRows() }
+        .task { await refreshRowsInChunks() }
         .onReceive(library.objectWillChange) { _ in scheduleRefresh() }
+    }
+
+    /// The first pass, after the first frame: cheap rows first, so Continue Watching is up within a
+    /// frame or two, then a breath between the heavier queries so the screen stays responsive.
+    private func refreshRowsInChunks() async {
+        guard !rows.loaded else { return }
+        var r = Rows()
+        r.continueWatching = library.continueWatching()
+        r.recentlyAdded = library.recentlyAdded()
+        r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })
+        r.loaded = true
+        rows = r
+        await Task.yield()
+        r.nextUp = library.nextUp()
+        r.favourites = Array(library.favourites().prefix(12))
+        rows = r
+        await Task.yield()
+        let films = library.items(kind: .film)
+        r.unwatchedFilms = films.filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
+        r.isEmpty = films.isEmpty && r.recentlyAdded.isEmpty
+        r.reviewCount = library.reviewCount()
+        r.unmatched = library.unmatchedFileCount()
+        rows = r
     }
 
     /// Coalesces bursts of store changes (a running scan) into one recompute, after the change has landed.
@@ -93,20 +121,22 @@ struct HomeView: View {
 
     private func refreshRows() {
         var r = Rows()
+        r.loaded = true
         r.continueWatching = library.continueWatching()
         r.nextUp = library.nextUp()
         r.favourites = Array(library.favourites().prefix(12))
-        let films = library.items(kind: .film), shows = library.items(kind: .show)
-        r.recentlyAdded = (films + shows).sorted { $0.addedAt > $1.addedAt }.prefix(12).map { $0 }
+        r.recentlyAdded = library.recentlyAdded()
+        let films = library.items(kind: .film)
         r.unwatchedFilms = films.filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
-        r.isEmpty = films.isEmpty && shows.isEmpty
-        r.reviewCount = library.filesNeedingReview().count
+        r.isEmpty = films.isEmpty && r.recentlyAdded.isEmpty
+        r.reviewCount = library.reviewCount()
         r.unmatched = library.unmatchedFileCount()
+        r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })
         rows = r
     }
 
     @ViewBuilder private var offlineBanner: some View {
-        if let s = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed }) {
+        if let s = rows.offlineSource {
             Banner(colour: .red, text: s.status == .authFailed ? "Password rejected for \(s.name)." : "\(s.name) is offline. Showing cached library.") {
                 NavigationLink("Details") { SourceDetailView(source: s) }
             }

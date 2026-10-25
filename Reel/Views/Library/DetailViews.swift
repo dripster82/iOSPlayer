@@ -362,6 +362,7 @@ struct ShowDetailView: View {
                                 let watched = states[ep.itemKey]?.watched == true
                                 Button { library.setWatched(!watched, itemKey: ep.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: "checkmark.circle") }
                                 Button { player.play(ep, fromStart: true, settings: settings) } label: { Label("Play from start", systemImage: "gobackward") }
+                                if settings.tmdb != nil { Button { fixMatchTarget = ep } label: { Label("Fix match…", systemImage: "wrench.and.screwdriver") } }
                                 if downloads.isDownloaded(ep.itemKey) {
                                     Button(role: .destructive) { downloads.remove(ep.itemKey) } label: { Label("Remove download", systemImage: "trash") }
                                 } else if downloads.entry(for: ep.itemKey) != nil {

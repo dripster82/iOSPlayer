@@ -146,7 +146,9 @@ struct ReelApp: App {
                         let delay: Duration = hasActivated ? .zero : .seconds(1.5)
                         hasActivated = true
                         Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
-                        scanForNewMediaIfDue()
+                        // A scan publishes progress every second and every screen rebuilds on it; on a
+                        // cold launch Home gets several seconds to itself first.
+                        Task { try? await Task.sleep(for: delay == .zero ? .zero : .seconds(6)); scanForNewMediaIfDue() }
                     }
                     guard phase == .background else { return }
                     // Finish an interrupted scan or match soon; otherwise refresh daily (PLAN §11.3).

@@ -122,10 +122,53 @@ struct FixMatchView: View {
     @State private var shows: [TMDbShowSummary] = []
     @State private var searching = false
     @State private var error: String?
+    /// For a show or an episode: every file of the series, ticked ones take the new match. From an
+    /// episode the whole series is ticked when "Apply to the whole series" is on.
+    @State private var seriesFiles: [MediaFile] = []
+    @State private var selected: Set<UUID> = []
+    @State private var wholeSeries = true
+    @State private var showFiles = false
+    @State private var applying = false
+
+    private var series: MediaItem? { item?.kind == .show ? item : item?.show }
 
     var body: some View {
         NavigationStack {
             List {
+                if let series {
+                    Section {
+                        if item?.kind == .episode {
+                            Toggle(isOn: $wholeSeries) {
+                                VStack(alignment: .leading) { Text("Apply to the whole series"); Text(wholeSeries ? "All \(seriesFiles.count) files of \(series.title) move to the chosen show." : "Only \(item?.episodeCode ?? "this episode")'s file moves.").font(.caption).foregroundStyle(.secondary) }
+                            }
+                            .onChange(of: wholeSeries) { _, all in selected = all ? Set(seriesFiles.map(\.id)) : Set((item?.files ?? []).map(\.id)) }
+                        }
+                        DisclosureGroup(isExpanded: $showFiles) {
+                            ForEach(seriesFiles, id: \.id) { f in
+                                Button {
+                                    if selected.contains(f.id) { selected.remove(f.id) } else { selected.insert(f.id) }
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: selected.contains(f.id) ? "checkmark.circle.fill" : "circle").foregroundStyle(selected.contains(f.id) ? Color.accentColor : .secondary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(f.fileName).font(.caption).lineLimit(2).foregroundStyle(.primary)
+                                            Text([f.item?.episodeCode, (f.relativePath as NSString).deletingLastPathComponent].compactMap { $0 }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                                        }
+                                    }
+                                }
+                            }
+                            HStack {
+                                Button("Select all") { selected = Set(seriesFiles.map(\.id)) }
+                                Spacer()
+                                Button("Select none") { selected = [] }
+                            }.font(.caption)
+                        } label: {
+                            Text("\(selected.count) of \(seriesFiles.count) files will be rematched")
+                        }
+                    } footer: {
+                        Text("Pick the right show below; the ticked files are matched to its episodes by their season and episode numbers.")
+                    }
+                }
                 Section {
                     HStack {
                         TextField("Title", text: $query).textInputAutocapitalization(.words).onSubmit(search)
@@ -146,11 +189,17 @@ struct FixMatchView: View {
             .navigationTitle("Fix Match")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .overlay { if applying { ZStack { Color.black.opacity(0.2).ignoresSafeArea(); ProgressView("Rematching \(max(1, selected.count)) files…").padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)) } } }
+            .interactiveDismissDisabled(applying)
             .onAppear {
                 let sample = file ?? files.first
-                query = item?.title ?? sample?.guessTitle ?? ""
-                year = (item?.year ?? sample?.guessYear).map(String.init) ?? ""
-                kind = (item?.kind == .show || sample?.guessSeason != nil) ? .show : .film
+                query = (item?.kind == .episode ? item?.show?.title : item?.title) ?? sample?.guessTitle ?? ""
+                year = ((item?.kind == .episode ? item?.show?.year : item?.year) ?? sample?.guessYear).map(String.init) ?? ""
+                kind = (item?.kind == .show || item?.kind == .episode || sample?.guessSeason != nil) ? .show : .film
+                if let series {
+                    seriesFiles = series.episodes.flatMap(\.files).sorted { ($0.item?.seasonNumber ?? 0, $0.item?.episodeNumber ?? 0, $0.relativePath) < ($1.item?.seasonNumber ?? 0, $1.item?.episodeNumber ?? 0, $1.relativePath) }
+                    selected = Set(seriesFiles.map(\.id))
+                }
                 if !query.isEmpty { search() }
             }
         }
@@ -170,10 +219,16 @@ struct FixMatchView: View {
     }
 
     private func choose(_ id: Int) {
-        guard let tmdb = settings.tmdb else { return }
+        guard let tmdb = settings.tmdb, !applying else { return }
+        applying = true
         Task {
+            defer { applying = false }
             do {
-                if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb) }
+                if let item, series != nil {
+                    let chosen = seriesFiles.filter { selected.contains($0.id) }
+                    guard !chosen.isEmpty else { error = "Tick at least one file."; return }
+                    try await library.fixMatch(item, files: chosen, tmdbID: id, kind: kind, tmdb: tmdb)
+                } else if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb) }
                 else if let file { try await library.resolveReview(file, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
                 else if !files.isEmpty { try await library.resolveReview(files, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
                 dismiss()

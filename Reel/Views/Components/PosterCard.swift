@@ -84,7 +84,7 @@ struct ItemContextMenu: ViewModifier {
             } else {
                 Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
             }
-            if item.kind != .episode, settings.tmdb != nil {
+            if settings.tmdb != nil {
                 Button { fixMatchTarget = item } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") }
             }
             let collections = library.collections()

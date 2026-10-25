@@ -333,8 +333,16 @@ public final class LibraryStore: ObservableObject {
     /// Returns the key of the item the files now belong to. For a show, every episode's file moves.
     @discardableResult
     public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws -> String? {
-        let files = item.kind == .show ? item.episodes.flatMap(\.files) : item.files
+        try await fixMatch(item, files: item.kind == .show ? item.episodes.flatMap(\.files) : item.files, tmdbID: tmdbID, kind: kind, tmdb: tmdb)
+    }
+
+    /// Re-points just `files` (some of a show's episodes, or one episode's file) at `tmdbID`. `item` is
+    /// the page the sheet was opened from; it is retired only if it ends up with nothing.
+    @discardableResult
+    public func fixMatch(_ item: MediaItem, files: [MediaFile], tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws -> String? {
+        var previous: [MediaItem] = []
         for f in files {
+            if let p = f.item, !previous.contains(where: { $0 === p }) { previous.append(p) }
             let o = override(for: f)
             o.forcedTMDbID = tmdbID
             o.forcedKindRaw = kind.rawValue
@@ -347,7 +355,12 @@ public final class LibraryStore: ObservableObject {
         // Only now, with the new title in place, retire the old one. The page under the sheet redraws
         // on every save; flagging the orphan before its replacement existed left it with nothing to show.
         var deleted: [String] = []
-        let orphans = item.kind == .show ? item.episodes.filter { $0.files.isEmpty } + [item] : (item.files.isEmpty ? [item] : [])
+        var orphans = previous.filter { $0.files.isEmpty && !$0.pendingDeletion }
+        for p in previous {
+            if let show = p.show, !orphans.contains(where: { $0 === show }), show.episodes.allSatisfy({ $0.files.isEmpty || $0.pendingDeletion }) { orphans.append(show) }
+        }
+        if item.kind == .show, !orphans.contains(where: { $0 === item }), item.episodes.allSatisfy({ $0.files.isEmpty || $0.pendingDeletion }) { orphans.append(item) }
+        let itemRetired = orphans.contains { $0 === item } || (item.kind == .episode && orphans.contains { $0 === item.show })
         for o in orphans {
             // Not deleted here: the detail page under the Fix Match sheet still holds this object.
             deleted.append(SyncKeys.item(o.itemKey))
@@ -355,8 +368,9 @@ public final class LibraryStore: ObservableObject {
             o.hidden = true
         }
         let target = files.first?.item.map { $0.kind == .episode ? ($0.show?.itemKey ?? $0.itemKey) : $0.itemKey }
-        if let target {
+        if let target, itemRetired {
             rematched[item.itemKey] = target
+            if let show = item.show { rematched[show.itemKey] = target }
             // The user's collections follow the title to its new identity.
             for c in collections() where c.itemKeys.contains(item.itemKey) {
                 c.itemKeys = c.itemKeys.map { $0 == item.itemKey ? target : $0 }
@@ -792,14 +806,35 @@ public final class LibraryStore: ObservableObject {
     /// Next Up on Home: one entry per show with viewing history, most recently watched show first.
     /// A show whose last played episode is still in progress belongs to Continue Watching instead.
     public func nextUp(limit: Int = 12) -> [MediaItem] {
+        // Start from what was played, newest first, and visit only those shows: walking every episode of
+        // every show faulted the whole library in before Home could draw.
+        var d = FetchDescriptor<WatchState>(predicate: #Predicate { $0.lastPlayedAt != nil }, sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
+        d.fetchLimit = 60
+        let recent = (try? context.fetch(d)) ?? []
         let states = Dictionary(uniqueKeysWithValues: watchStates().map { ($0.itemKey, $0) })
+        var seenShows = Set<String>()
         var candidates: [(MediaItem, Date)] = []
-        for show in items(kind: .show) {
+        for ws in recent {
+            guard let ep = item(ws.itemKey), ep.kind == .episode, let show = ep.show, !show.hidden, seenShows.insert(show.itemKey).inserted else { continue }
             guard let (last, when) = lastPlayed(in: show, states: states) else { continue }
             if states[last.itemKey]?.isInProgress == true { continue }
             if let next = episodeAfter(last) { candidates.append((next, when)) }
+            if candidates.count >= limit { break }
         }
         return candidates.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
+    }
+
+    /// Newest films and shows, by when they entered the library.
+    public func recentlyAdded(limit: Int = 12) -> [MediaItem] {
+        let film = MediaKind.film.rawValue, show = MediaKind.show.rawValue
+        var d = FetchDescriptor<MediaItem>(predicate: #Predicate { ($0.kindRaw == film || $0.kindRaw == show) && !$0.hidden }, sortBy: [SortDescriptor(\.addedAt, order: .reverse)])
+        d.fetchLimit = limit
+        return (try? context.fetch(d)) ?? []
+    }
+
+    public func reviewCount() -> Int {
+        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.reviewed && !$0.ignored })
+        return (try? context.fetchCount(d)) ?? 0
     }
 
     /// The show page's Play button: the episode still in progress if there is one, else the one after
