@@ -115,6 +115,10 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         media.addOption(":no-drop-late-frames")
         media.addOption(":no-skip-frames")
         if !plan.chain.isEmpty { media.addOption(":sout-transcode-high-priority") }
+        // Converting video: decode in software. The iPad's VideoToolbox decoder rejects some
+        // MPEG-4 Part 2 streams ("codecBadDataErr") and restarts over and over, dropping frames each
+        // time; libavcodec reads them all, and at these sizes it is far faster than real time.
+        if plan.video != nil { media.addOption(":codec=avcodec"); media.addOption(":avcodec-threads=0") }
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
@@ -189,7 +193,20 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         let logger = VLCFileLogger(fileHandle: handle)
         logger.level = VLCLogLevel(rawValue: Int32(level)) ?? .warning
+        logger.formatter = RedactingFormatter()
         VLCLibrary.shared().loggers = [logger]
+    }
+
+    /// VLC prints the URLs it opens, credentials included; the log must not.
+    private final class RedactingFormatter: NSObject, VLCLogMessageFormatting {
+        var contextFlags: VLCLogContextFlag = []
+        var customContext: Any?
+        private static let credentials = try! NSRegularExpression(pattern: #"://[^/:@\s]+:[^@/\s]+@"#)
+        func format(withMessage message: String, logLevel level: VLCLogLevel, context: VLCLogContext?) -> String {
+            let tag = ["ERR", "WARN", "INFO", "DBG"][min(3, max(0, Int(level.rawValue)))]
+            let clean = Self.credentials.stringByReplacingMatches(in: message, range: NSRange(message.startIndex..., in: message), withTemplate: "://[redacted]@")
+            return "[\(tag)] \(clean)\n"
+        }
     }
 
     @MainActor
