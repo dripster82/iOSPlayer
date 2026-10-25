@@ -60,8 +60,12 @@ Packages/ReelKit/       ONE Swift package, SIX modules (keeps Xcode happy, lets 
                         TVDBClient (v4, optional key), AniDBTitles (offline titles dump), AnimeLists (AniDB→TMDb
                         season/episode mapping), Gunzip (Apple zlib; AniDB dump is .xml.gz)
   Sources/MediaSources  MediaSource (protocol, SourceConfig, SourceFactory, withRetries), LocalSource,
-                        WebDAVSource (+PropfindParser), SMBSource (#if canImport(AMSMB2)), CredentialStore, SourceDiscovery
-  Sources/Playback      PlaybackState (protocol + PlaybackItem/Options), VLCPlaybackEngine, NowPlayingBridge
+                        WebDAVSource (+PropfindParser), SMBSource (#if canImport(AMSMB2)), FTPSource (own client:
+                        FTPControl + FTPListing parsers), DLNASource (SSDP/description/DIDL parsers, ContentDirectory
+                        Browse), StreamBridge, CredentialStore, SourceDiscovery, WakeOnLAN
+  Sources/Playback      PlaybackState (protocol + PlaybackItem/Options), VLCPlaybackEngine, NowPlayingBridge,
+                        HLSRemuxer + MP4Boxes (AirPlay copy), VLCDirectorySource (SFTP and NFS through VLC's
+                        access modules; registered into SourceFactory at launch)
   Vendor/               VLCKit.xcframework + COPYING.txt (gitignored; binaryTarget declared only when present)
   Sources/Library       Models (SwiftData @Model classes + LibrarySchema), LibraryScanner (@ModelActor),
                         Matcher, LibraryStore (@MainActor façade), ImageLoader
@@ -337,7 +341,14 @@ Phase 3
 - [x] fanart.tv (24 Oct): `FanartClient`, logo replaces the title in `HeroHeader`, fetched on first open
       of a detail page (`LibraryStore.fetchExtraArt`), weekly. Needs the user's project key (Settings).
 - [ ] Duplicate detection UI ("2 versions" badge exists via `files.count > 1`; add preferred-version persistence).
-- [ ] FTP/SFTP/NFS/DLNA browsing (`UnsupportedSource` placeholders exist; VLC already plays their URLs).
+- [x] FTP/SFTP/NFS/DLNA browsing (25 Oct). FTP: Reel's own client (MLSD/LIST, EPSV/PASV, SIZE/MDTM, REST+RETR for
+      the AirPlay bridge). DLNA: unicast SSDP to the host, then the well-known description URLs, or a pasted one;
+      ContentDirectory Browse with the server's folder tree as the root. SFTP/NFS: `VLCDirectorySource` parses
+      directory URLs through VLCKit (sizes and mtimes from its filestat), plays by URL, downloads with the dump
+      demuxer; no ranged reads, so AirPlay goes through the HLS copy. Caveat: VLCKit's libssh2 offers only the
+      ssh-rsa (SHA-1) host-key algorithm, so SFTP needs a server that still allows it (OpenSSH ≥ 8.8 does not by
+      default). Tested against pyftpdlib, MiniDLNA (`brew install minidlna`) and a paramiko SFTP server on the Mac;
+      see `Tests/MediaCoreTests/{FTP,DLNA}IntegrationTests` (skip when the servers are down). NFS untested (needs root).
 - [ ] Playlists / Up Next queue beyond next-episode.
 
 Phase 4

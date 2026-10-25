@@ -102,11 +102,15 @@ enum DeepLinks {
         case "addsource":
             #if DEBUG
             guard let type = SourceType(rawValue: q["type"] ?? ""), let host = q["host"] else { return false }
+            if q["via"] == "vlc" { SourceFactory.preferVLCForFTP = true }
             let config = SourceConfig(name: q["name"] ?? host, type: type, host: host, port: q["port"].flatMap(Int.init), path: q["path"] ?? "", useTLS: q["tls"] != "0")
             let creds = q["user"].map { Credentials(username: $0, password: q["pass"] ?? "") }
-            if let record = try? library.addSource(config, credentials: creds, folderRules: []) {
+            do {
+                let record = try library.addSource(config, credentials: creds, folderRules: [])
                 library.scan(record, providers: settings.providers)
                 Diagnostics.log("app", "debug link added source \(config.name)")
+            } catch {
+                Diagnostics.log("app", "debug link could not add source: \(error)")
             }
             return true
             #else

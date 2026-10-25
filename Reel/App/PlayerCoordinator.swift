@@ -103,6 +103,7 @@ final class PlayerCoordinator: ObservableObject {
         if url.isFileURL || scheme == "http" || scheme == "https" { return url }
         guard let file else { throw SourceError.unsupported("AirPlay from \(scheme)") }
         let s = try await library.streamSource(for: file)
+        guard s.source.supportsRangedReads else { await s.source.disconnect(); throw SourceError.unsupported("AirPlay from \(scheme)") }
         await bridgeTeardown?.value   // a stop from the last AirPlay play must land before this start
         return try await StreamBridge.shared.register(source: s.source, path: s.path, size: s.size)
     }
@@ -184,8 +185,8 @@ final class PlayerCoordinator: ObservableObject {
             do {
                 let target: URL
                 var startAt = at, offset: TimeInterval = 0
-                if Self.isNativeContainer(url) {
-                    target = try await nativeURL(for: file, playbackURL: url)
+                if Self.isNativeContainer(url), let direct = try? await nativeURL(for: file, playbackURL: url) {
+                    target = direct
                 } else {
                     // An MKV: the sound keeps going on the TV for the few seconds the stream takes to start.
                     guard let (t, o) = await prepareForAirPlay(file: file, url: url, item: item, startAt: at) else { isLoading = false; return }
@@ -346,8 +347,9 @@ final class PlayerCoordinator: ObservableObject {
                 }
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
-                if Self.prefersNativePlayer(for: url), await nativeSubtitles(for: item, file: file).isEmpty {
-                    let target = try await nativeURL(for: file, playbackURL: url)
+                // An MP4 Apple's player can read straight from the share or server; otherwise (an MKV,
+                // or a server only VLC can read from) VLC's HLS copy below carries it.
+                if Self.prefersNativePlayer(for: url), await nativeSubtitles(for: item, file: file).isEmpty, let target = try? await nativeURL(for: file, playbackURL: url) {
                     let (t, s) = Self.titles(for: item)
                     await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: resume, title: t, subtitle: s, chapters: nativeChapters(for: file)))
                     return

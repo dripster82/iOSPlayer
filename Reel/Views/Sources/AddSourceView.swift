@@ -83,8 +83,7 @@ struct AddSourceView: View {
             } header: { Text("Found on your network") }
             Section("Or enter manually") {
                 ForEach([SourceType.smb, .webdav, .ftp, .sftp, .nfs, .dlna]) { t in
-                    Button { type = t; step = .form } label: { HStack { Text(t.displayName).foregroundStyle(.primary); Spacer(); if t.isComingSoon { Text("Soon").font(.caption2).foregroundStyle(.secondary) } } }
-                        .disabled(t.isComingSoon)
+                    Button { type = t; step = .form } label: { HStack { Text(t.displayName).foregroundStyle(.primary); Spacer(); Text(t.formHint).font(.caption2).foregroundStyle(.secondary) } }
                 }
             }
         }
@@ -95,17 +94,19 @@ struct AddSourceView: View {
             Section {
                 TextField("Name", text: $name, prompt: Text("Living room NAS"))
                 TextField("Host or IP", text: $host, prompt: Text("192.168.1.20 or nas.local")).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField(type == .webdav ? "URL path" : "Share", text: $path, prompt: Text(type == .webdav ? "/remote.php/dav/files/you" : "video")).textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Port (optional)", text: $port).keyboardType(.numberPad)
+                TextField(type.pathLabel, text: $path, prompt: Text(type.pathPrompt)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Port (optional)", text: $port, prompt: Text(type.defaultPort.map { "\($0)" } ?? "")).keyboardType(.numberPad)
                 if type == .webdav { Toggle("Use HTTPS", isOn: $useTLS) }
-            }
+            } footer: { if let note = type.formNote { Text(note) } }
             Section {
                 TextField("MAC address (optional)", text: $macAddress, prompt: Text("A1:B2:C3:D4:E5:F6")).textInputAutocapitalization(.characters).autocorrectionDisabled()
             } footer: { Text("For Wake-on-LAN. If the server has gone to sleep, Reel wakes it and waits before playing. Find it in the NAS's network settings; Wake-on-LAN must be enabled there too.") }
-            Section {
-                TextField("Username (optional)", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("Password", text: $password)
-            } footer: { Text("Saved to the device Keychain. Stays on this device.") }
+            if type.takesCredentials {
+                Section {
+                    TextField("Username (optional)", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Password", text: $password)
+                } footer: { Text("Saved to the device Keychain. Stays on this device.") }
+            }
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.footnote) } }
             Section {
                 Button { Task { await test() } } label: { HStack { Spacer(); if testing { ProgressView().padding(.trailing, 6) }; Text(testing ? "Testing…" : editing == nil ? "Test Connection" : "Save"); Spacer() } }
@@ -208,6 +209,48 @@ struct AddSourceView: View {
 }
 
 extension SourceType {
-    /// Browse support for these lands after v1 (PLAN.md §11.3). VLC can still play their URLs.
-    var isComingSoon: Bool { [.ftp, .sftp, .nfs, .dlna].contains(self) }
+    var formHint: String {
+        switch self {
+        case .smb: "NAS, Mac or PC share"
+        case .webdav: "Nextcloud, Synology, seedbox"
+        case .ftp: "Older NAS, seedbox"
+        case .sftp: "Over SSH"
+        case .nfs: "Linux NAS export"
+        case .dlna: "Media server"
+        case .local: ""
+        }
+    }
+    var pathLabel: String {
+        switch self {
+        case .webdav: "URL path"
+        case .smb: "Share"
+        case .ftp, .sftp: "Folder"
+        case .nfs: "Export"
+        case .dlna: "Description URL (optional)"
+        case .local: "Folder"
+        }
+    }
+    var pathPrompt: String {
+        switch self {
+        case .webdav: "/remote.php/dav/files/you"
+        case .smb: "video"
+        case .ftp, .sftp: "/media/video"
+        case .nfs: "/volume1/video"
+        case .dlna: "http://192.168.1.20:8200/rootDesc.xml"
+        case .local: ""
+        }
+    }
+    var defaultPort: Int? {
+        switch self { case .ftp: 21; case .sftp: 22; case .nfs: 2049; case .smb: 445; case .webdav: nil; case .dlna: nil; case .local: nil }
+    }
+    var takesCredentials: Bool { self != .nfs && self != .dlna && self != .local }
+    var formNote: String? {
+        switch self {
+        case .ftp: "Plain FTP, with passive transfers. Playback streams straight from the server; AirPlay works too."
+        case .sftp: "Password sign-in over SSH, through VLC's own SFTP support, which needs a server that still offers an RSA host key with the classic ssh-rsa signature (OpenSSH 8.8 and later turn that off unless the server's config adds it back). AirPlay sends a copy of the file, so it starts after a few seconds."
+        case .nfs: "The export path as the server shares it, with no sign-in (the server must allow this device's address). AirPlay sends a copy of the file, so it starts after a few seconds."
+        case .dlna: "Enter the server's address. Reel asks it where its description is, or tries the usual places (MiniDLNA, Synology, Plex, Jellyfin, Emby, Serviio, Twonky). Paste the description URL if that fails. Browsing is read-only and follows the server's own folders."
+        default: nil
+        }
+    }
 }

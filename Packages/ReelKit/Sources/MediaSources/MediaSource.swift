@@ -72,6 +72,10 @@ public protocol MediaSource: Actor {
     /// bytes at the end of the file.
     func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data
 
+    /// False for a source that cannot serve `read`, so the AirPlay bridge is not offered a file it
+    /// could never send; those files go to Apple's player through VLC's HLS copy instead.
+    nonisolated var supportsRangedReads: Bool { get }
+
     func disconnect() async
 }
 
@@ -79,6 +83,7 @@ public extension MediaSource {
     func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data {
         throw SourceError.unsupported("ranged reads on \(config.type.rawValue)")
     }
+    nonisolated var supportsRangedReads: Bool { true }
 }
 
 public struct Credentials: Sendable, Hashable {
@@ -88,8 +93,14 @@ public struct Credentials: Sendable, Hashable {
 }
 
 public enum SourceFactory {
-    /// Builds the right implementation for a config. DLNA/FTP/NFS use VLC's own URL handling
-    /// for playback and are browse-only via WebDAV-like listing where available; v1 ships SMB, WebDAV and Local.
+    /// Builds SFTP and NFS sources, which VLC's own access modules back (the Playback module
+    /// registers it at launch; this module cannot depend on VLCKit).
+    public static var vlcBackedMaker: (@Sendable (SourceConfig) -> any MediaSource)?
+    /// Development only: route FTP through the VLC-backed source too, to exercise that path against
+    /// an FTP server (VLC's ftp, sftp and nfs modules share the directory-listing code).
+    public static var preferVLCForFTP = false
+
+    /// Builds the right implementation for a config.
     public static func make(_ config: SourceConfig) -> any MediaSource {
         switch config.type {
         case .local: return LocalSource(config: config)
@@ -100,12 +111,25 @@ public enum SourceFactory {
             #else
             return UnsupportedSource(config: config)
             #endif
-        case .ftp, .sftp, .nfs, .dlna: return UnsupportedSource(config: config)
+        case .ftp:
+            if preferVLCForFTP, let maker = vlcBackedMaker { return maker(config) }
+            #if canImport(Network)
+            return FTPSource(config: config)
+            #else
+            return UnsupportedSource(config: config)
+            #endif
+        case .dlna:
+            #if canImport(Network)
+            return DLNASource(config: config)
+            #else
+            return UnsupportedSource(config: config)
+            #endif
+        case .sftp, .nfs: return vlcBackedMaker?(config) ?? UnsupportedSource(config: config)
         }
     }
 }
 
-/// Placeholder so the UI can list a source type before its implementation lands.
+/// Stands in for a source type whose implementation is not available in this build.
 public actor UnsupportedSource: MediaSource {
     public let config: SourceConfig
     public init(config: SourceConfig) { self.config = config }

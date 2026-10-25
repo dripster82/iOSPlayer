@@ -13,9 +13,17 @@ public struct CredentialStore: Sendable {
 
     public init() {}
 
+    #if canImport(KeychainAccess)
+    private var keychain: Keychain { Keychain(service: service).synchronizable(true) }
+    #endif
+
     public func save(_ credentials: Credentials, for sourceID: UUID) throws {
-        #if canImport(KeychainAccess)
-        let kc = Keychain(service: service).accessibility(.afterFirstUnlock).synchronizable(true)
+        #if targetEnvironment(simulator)
+        // An unsigned simulator build has no Keychain entitlements at all; passwords go to the
+        // defaults there so sources can be tested. Device builds never take this path.
+        UserDefaults.standard.set([credentials.username, credentials.password], forKey: "sim.credentials." + sourceID.uuidString)
+        #elseif canImport(KeychainAccess)
+        let kc = keychain.accessibility(.afterFirstUnlock)
         try kc.set(credentials.password, key: key(sourceID, "password"))
         try kc.set(credentials.username, key: key(sourceID, "username"))
         #else
@@ -24,8 +32,11 @@ public struct CredentialStore: Sendable {
     }
 
     public func load(for sourceID: UUID) -> Credentials? {
-        #if canImport(KeychainAccess)
-        let kc = Keychain(service: service).synchronizable(true)
+        #if targetEnvironment(simulator)
+        guard let pair = UserDefaults.standard.stringArray(forKey: "sim.credentials." + sourceID.uuidString), pair.count == 2 else { return nil }
+        return Credentials(username: pair[0], password: pair[1])
+        #elseif canImport(KeychainAccess)
+        let kc = keychain
         guard let user = try? kc.get(key(sourceID, "username")), let pass = try? kc.get(key(sourceID, "password")) else { return nil }
         return Credentials(username: user, password: pass)
         #else
@@ -34,8 +45,10 @@ public struct CredentialStore: Sendable {
     }
 
     public func remove(for sourceID: UUID) {
-        #if canImport(KeychainAccess)
-        let kc = Keychain(service: service).synchronizable(true)
+        #if targetEnvironment(simulator)
+        UserDefaults.standard.removeObject(forKey: "sim.credentials." + sourceID.uuidString)
+        #elseif canImport(KeychainAccess)
+        let kc = keychain
         try? kc.remove(key(sourceID, "username"))
         try? kc.remove(key(sourceID, "password"))
         #else

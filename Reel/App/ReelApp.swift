@@ -45,6 +45,9 @@ struct ReelApp: App {
         sync.onChangesApplied = { [weak store] in store?.invalidateCaches(); store?.objectWillChange.send() }
         // Must happen before launch finishes, so here rather than in a view.
         BackgroundScans.register(library: store, settings: settings)
+        #if canImport(VLCKit)
+        VLCDirectorySource.register()   // SFTP and NFS sources, browsed and played through VLC
+        #endif
     }
 
     /// "Open in Reel" from another app (a file URL), or `reel://play?url=…` / `reel://x-callback-url/play?url=…`.

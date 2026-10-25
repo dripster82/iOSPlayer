@@ -49,7 +49,7 @@ let package = Package(
         // VLCKit wrapper exposing an async state stream to SwiftUI.
         .target(
             name: "Playback",
-            dependencies: ["MediaCore"] + (hasVLCKit ? [.target(name: "VLCKit", condition: .when(platforms: [.iOS]))] : []),
+            dependencies: ["MediaCore", "MediaSources"] + (hasVLCKit ? [.target(name: "VLCKit", condition: .when(platforms: [.iOS]))] : []),
             linkerSettings: hasVLCKit ? [
                 // System frameworks and libraries VLCKit depends on (dynamic xcframework, embedded by Xcode).
                 .linkedFramework("AVFoundation", .when(platforms: [.iOS])),
