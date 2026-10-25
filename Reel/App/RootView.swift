@@ -71,7 +71,7 @@ struct RootView: View {
         .fullScreenCover(isPresented: $player.isPresented) {
             PlayerView()
         }
-        .fullScreenCover(item: $player.nativePlayback) { NativePlayerView(playback: $0) }
+        .fullScreenCover(item: $player.nativePlayback, onDismiss: { player.endNativePlayback() }) { NativePlayerView(playback: $0) }
         .alert("Couldn't play", isPresented: Binding(get: { player.loadError != nil && !player.isPresented }, set: { if !$0 { player.loadError = nil } })) {
             Button("OK") { player.loadError = nil }
         } message: { Text(player.loadError ?? "") }

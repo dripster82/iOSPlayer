@@ -24,6 +24,7 @@ final class StreamBridgeTests: XCTestCase {
     func testRangeRequestsReturnTheRightBytes() async throws {
         let size = 3 * (1 << 20) + 123   // three chunks and a bit
         let source = PatternSource(size: size)
+        StreamBridge.preferLoopback = true
         let bridge = StreamBridge()
         let url = try await bridge.register(source: source, path: "f.mp4", size: Int64(size))
         XCTAssertEqual(url.host, "127.0.0.1")

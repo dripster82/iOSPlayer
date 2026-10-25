@@ -79,6 +79,17 @@ enum DeepLinks {
             let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
             if let target { player.play(target, settings: settings) }
             return true
+        case "airplaytest":
+            #if DEBUG
+            // Plays through the AirPlay path (remux + bridge + Apple's player) with no receiver connected.
+            guard let item = find() else { return false }
+            PlayerCoordinator.debugForceAirPlay = true
+            let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
+            if let target { player.play(target, settings: settings) }
+            return true
+            #else
+            return false
+            #endif
         case "stop":
             player.dismiss()
             return true

@@ -10,8 +10,22 @@ import MediaCore
 ///
 /// One registration at a time: `register` returns the URL to hand to AVPlayer and drops whatever
 /// was registered before. `stop` closes the listener and the source.
+///
+/// The server listens on every interface, not just loopback: in AirPlay video mode the receiver
+/// (the Apple TV) fetches the URL itself, so the URL carries the device's Wi-Fi address. The random
+/// token in the path is the only way in, and only one file is ever reachable.
 public actor StreamBridge {
     public static let shared = StreamBridge()
+
+    /// Hand out 127.0.0.1 rather than the Wi-Fi address. On in the simulator and in tests, where the
+    /// Mac's firewall gets in the way and there is no AirPlay receiver to fetch from the LAN anyway.
+    public static var preferLoopback: Bool = {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }()
 
     private var listener: NWListener?
     private var port: UInt16 = 0
@@ -38,8 +52,33 @@ public actor StreamBridge {
         if let old = entry { await old.source.disconnect() }
         entry = Entry(token: token, source: source, path: path, size: size, contentType: type, fileName: name)
         let safeName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "video.mp4"
-        Diagnostics.log("bridge", "serving \(name) (\(size / 1_000_000) MB) on port \(port)")
-        return URL(string: "http://127.0.0.1:\(port)/\(token)/\(safeName)")!
+        let host = Self.preferLoopback ? "127.0.0.1" : (Self.wifiAddress() ?? "127.0.0.1")
+        Diagnostics.log("bridge", "serving \(name) (\(size / 1_000_000) MB) at \(host):\(port)")
+        return URL(string: "http://\(host):\(port)/\(token)/\(safeName)")!
+    }
+
+    /// A file on this device (a remuxed copy, a download).
+    public func register(fileURL: URL) async throws -> URL {
+        let size = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        return try await register(source: FileSource(url: fileURL), path: fileURL.lastPathComponent, size: size)
+    }
+
+    /// The device's IPv4 address on Wi-Fi (en0), the one an AirPlay receiver on the same network can reach.
+    static func wifiAddress() -> String? {
+        var addrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrs) == 0, let first = addrs else { return nil }
+        defer { freeifaddrs(addrs) }
+        var found: String?
+        var p: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = p {
+            let name = String(cString: cur.pointee.ifa_name)
+            if name == "en0", let sa = cur.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) {
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 { found = String(cString: host) }
+            }
+            p = cur.pointee.ifa_next
+        }
+        return found
     }
 
     /// Closes the listener and disconnects the source.
@@ -56,7 +95,6 @@ public actor StreamBridge {
     private func start() async throws {
         if listener != nil { return }
         let params = NWParameters.tcp
-        params.requiredInterfaceType = .loopback
         params.allowLocalEndpointReuse = true
         let l = try NWListener(using: params, on: .any)
         listener = l

@@ -35,7 +35,9 @@ final class PlayerCoordinator: ObservableObject {
     private var sleepTask: Task<Void, Never>?
 
     /// True while an AirPlay receiver is the audio route.
-    static var airPlayActive: Bool { AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay } }
+    static var airPlayActive: Bool { debugForceAirPlay || AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay } }
+    /// Debug builds: pretend AirPlay is on, to exercise the remux and bridge without a receiver.
+    static var debugForceAirPlay = false
     /// A container Apple's player can read (and so AirPlay can carry as video). MKV is not one.
     static func isNativeContainer(_ url: URL) -> Bool { ["mp4", "m4v", "mov"].contains(url.pathExtension.lowercased()) }
     /// True when AirPlay is the current audio route and the file can play through Apple's player:
@@ -52,6 +54,44 @@ final class PlayerCoordinator: ObservableObject {
         return try await StreamBridge.shared.register(source: s.source, path: s.path, size: s.size)
     }
 
+    /// Swaps the VLC screen for Apple's player. The two are separate full-screen covers; presenting
+    /// one in the same frame the other is dismissed made the new one appear and vanish at once (and
+    /// tear the bridge down with it), so the VLC cover gets a moment to go first.
+    private func presentNative(_ playback: NativePlayback) async {
+        isLoading = false
+        loadingMessage = nil
+        if isPresented {
+            isPresented = false
+            try? await Task.sleep(for: .milliseconds(700))
+        }
+        bridgeLive = true
+        nativePlayback = playback
+    }
+
+    /// Copies an MKV into an AirPlay-ready MP4 with progress in the loading overlay, and serves it
+    /// through the bridge. Nil when it failed or the user backed out (the notice says why).
+    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem) async -> URL? {
+        let key = file?.id.uuidString ?? url.absoluteString
+        let duration = file?.duration ?? engine.duration.nonZero ?? TimeInterval((item.runtimeMinutes ?? 45) * 60)
+        isLoading = true
+        loadingMessage = AirPlayRemuxer.existing(for: key) == nil ? "Preparing for AirPlay… this copies the file once, about as long as the download takes" : "Preparing for AirPlay…"
+        do {
+            let local = try await AirPlayRemuxer.shared.remux(source: url, key: key, duration: duration) { [weak self] p in
+                self?.loadingMessage = "Preparing for AirPlay… \(Int(p * 100))%"
+            }
+            loadingMessage = nil
+            return try await StreamBridge.shared.register(fileURL: local)
+        } catch is CancellationError {
+            loadingMessage = nil
+            return nil
+        } catch {
+            loadingMessage = nil
+            Diagnostics.log("airplay", "prepare failed: \(error.localizedDescription)")
+            show(notice: error.localizedDescription)
+            return nil
+        }
+    }
+
     /// A short message over the player (AirPlay with an MKV, for one). Clears itself.
     @Published var notice: String?
     private var noticeTask: Task<Void, Never>?
@@ -65,12 +105,8 @@ final class PlayerCoordinator: ObservableObject {
     /// the TV gets the picture; for anything else say why it is sound only.
     private func routeChanged() {
         guard Self.airPlayActive, isPresented, let item = current, let url = engine.currentURL else { return }
-        if Self.isNativeContainer(url) {
-            Diagnostics.log("player", "AirPlay route appeared mid-play; moving to the native player")
-            switchToNativePlayer(item: item, url: url)
-        } else {
-            show(notice: "AirPlay is carrying the sound only: this is an MKV, which Apple's player cannot stream. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
-        }
+        Diagnostics.log("player", "AirPlay route appeared mid-play; moving to the native player")
+        switchToNativePlayer(item: item, url: url)
     }
 
     private func switchToNativePlayer(item: MediaItem, url: URL) {
@@ -79,12 +115,20 @@ final class PlayerCoordinator: ObservableObject {
         let file = currentFile
         Task {
             do {
-                let target = try await nativeURL(for: file, playbackURL: url)
+                let target: URL
+                if Self.isNativeContainer(url) {
+                    target = try await nativeURL(for: file, playbackURL: url)
+                } else {
+                    // An MKV: the sound keeps going on the TV while the MP4 copy is made, then the picture follows.
+                    guard let t = await prepareForAirPlay(file: file, url: url, item: item) else { isLoading = false; return }
+                    target = t
+                }
+                guard current?.itemKey == item.itemKey else { return }
                 engine.stop()
                 ScrubPreview.shared.stop()
-                isPresented = false
-                nativePlayback = NativePlayback(itemKey: item.itemKey, url: target, startAt: at)
+                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: at))
             } catch {
+                isLoading = false
                 show(notice: "Couldn't move to AirPlay: \(error.localizedDescription)")
                 Diagnostics.log("player", "native hand-over failed: \(error.localizedDescription)")
             }
@@ -93,9 +137,13 @@ final class PlayerCoordinator: ObservableObject {
 
     /// Apple's player closed: release the bridge and its share connection.
     func endNativePlayback() {
+        guard nativePlayback != nil || bridgeLive else { return }
         nativePlayback = nil
+        bridgeLive = false
+        Self.debugForceAirPlay = false
         Task { await StreamBridge.shared.stop() }
     }
+    private var bridgeLive = false
     /// What the spinner is waiting on, when it is something slow such as waking a sleeping NAS.
     @Published var loadingMessage: String?
     let engine = VLCPlaybackEngine()
@@ -217,13 +265,17 @@ final class PlayerCoordinator: ObservableObject {
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
                 if Self.prefersNativePlayer(for: url) {
                     let target = try await nativeURL(for: file, playbackURL: url)
-                    isLoading = false
-                    isPresented = false
-                    nativePlayback = NativePlayback(itemKey: item.itemKey, url: target, startAt: resume)
+                    await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: resume))
                     return
                 }
                 if Self.airPlayActive, !Self.isNativeContainer(url), !ExternalDisplay.shared.isConnected {
-                    show(notice: "AirPlay is carrying the sound only: this is an MKV, which Apple's player cannot stream. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
+                    // An MKV: copy it into an MP4 first (no re-encoding), then Apple's player streams it.
+                    if let target = await prepareForAirPlay(file: file, url: url, item: item) {
+                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: resume))
+                        return
+                    }
+                    guard current?.itemKey == item.itemKey else { return }   // backed out while preparing
+                    show(notice: "AirPlay is carrying the sound only. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
                 }
                 let opts = playbackOptions(for: item, settings: settings)
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)
@@ -393,6 +445,8 @@ final class PlayerCoordinator: ObservableObject {
     func dismiss() {
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
         saveProgress()
+        AirPlayRemuxer.shared.cancel()
+        Self.debugForceAirPlay = false
         ScrubPreview.shared.stop()
         engine.stop()
         externalScopedURL?.stopAccessingSecurityScopedResource(); externalScopedURL = nil
@@ -431,4 +485,8 @@ final class PlayerCoordinator: ObservableObject {
         // The player view shows the Up Next card; auto-advance is its job so the countdown is visible.
         if upNext == nil { dismiss() }
     }
+}
+
+private extension TimeInterval {
+    var nonZero: TimeInterval? { self > 0 ? self : nil }
 }
