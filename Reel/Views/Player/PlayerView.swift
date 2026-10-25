@@ -331,6 +331,9 @@ struct PlayerContentView: View {
             // every showControls cancelled the previous timer, which then hid what had just been shown.
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "reel.debug.keepControls") { return }
+            #endif
             if engine.status == .playing, sheet == nil, scrubTime == nil { hideControls() }
         }
     }

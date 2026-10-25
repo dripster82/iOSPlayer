@@ -16,6 +16,7 @@ struct ReelApp: App {
     @StateObject private var downloads: DownloadManager
     @StateObject private var groupArt: GroupArtStore
     @StateObject private var smart = SmartCollectionStore()
+    @StateObject private var nav = AppNavigation()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -59,6 +60,8 @@ struct ReelApp: App {
         if url.isFileURL { player.playExternal(url, settings: settings); return }
         let scheme = url.scheme?.lowercased() ?? ""
         guard ["reel", "vlc-x-callback", "vlc", "vlcx"].contains(scheme) else { return }
+        // Navigation and library links (reel://open/tv, reel://item?title=…); the stream form falls through.
+        if scheme == "reel", DeepLinks.handle(url, nav: nav, library: library, player: player, settings: settings) { return }
         if scheme != "reel", !settings.acceptVLCLinks {
             Diagnostics.log("app", "ignored \(scheme) link: VLC links are off in Settings → Library")
             library.lastError = "A \(scheme):// link was ignored. Turn on “Accept VLC links” in Settings → Library to let other apps hand streams to Reel this way."
@@ -111,6 +114,7 @@ struct ReelApp: App {
                 .environmentObject(downloads)
                 .environmentObject(groupArt)
                 .environmentObject(smart)
+                .environmentObject(nav)
                 .modelContainer(library.container)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task {
@@ -136,6 +140,19 @@ struct ReelApp: App {
                     if let tmdb = settings.tmdb { await library.backfillCollections(tmdb: tmdb) }
                 }
                 .onOpenURL { url in open(url) }
+                #if DEBUG
+                // Automation without the "Open in Reel?" prompt: a reel:// link written to
+                // Documents/command.txt is opened and the file removed. Debug builds only.
+                .task {
+                    let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("command.txt")
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(1))
+                        guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+                        try? FileManager.default.removeItem(at: file)
+                        if let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) { open(url) }
+                    }
+                }
+                #endif
                 .onReceive(NotificationCenter.default.publisher(for: AppDelegate.remoteNotification)) { _ in
                     Task { await sync.fetchNow() }
                 }

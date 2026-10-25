@@ -37,7 +37,7 @@ struct RootView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var library: LibraryStore
-    @State private var section: AppSection? = .home
+    @EnvironmentObject private var nav: AppNavigation
 
     var body: some View {
         Group {
@@ -45,7 +45,7 @@ struct RootView: View {
                 OnboardingView()
             } else if sizeClass == .regular {
                 NavigationSplitView {
-                    List(selection: $section) {
+                    List(selection: $nav.section) {
                         ForEach([AppSection.home, .tv, .films, .downloads, .favourites, .collections, .sources, .search]) { s in
                             Label(s.title, systemImage: s.icon).tag(s)
                         }
@@ -54,15 +54,16 @@ struct RootView: View {
                     }
                     .navigationTitle("Reel")
                 } detail: {
-                    NavigationStack { (section ?? .home).view }
+                    NavigationStack(path: nav.binding(for: nav.section ?? .home)) { (nav.section ?? .home).view }
                 }
             } else {
                 // Five tabs fit the phone's bar without a "More" tab. Sources moved to Settings →
                 // Libraries (and the Home banners) when Downloads took its place.
-                TabView {
+                TabView(selection: Binding(get: { nav.section ?? .home }, set: { nav.section = $0 })) {
                     ForEach([AppSection.home, .tv, .films, .downloads, .search]) { s in
-                        NavigationStack { s.view }
+                        NavigationStack(path: nav.binding(for: s)) { s.view }
                             .tabItem { Label(s.title, systemImage: s.icon) }
+                            .tag(s)
                     }
                 }
             }

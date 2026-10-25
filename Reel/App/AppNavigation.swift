@@ -1,0 +1,108 @@
+import SwiftUI
+import MediaCore
+import Library
+import MediaSources
+
+/// Where the app is: the selected section and each section's pushed pages. Deep links
+/// (reel://open/tv, reel://item?title=Firefly) and Siri hand-offs drive it; RootView binds to it.
+@MainActor
+final class AppNavigation: ObservableObject {
+    @Published var section: AppSection? = .home
+    @Published var paths: [AppSection: NavigationPath] = [:]
+
+    func binding(for s: AppSection) -> Binding<NavigationPath> {
+        Binding(get: { self.paths[s] ?? NavigationPath() }, set: { self.paths[s] = $0 })
+    }
+
+    func show(_ s: AppSection) {
+        section = s
+        paths[s] = NavigationPath()
+    }
+
+    /// Opens a title's page in the current section.
+    func open(itemKey: String) {
+        let s = section ?? .home
+        var p = NavigationPath(); p.append(itemKey)
+        paths[s] = p
+    }
+
+    func open(route: LibraryRoute) {
+        let s = section ?? .home
+        var p = NavigationPath(); p.append(route)
+        paths[s] = p
+    }
+}
+
+/// `reel://` links beyond `play?url=`. Used by Siri shortcuts and by automation (screenshots).
+///
+///   reel://open/home|tv|films|downloads|search|collections|settings|favourites
+///   reel://item?key=<itemKey>  or  reel://item?title=<text>   (first search hit)
+///   reel://play?key=<itemKey>  or  reel://play?title=<text>
+///   reel://stop   (closes the player)
+///   reel://scan
+///   reel://demo
+///   reel://addsource?type=webdav&host=…&port=…&path=…&name=…&tls=0   (Debug builds only)
+enum DeepLinks {
+    @MainActor
+    static func handle(_ url: URL, nav: AppNavigation, library: LibraryStore, player: PlayerCoordinator, settings: AppSettings) -> Bool {
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let q = Dictionary((comps?.queryItems ?? []).compactMap { i in i.value.map { (i.name, $0) } }, uniquingKeysWith: { a, _ in a })
+        let action = url.host ?? ""
+        let arg = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        func find() -> MediaItem? {
+            if let key = q["key"], let item = library.item(key) { return item }
+            if let title = q["title"] {
+                let hits = library.search(title)
+                return hits.first { $0.title.caseInsensitiveCompare(title) == .orderedSame } ?? hits.first
+            }
+            return nil
+        }
+        switch action {
+        case "open":
+            switch arg {
+            case "collections": nav.show(.home); Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(route: .collections) }
+            case "favourites": nav.show(.home); Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(route: .favourites) }
+            case "settings": nav.show(.settings)
+            default: if let s = AppSection(rawValue: arg) { nav.show(s) } else { return false }
+            }
+            return true
+        case "item":
+            guard let item = find() else { return false }
+            let key = item.kind == .episode ? (item.show?.itemKey ?? item.itemKey) : item.itemKey
+            if let s = AppSection(rawValue: q["section"] ?? "") { nav.show(s) }
+            // The section's stack must be on screen before a page can be pushed into it.
+            Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(itemKey: key) }
+            return true
+        case "play":
+            if q["url"] != nil { return false }   // the stream form is handled by ReelApp.open
+            guard let item = find() else { return false }
+            let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
+            if let target { player.play(target, settings: settings) }
+            return true
+        case "stop":
+            player.dismiss()
+            return true
+        case "scan":
+            library.scanAll(providers: settings.providers)
+            return true
+        case "demo":
+            DemoLibrary.install(in: library); settings.demoInstalled = true
+            return true
+        case "addsource":
+            #if DEBUG
+            guard let type = SourceType(rawValue: q["type"] ?? ""), let host = q["host"] else { return false }
+            let config = SourceConfig(name: q["name"] ?? host, type: type, host: host, port: q["port"].flatMap(Int.init), path: q["path"] ?? "", useTLS: q["tls"] != "0")
+            let creds = q["user"].map { Credentials(username: $0, password: q["pass"] ?? "") }
+            if let record = try? library.addSource(config, credentials: creds, folderRules: []) {
+                library.scan(record, providers: settings.providers)
+                Diagnostics.log("app", "debug link added source \(config.name)")
+            }
+            return true
+            #else
+            return false
+            #endif
+        default:
+            return false
+        }
+    }
+}

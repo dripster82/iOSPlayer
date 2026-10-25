@@ -7,6 +7,16 @@ or the device, and turns them into a proper library: TV shows and films with art
 cast, collections, continue watching and next up. There is no account, no server to install and
 nothing is uploaded anywhere.
 
+<p align="center">
+<img src="docs/screenshots/ipad-01-home.jpg" width="46%" alt="Home on iPad">&nbsp;
+<img src="docs/screenshots/ipad-04-show.jpg" width="46%" alt="A show page on iPad">
+</p>
+<p align="center">
+<img src="docs/screenshots/iphone-01-home.jpg" width="23%" alt="Home on iPhone">&nbsp;
+<img src="docs/screenshots/iphone-05-film.jpg" width="23%" alt="A film page on iPhone">&nbsp;
+<img src="docs/screenshots/iphone-07-player.jpg" width="23%" alt="The player on iPhone">
+</p>
+
 ## What it does
 
 **Plays almost anything.** MKV, MP4, AVI, WebM and more, through VLC's engine: HEVC and 10-bit video,
