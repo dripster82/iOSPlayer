@@ -293,7 +293,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     /// Coming back to the foreground (after PiP, the lock screen or another app): if VLC says it is
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
-    /// Reconnect now rather than leaving the viewer to wait for the 15 s stall watchdog.
+    /// Reconnect now rather than leaving the viewer to wait for the stall watchdog.
     public func verifyPlaybackAfterForeground() {
         guard status == .playing, let stats = player.media?.statistics else { return }
         let before = Int(stats.displayedPictures) + Int(stats.playedAudioBuffers)
@@ -309,8 +309,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
     }
 
-    /// If nothing has been shown or played for 15 s while VLC still claims to be playing, the connection
+    /// If nothing has been shown or played for 8 s while VLC still claims to be playing, the connection
     /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
+    /// Checked every 2 s so a dead share costs the viewer seconds, not a quarter of a minute.
     /// Paused, the end of the stream and seeks are left alone; the seek watchdog has its own recovery.
     private func startStallWatchdog() {
         stallWatchdog?.cancel()
@@ -322,7 +323,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             while !Task.isCancelled {
                 // Reading VLC's statistics is cheap, but a hot device gets left alone as much as possible.
                 let hot: Bool = { switch ProcessInfo.processInfo.thermalState { case .serious, .critical: true; default: false } }()
-                try? await Task.sleep(for: .seconds(hot ? 15 : 5))
+                try? await Task.sleep(for: .seconds(hot ? 15 : 2))
                 guard let self, !Task.isCancelled else { return }
                 guard self.status == .playing, let stats = self.player.media?.statistics else { continue }
                 let pictures = Int(stats.displayedPictures)
@@ -342,7 +343,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                     self.lastProgressTime = self.clock.time
                     continue
                 }
-                if Date().timeIntervalSince(self.lastProgressAt) > 15, Date().timeIntervalSince(self.lastSeekAt) > 15 {
+                if Date().timeIntervalSince(self.lastProgressAt) > 8, Date().timeIntervalSince(self.lastSeekAt) > 15 {
                     log("stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s")
                     self.reconnect(at: self.lastProgressTime)
                 }

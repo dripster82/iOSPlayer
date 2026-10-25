@@ -10,7 +10,15 @@ import Metadata
 /// scrubs, vertical drag on each half adjusts brightness/volume, long-press holds 2×, pinch toggles fill.
 struct PlayerView: View {
     @EnvironmentObject private var player: PlayerCoordinator
-    var body: some View { PlayerContentView(engine: player.engine) }
+    /// One cover for both players: Apple's takes the screen for AirPlay and gives it back to VLC when
+    /// the route goes, with no trip through the library in between.
+    var body: some View {
+        if let native = player.nativePlayback {
+            NativePlayerView(playback: native).id(native.url)
+        } else {
+            PlayerContentView(engine: player.engine)
+        }
+    }
 }
 
 struct PlayerContentView: View {

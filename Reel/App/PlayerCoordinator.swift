@@ -27,36 +27,12 @@ final class PlayerCoordinator: ObservableObject {
         var title = ""; var subtitle = ""
         /// Chapter starts in the file's own time (the view subtracts `timeOffset` when seeking).
         var chapters: [Chapter] = []
-        /// The file's audio tracks (name, language) and which one this stream carries, for the Audio menu.
-        var audioTracks: [(name: String, language: String)] = []
-        var audioTrack: Int?
         var id: String { itemKey }
-    }
-    /// The audio tracks Apple's player can be offered: what VLC has now, else what a play recorded.
-    private func nativeAudioTracks(for file: MediaFile?) -> [(name: String, language: String)] {
-        if !engine.audioTracks.isEmpty { return engine.audioTracks.map { ($0.name, $0.language ?? "") } }
-        guard let file else { return [] }
-        return file.audioTrackNames.indices.map { (file.audioTrackNames[$0], $0 < file.audioTrackLanguages.count ? file.audioTrackLanguages[$0] : "") }
     }
     /// The audio track VLC is playing, as an index among the audio tracks, when it has chosen one.
     private var currentAudioIndex: Int? {
         guard let id = engine.currentAudioTrack else { return nil }
         return engine.audioTracks.firstIndex { $0.id == id }
-    }
-    /// A different audio track for the running AirPlay stream: restart the copy on that track at the
-    /// current position.
-    func selectNativeAudio(_ index: Int, at fileTime: TimeInterval, settings: AppSettings) {
-        guard let playback = nativePlayback, let item = current, let url = engine.currentURL ?? lastPlaybackURL else { return }
-        let file = currentFile
-        Task {
-            HLSRemuxer.shared.cancel()
-            await StreamBridge.shared.stop()
-            guard let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: fileTime, audioTrack: index) else { return }
-            var next = playback
-            next.url = target; next.startAt = 0; next.timeOffset = offset; next.audioTrack = index
-            bridgeLive = true
-            nativePlayback = next
-        }
     }
     /// The last stream URL resolved for the current title (the engine forgets it once stopped).
     private var lastPlaybackURL: URL?
@@ -130,36 +106,31 @@ final class PlayerCoordinator: ObservableObject {
         return try await StreamBridge.shared.register(source: s.source, path: s.path, size: s.size)
     }
 
-    /// Swaps the VLC screen for Apple's player. The two are separate full-screen covers; presenting
-    /// one in the same frame the other is dismissed made the new one appear and vanish at once (and
-    /// tear the bridge down with it), so the VLC cover gets a moment to go first.
+    /// Shows Apple's player in the player cover, in place of the VLC screen. One cover for both, so
+    /// moving between them never drops back to the library in between.
     private func presentNative(_ playback: NativePlayback) async {
         isLoading = false
         loadingMessage = nil
-        if isPresented {
-            isPresented = false
-            try? await Task.sleep(for: .milliseconds(700))
-        }
         bridgeLive = true
         nativePlayback = playback
+        isPresented = true
     }
 
     /// Starts an HLS copy of an MKV near `startAt` and serves it through the bridge. Returns the
     /// playlist URL and the time offset the stream's clock starts from, or nil when it failed or the
     /// user backed out (the notice says why). A copy from the start is kept for next time; one
     /// started part-way is not, so the offset is zero whenever a kept copy exists.
-    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem, startAt: TimeInterval, audioTrack: Int? = nil) async -> (URL, TimeInterval)? {
+    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem, startAt: TimeInterval) async -> (URL, TimeInterval)? {
         let key = file?.id.uuidString ?? url.absoluteString
         lastPlaybackURL = url
         isLoading = true
         loadingMessage = "Preparing for AirPlay…"
         do {
-            let track = audioTrack ?? currentAudioIndex
-            let offset: TimeInterval = track == nil && HLSRemuxer.completed(for: key) != nil ? 0 : max(0, startAt - 5)
+            let offset: TimeInterval = HLSRemuxer.completed(for: key) != nil ? 0 : max(0, startAt - 5)
             let subtitles = await nativeSubtitles(for: item, file: file)
-            // The track the player was on, else the remembered or preferred language for this show.
-            let language = track == nil ? playbackOptions(for: item, settings: AppSettings.current).preferredAudioLanguage : nil
-            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, audioTrack: track, audioLanguage: language)
+            // Every audio track travels; the one the player was on (else the preferred language) starts.
+            let language = playbackOptions(for: item, settings: AppSettings.current).preferredAudioLanguage
+            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language)
             loadingMessage = nil
             let base = try await StreamBridge.shared.register(directory: dir)
             return (base.appendingPathComponent(HLSRemuxer.playlistName(in: dir)), offset)
@@ -194,14 +165,11 @@ final class PlayerCoordinator: ObservableObject {
             // from the same position.
             Diagnostics.log("player", "AirPlay route gone; returning to the device at \(Int(nativeTime))s")
             library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: max(playback.knownDuration, nativeTime + 1))
-            endNativePlayback()
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(700))
-                self.play(item, settings: AppSettings.current)
-            }
+            releaseNative()
+            play(item, settings: AppSettings.current)   // the cover stays up; VLC takes the screen back
             return
         }
-        guard Self.airPlayActive, isPresented, let item = current, let url = engine.currentURL else { return }
+        guard Self.airPlayActive, isPresented, nativePlayback == nil, let item = current, let url = engine.currentURL else { return }
         Diagnostics.log("player", "AirPlay route appeared mid-play; moving to the native player")
         switchToNativePlayer(item: item, url: url)
     }
@@ -223,11 +191,10 @@ final class PlayerCoordinator: ObservableObject {
                 }
                 guard current?.itemKey == item.itemKey else { return }
                 let chapters = nativeChapters(for: file)
-                let audio = nativeAudioTracks(for: file), audioIndex = currentAudioIndex
                 let (t, s) = Self.titles(for: item)
                 engine.stop()
                 ScrubPreview.shared.stop()
-                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: startAt, timeOffset: offset, knownDuration: engine.duration, title: t, subtitle: s, chapters: chapters, audioTracks: audio, audioTrack: audioIndex))
+                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: startAt, timeOffset: offset, knownDuration: engine.duration, title: t, subtitle: s, chapters: chapters))
             } catch {
                 isLoading = false
                 show(notice: "Couldn't move to AirPlay: \(error.localizedDescription)")
@@ -236,9 +203,14 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
-    /// Apple's player closed: release the bridge and its share connection.
+    /// Apple's player closed: release the stream and leave the player.
     func endNativePlayback() {
         guard nativePlayback != nil || bridgeLive else { return }
+        releaseNative()
+        dismiss()
+    }
+    /// Stops the copy and the bridge, and takes Apple's player off the screen (the cover stays).
+    private func releaseNative() {
         nativePlayback = nil
         bridgeLive = false
         Self.debugForceAirPlay = false
@@ -277,7 +249,7 @@ final class PlayerCoordinator: ObservableObject {
     /// frame-timing options (a two-second gap, once, rather than judder for the whole episode).
     func watchExternalDisplay(settings: AppSettings) {
         displayWatcher = ExternalDisplay.shared.$isConnected.dropFirst().removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] connected in
-            guard let self, self.isPresented, self.current != nil else { return }
+            guard let self, self.isPresented, self.nativePlayback == nil, self.current != nil else { return }
             Diagnostics.log("player", connected ? "TV connected mid-play; reloading with frame drops allowed" : "TV gone mid-play; reloading for the device")
             self.reapplyOptions(settings: settings)
         }
@@ -376,7 +348,7 @@ final class PlayerCoordinator: ObservableObject {
                     if let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: resume) {
                         let known = file.duration ?? TimeInterval((item.runtimeMinutes ?? 0) * 60)
                         let (t, s) = Self.titles(for: item)
-                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: 0, timeOffset: offset, knownDuration: known, title: t, subtitle: s, chapters: nativeChapters(for: file), audioTracks: nativeAudioTracks(for: file), audioTrack: currentAudioIndex))
+                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: 0, timeOffset: offset, knownDuration: known, title: t, subtitle: s, chapters: nativeChapters(for: file)))
                         return
                     }
                     guard current?.itemKey == item.itemKey else { return }   // backed out while preparing
@@ -548,7 +520,7 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     func dismiss() {
-        if nativePlayback != nil { endNativePlayback(); return }
+        if nativePlayback != nil { releaseNative() }
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
         saveProgress()
         HLSRemuxer.shared.cancel()

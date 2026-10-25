@@ -65,7 +65,7 @@ struct SettingsView: View {
                 Picker("Preferred subtitle language", selection: $settings.subtitleLanguage) { ForEach(AppSettings.languages, id: \.code) { Text($0.name).tag($0.code) } }
                 Toggle("Subtitles on by default", isOn: $settings.subtitlesOnByDefault)
                 Picker("Skip interval", selection: $settings.skipInterval) { ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) s").tag($0) } }
-                Picker(selection: $settings.networkCachingMS) { ForEach([500, 1000, 1500, 3000, 5000], id: \.self) { Text("\($0) ms" + ($0 == 1500 ? " (default)" : "")).tag($0) } } label: {
+                Picker(selection: $settings.networkCachingMS) { ForEach([500, 1000, 1500, 3000, 5000], id: \.self) { Text("\($0) ms" + ($0 == 3000 ? " (default)" : "")).tag($0) } } label: {
                     VStack(alignment: .leading) { Text("Network buffer"); Text("Raise if streaming stutters. Seeks take longer.").font(.caption).foregroundStyle(.secondary) }
                 }
                 Toggle("Auto-play next episode", isOn: $settings.autoPlayNext)

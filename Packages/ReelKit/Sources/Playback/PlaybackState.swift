@@ -35,8 +35,9 @@ public struct PlaybackItem: Hashable, Sendable {
 
 public struct PlaybackOptions: Sendable {
     public var hardwareDecoding = true
-    /// Milliseconds of read-ahead for network streams. PLAN.md §11.2 default.
-    public var networkCachingMS = 1500
+    /// Milliseconds of read-ahead for network streams: three seconds rides out a share's hiccups
+    /// without a visible pause (PLAN.md §11.2 had 1.5 s).
+    public var networkCachingMS = 3000
     public var preferredAudioLanguage: String? = "en"
     public var preferredSubtitleLanguage: String? = "en"
     public var subtitlesOnByDefault = false

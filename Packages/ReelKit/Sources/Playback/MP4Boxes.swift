@@ -202,4 +202,147 @@ enum MP4Boxes {
         walk(parse(moov))
         return out
     }
+
+    // MARK: - Tracks
+
+    /// One track of a moov, in moov order.
+    struct Track { var id: UInt32; var isVideo: Bool; var timescale: UInt32; var language: String; var codec: String; var trexSize: UInt32 }
+
+    /// The tracks described by `data` (a moov, or an init segment that contains one).
+    static func tracks(in data: Data) -> [Track] {
+        var trex: [UInt32: UInt32] = [:]
+        var out: [Track] = []
+        func walk(_ boxes: [Box]) {
+            for b in boxes {
+                switch b {
+                case .container("trak", let children):
+                    var id: UInt32 = 0, scale: UInt32 = 0, lang = "und", codec = "", video = false
+                    for c in children {
+                        if case .leaf("tkhd", let p) = c, p.count >= 24 { id = p[p.startIndex] == 1 ? be32(p, p.startIndex + 20) : be32(p, p.startIndex + 12) }
+                        if case .container("mdia", let m) = c {
+                            for mb in m {
+                                if case .leaf("mdhd", let p) = mb, p.count >= 22 {
+                                    let v1 = p[p.startIndex] == 1
+                                    scale = v1 ? be32(p, p.startIndex + 20) : be32(p, p.startIndex + 12)
+                                    let at = p.startIndex + (v1 ? 32 : 20)
+                                    if at + 2 <= p.endIndex {
+                                        let packed = UInt16(p[at]) << 8 | UInt16(p[at + 1])
+                                        let chars = [(packed >> 10) & 0x1F, (packed >> 5) & 0x1F, packed & 0x1F].map { Character(UnicodeScalar(UInt8($0) + 0x60)) }
+                                        let l = String(chars)
+                                        if l.allSatisfy({ $0.isLetter }) { lang = l }
+                                    }
+                                }
+                                if case .leaf("hdlr", let p) = mb, p.count >= 12 { video = String(decoding: p[(p.startIndex + 8)..<(p.startIndex + 12)], as: UTF8.self) == "vide" }
+                                if case .container("minf", let minf) = mb {
+                                    for s in minf { if case .container("stbl", let stbl) = s { for t in stbl { if case .stsd(_, let entries) = t, let first = entries.first { codec = first.type } } } }
+                                }
+                            }
+                        }
+                    }
+                    if id > 0 { out.append(Track(id: id, isVideo: video, timescale: scale, language: lang, codec: codec, trexSize: 0)) }
+                case .leaf("trex", let p): trex[be32(p, p.startIndex + 4)] = be32(p, p.startIndex + 16)
+                case .container(_, let c): walk(c)
+                default: break
+                }
+            }
+        }
+        walk(parse(data))
+        return out.map { var t = $0; t.trexSize = trex[t.id] ?? 0; return t }
+    }
+
+    /// The moov with only track `id` (and its trex), for a one-track init segment.
+    static func initSegment(_ moov: Data, keeping id: UInt32) -> Data {
+        func filter(_ boxes: [Box]) -> [Box] {
+            boxes.compactMap { b in
+                switch b {
+                case .container("trak", let c):
+                    let tid = c.compactMap { if case .leaf("tkhd", let p) = $0 { return p[p.startIndex] == 1 ? be32(p, p.startIndex + 20) : be32(p, p.startIndex + 12) } else { return nil } }.first
+                    return tid == id ? b : nil
+                case .leaf("trex", let p): return be32(p, p.startIndex + 4) == id ? b : nil
+                case .container(let t, let c): return .container(type: t, children: filter(c))
+                default: return b
+                }
+            }
+        }
+        return build(filter(parse(moov)))
+    }
+
+    /// One run of a fragment, split out of VLC's multi-track moof.
+    struct Run { var trackID: UInt32; var moof: Data; var dataStart: Int; var bytes: Int; var samples: Int }
+
+    /// Splits a moof into one single-track moof per traf, each with default-base-is-moof and a data
+    /// offset that points just past itself, plus where that run's bytes sit in the shared mdat (the
+    /// runs are laid out in traf order).
+    static func splitMoof(_ moof: Data, trexSizes: [UInt32: UInt32]) -> [Run] {
+        guard case .container("moof", let children)? = parse(moof).first else { return [] }
+        var mfhd: Box?
+        var out: [Run] = []
+        var dataStart = 0
+        for c in children {
+            if case .leaf("mfhd", _) = c { mfhd = c; continue }
+            guard case .container("traf", let parts) = c else { continue }
+            var tfhd = Data(), trun = Data(), others: [Box] = []
+            for p in parts {
+                switch p {
+                case .leaf("tfhd", let d): tfhd = d
+                case .leaf("trun", let d): trun = d
+                default: others.append(p)
+                }
+            }
+            guard !tfhd.isEmpty, !trun.isEmpty else { continue }
+            var flags = be32(tfhd, tfhd.startIndex) & 0xFFFFFF
+            let trackID = be32(tfhd, tfhd.startIndex + 4)
+            var fields = Data(tfhd[(tfhd.startIndex + 8)...])
+            if flags & 0x1 != 0 { fields.removeFirst(8); flags &= ~0x1 }
+            flags |= 0x020000
+            var sizeOff = 0
+            if flags & 0x2 != 0 { sizeOff += 4 }
+            if flags & 0x8 != 0 { sizeOff += 4 }
+            var defaultSize = trexSizes[trackID] ?? 0
+            if flags & 0x10 != 0 { defaultSize = be32(fields, fields.startIndex + sizeOff) }
+            let newTfhd = put32(flags) + put32(trackID) + fields
+            let tflags = be32(trun, trun.startIndex) & 0xFFFFFF
+            let count = Int(be32(trun, trun.startIndex + 4))
+            var p = trun.startIndex + 8
+            if tflags & 0x1 != 0 { p += 4 }
+            if tflags & 0x4 != 0 { p += 4 }
+            let per = (tflags & 0x100 != 0 ? 4 : 0) + (tflags & 0x200 != 0 ? 4 : 0) + (tflags & 0x400 != 0 ? 4 : 0) + (tflags & 0x800 != 0 ? 4 : 0)
+            var bytes = 0
+            if tflags & 0x200 != 0 {
+                let sizeAt = tflags & 0x100 != 0 ? 4 : 0
+                for i in 0..<count { bytes += Int(be32(trun, p + i * per + sizeAt)) }
+            } else {
+                bytes = count * Int(defaultSize)
+            }
+            let rest = tflags & 0x1 != 0 ? Data(trun[(trun.startIndex + 12)...]) : Data(trun[(trun.startIndex + 8)...])
+            func assemble(_ offset: Int) -> Data {
+                var body = Data()
+                if let mfhd { body.append(build([mfhd])) }
+                var traf = box("tfhd", newTfhd)
+                traf.append(build(others))
+                traf.append(box("trun", put32(tflags | 0x1) + put32(UInt32(count)) + put32(UInt32(truncatingIfNeeded: offset)) + rest))
+                body.append(box("traf", traf))
+                return box("moof", body)
+            }
+            let probe = assemble(0)
+            out.append(Run(trackID: trackID, moof: assemble(probe.count + 8), dataStart: dataStart, bytes: bytes, samples: count))
+            dataStart += bytes
+        }
+        return out
+    }
+
+    /// Calls `body` with each top-level box's type and payload in `data`.
+    static func forEachBox(in data: Data, _ body: (String, Data) -> Void) {
+        var off = data.startIndex
+        while off + 8 <= data.endIndex {
+            var size = Int(be32(data, off))
+            let type = String(decoding: data[(off + 4)..<(off + 8)], as: UTF8.self)
+            var header = 8
+            if size == 1, off + 16 <= data.endIndex { size = Int(be64(data, off + 8)); header = 16 }
+            if size == 0 { size = data.endIndex - off }
+            guard size >= header, off + size <= data.endIndex else { return }
+            body(type, data[(off + header)..<(off + size)])
+            off += size
+        }
+    }
 }

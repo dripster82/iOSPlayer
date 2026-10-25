@@ -20,28 +20,18 @@ struct NativePlayerView: View {
         ZStack(alignment: .top) {
             NativePlayerController(player: avPlayer)
                 .ignoresSafeArea()
-            // Apple's controller has no close button, title or chapter list of its own when embedded.
-            HStack(alignment: .top, spacing: 12) {
+            // Apple's controller puts its own buttons in the corners (Picture in Picture, AirPlay, the
+            // audio and subtitle menu) and has no close button or chapter list when embedded, so what
+            // Reel adds sits in the top centre, clear of them.
+            HStack(spacing: 10) {
                 Button { close() } label: {
-                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 38, height: 38).background(Color.white.opacity(0.15), in: Circle())
+                    Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
                 }
                 .accessibilityLabel("Close")
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(playback.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                    if !playback.subtitle.isEmpty { Text(playback.subtitle).font(.caption).foregroundStyle(.white.opacity(0.75)).lineLimit(1) }
-                    Label("AirPlay", systemImage: "airplayvideo").font(.caption2).foregroundStyle(.white.opacity(0.6))
-                }
-                Spacer()
-                if playback.audioTracks.count > 1 {
-                    Menu {
-                        ForEach(Array(playback.audioTracks.enumerated()), id: \.offset) { i, track in
-                            Button { changeAudio(to: i) } label: { Label(track.name, systemImage: i == (playback.audioTrack ?? 0) ? "checkmark" : "waveform") }
-                        }
-                    } label: {
-                        Text("Audio").font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Color.white.opacity(0.15), in: Capsule())
-                    }
+                VStack(spacing: 1) {
+                    Text(playback.title).font(.footnote.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                    if !playback.subtitle.isEmpty { Text(playback.subtitle).font(.caption2).foregroundStyle(.white.opacity(0.75)).lineLimit(1) }
                 }
                 if !playback.chapters.isEmpty {
                     Menu {
@@ -49,19 +39,25 @@ struct NativePlayerView: View {
                             Button { seek(to: c.start) } label: { Label(c.title, systemImage: isCurrent(c) ? "checkmark" : "bookmark") }
                         }
                     } label: {
-                        Text("Chapters").font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Color.white.opacity(0.15), in: Capsule())
+                        Label("Chapters", systemImage: "list.bullet").labelStyle(.iconOnly).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
                     }
+                    .accessibilityLabel("Chapters")
                 }
             }
-            .padding(.horizontal, 20).padding(.top, 14)
-            .shadow(radius: 4)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Color.black.opacity(0.45), in: Capsule())
+            .frame(maxWidth: 420)
+            .padding(.top, 10)
         }
         .background(Color.black.ignoresSafeArea())
         .onAppear {
             // SwiftUI can build this view more than once for one presentation; the player is made once.
             guard avPlayer == nil else { return }
-            let p = AVPlayer(url: playback.url)
+            let item = AVPlayerItem(url: playback.url)
+            // The title and episode show in the controls and on the TV's now-playing display.
+            item.externalMetadata = [metadata(.commonIdentifierTitle, playback.title), metadata(.iTunesMetadataTrackSubTitle, playback.subtitle)].compactMap { $0 }
+            let p = AVPlayer(playerItem: item)
             p.allowsExternalPlayback = true
             p.usesExternalPlaybackWhileExternalScreenIsActive = true
             if playback.startAt > 0 { p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600)) }
@@ -95,13 +91,13 @@ struct NativePlayerView: View {
         .onDisappear { saveProgress() }
     }
 
-    /// Another audio track means another copy from VLC: a few seconds' gap, then on from here.
-    private func changeAudio(to index: Int) {
-        guard index != (playback.audioTrack ?? 0) else { return }
-        let now = (avPlayer?.currentTime().seconds ?? 0) + playback.timeOffset
-        saveProgress()
-        avPlayer?.pause()
-        player.selectNativeAudio(index, at: now, settings: settings)
+    private func metadata(_ id: AVMetadataIdentifier, _ value: String) -> AVMetadataItem? {
+        guard !value.isEmpty else { return nil }
+        let m = AVMutableMetadataItem()
+        m.identifier = id
+        m.value = value as NSString
+        m.extendedLanguageTag = "und"
+        return m
     }
 
     /// Chapter starts are in the file's own time; the stream's clock may begin part-way in.

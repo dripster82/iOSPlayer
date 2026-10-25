@@ -91,7 +91,7 @@ final class AppSettings: ObservableObject {
         animeMatching = d.object(forKey: "animeMatching") as? Bool ?? true
         metadataLanguage = d.string(forKey: "metadataLanguage") ?? "en-GB"
         hardwareDecoding = d.object(forKey: "hardwareDecoding") as? Bool ?? true
-        networkCachingMS = d.object(forKey: "networkCachingMS") as? Int ?? 1500
+        networkCachingMS = d.object(forKey: "networkCachingMS") as? Int ?? 3000
         skipInterval = d.object(forKey: "skipInterval") as? Int ?? 10
         audioLanguage = d.string(forKey: "audioLanguage") ?? "en"
         subtitleLanguage = d.string(forKey: "subtitleLanguage") ?? "en"
