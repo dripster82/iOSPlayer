@@ -283,6 +283,33 @@ enum MP4Boxes {
     static let airPlayVideo: Set<String> = ["avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe"]
     static let airPlayAudio: Set<String> = ["mp4a", "ac-3", "ec-3", "alac", "fLaC"]
 
+    /// For the log: the video sample entry's children (avcC/hvcC and their size, profile and level),
+    /// which is what a receiver needs to set up its decoder.
+    static func describeConfig(_ moov: Data) -> String {
+        var out: [String] = []
+        func walk(_ boxes: [Box]) {
+            for b in boxes {
+                switch b {
+                case .stsd(_, let entries):
+                    for e in entries {
+                        guard case .leaf(let type, let payload) = e, payload.count > 78 else { continue }
+                        for child in parse(payload[(payload.startIndex + 78)...]) {
+                            guard case .leaf(let ct, let cp) = child else { continue }
+                            if ct == "avcC", cp.count >= 4 { out.append("\(type) avcC \(cp.count)B profile \(cp[cp.startIndex + 1]) level \(cp[cp.startIndex + 3])") }
+                            else if ct == "hvcC" { out.append("\(type) hvcC \(cp.count)B") }
+                            else if type.hasPrefix("avc") || type.hasPrefix("hvc") || type.hasPrefix("hev") { out.append("\(type) \(ct) \(cp.count)B") }
+                        }
+                        if type.hasPrefix("avc") || type.hasPrefix("hvc") || type.hasPrefix("hev"), parse(payload[(payload.startIndex + 78)...]).isEmpty { out.append("\(type) has no configuration box") }
+                    }
+                case .container(_, let c): walk(c)
+                default: break
+                }
+            }
+        }
+        walk(parse(moov))
+        return out.isEmpty ? "no video configuration found" : out.joined(separator: "; ")
+    }
+
     /// A plain-language name for a codec AirPlay refuses.
     static func describe(codec: String) -> String {
         switch codec {

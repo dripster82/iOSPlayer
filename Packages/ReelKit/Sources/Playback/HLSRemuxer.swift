@@ -16,7 +16,7 @@ import MediaCore
 public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     public static let shared = HLSRemuxer()
 
-    public static var directory: URL {
+    nonisolated public static var directory: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("airplay", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -245,7 +245,14 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
                 try? await Task.sleep(for: .seconds(1))
                 // A retry (copy → conversion) may have taken the same folder meanwhile: leave it alone then.
                 let reused = await MainActor.run { HLSRemuxer.shared.currentDirectory == dir }
-                if !reused { try? FileManager.default.removeItem(at: dir) }
+                guard !reused else { return }
+                #if DEBUG
+                // Debug builds keep the last discarded stream for inspection (Caches/airplay/last-discarded).
+                let keep = HLSRemuxer.directory.appendingPathComponent("last-discarded", isDirectory: true)
+                try? FileManager.default.removeItem(at: keep)
+                if (try? FileManager.default.moveItem(at: dir, to: keep)) != nil { return }
+                #endif
+                try? FileManager.default.removeItem(at: dir)
             }
         }
     }
@@ -334,6 +341,7 @@ final class Segmenter: @unchecked Sendable {
     /// player give up on the whole rendition.
     private var segments: [UInt32: [(index: Int, seconds: Double)]] = [:]
     private var videoID: UInt32 = 0
+    private let startedAt = Date()
     private var readySent = false
 
     init(directory: URL, pipe: URL, subtitles: [HLSRemuxer.SubtitleFile], subtitleOffset: TimeInterval, preferredAudio: Int?, preferredLanguage: String?, onEvent: @escaping (Event) -> Void) {
@@ -394,7 +402,7 @@ final class Segmenter: @unchecked Sendable {
                         let moov = MP4Boxes.fixInit(headerBytes + body)
                         tracks = MP4Boxes.tracks(in: moov)
                         trexSizes = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0.trexSize) })
-                        Diagnostics.log("airplay", "tracks: " + tracks.map { "\($0.isVideo ? "video" : "audio") \($0.codec) \($0.language)" }.joined(separator: ", "))
+                        Diagnostics.log("airplay", "tracks: " + tracks.map { "\($0.isVideo ? "video" : "audio") \($0.codec) \($0.language)\($0.isVideo ? " \($0.width)x\($0.height)" : "")" }.joined(separator: ", ") + "; " + MP4Boxes.describeConfig(moov))
                         guard let video = tracks.first(where: \.isVideo) else { throw RemuxFailure("no video track") }
                         // Apple's player takes only H.264 and HEVC video, and AAC, AC-3, E-AC-3, ALAC or FLAC audio,
                         // in a segment; anything else would sit there waiting. Hand back what to convert instead.
@@ -459,6 +467,9 @@ final class Segmenter: @unchecked Sendable {
                     index += 1
                     writePlaylists(ended: false)
                     if !readySent, (segments[videoID]?.count ?? 0) >= 2 { readySent = true; onEvent(.ready) }
+                    if index % 20 == 0, let v = segments[videoID] {
+                        Diagnostics.log("airplay", "segments: \(v.count) video (\(Int(v.reduce(0) { $0 + $1.seconds }))s) after \(Int(Date().timeIntervalSince(startedAt)))s")
+                    }
                 default:
                     var left = payload
                     while left > 0 {
