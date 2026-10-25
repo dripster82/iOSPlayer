@@ -206,7 +206,7 @@ enum MP4Boxes {
     // MARK: - Tracks
 
     /// One track of a moov, in moov order.
-    struct Track { var id: UInt32; var isVideo: Bool; var timescale: UInt32; var language: String; var codec: String; var trexSize: UInt32 }
+    struct Track { var id: UInt32; var isVideo: Bool; var timescale: UInt32; var language: String; var codec: String; var trexSize: UInt32; var width = 0; var height = 0 }
 
     /// The tracks described by `data` (a moov, or an init segment that contains one).
     static func tracks(in data: Data) -> [Track] {
@@ -216,9 +216,15 @@ enum MP4Boxes {
             for b in boxes {
                 switch b {
                 case .container("trak", let children):
-                    var id: UInt32 = 0, scale: UInt32 = 0, lang = "und", codec = "", video = false
+                    var id: UInt32 = 0, scale: UInt32 = 0, lang = "und", codec = "", video = false, width = 0, height = 0
                     for c in children {
-                        if case .leaf("tkhd", let p) = c, p.count >= 24 { id = p[p.startIndex] == 1 ? be32(p, p.startIndex + 20) : be32(p, p.startIndex + 12) }
+                        if case .leaf("tkhd", let p) = c, p.count >= 24 {
+                            let v1 = p[p.startIndex] == 1
+                            id = v1 ? be32(p, p.startIndex + 20) : be32(p, p.startIndex + 12)
+                            // width and height are 16.16 fixed point at the end of the box
+                            let at = p.startIndex + (v1 ? 88 : 76)
+                            if at + 8 <= p.endIndex { width = Int(be32(p, at) >> 16); height = Int(be32(p, at + 4) >> 16) }
+                        }
                         if case .container("mdia", let m) = c {
                             for mb in m {
                                 if case .leaf("mdhd", let p) = mb, p.count >= 22 {
@@ -239,7 +245,7 @@ enum MP4Boxes {
                             }
                         }
                     }
-                    if id > 0 { out.append(Track(id: id, isVideo: video, timescale: scale, language: lang, codec: codec, trexSize: 0)) }
+                    if id > 0 { out.append(Track(id: id, isVideo: video, timescale: scale, language: lang, codec: codec, trexSize: 0, width: width, height: height)) }
                 case .leaf("trex", let p): trex[be32(p, p.startIndex + 4)] = be32(p, p.startIndex + 16)
                 case .container(_, let c): walk(c)
                 default: break

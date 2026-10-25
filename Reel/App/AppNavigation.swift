@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaCore
+import Playback
 import Library
 import MediaSources
 
@@ -84,6 +85,7 @@ enum DeepLinks {
             // Plays through the AirPlay path (remux + bridge + Apple's player) with no receiver connected.
             guard let item = find() else { return false }
             PlayerCoordinator.debugForceAirPlay = true
+            HLSRemuxer.debugSkipProbe = q["noprobe"] == "1"
             let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
             if let target { player.play(target, fromStart: q["fromStart"] == "1", settings: settings) }
             return true

@@ -24,12 +24,15 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     public enum RemuxError: LocalizedError {
         case alreadyRunning, failed(String), notFragmented, timeout
+        /// The copy met codecs Apple's player refuses; the plan says what to convert.
+        case needsConversion(HLSRemuxer.Plan)
         public var errorDescription: String? {
             switch self {
             case .alreadyRunning: "Another AirPlay stream is still being prepared."
             case .failed(let m): m.hasPrefix("AirPlay can carry") ? m : "Couldn't prepare this file for AirPlay: \(m)"
             case .notFragmented: "Couldn't prepare this file for AirPlay: the copy was not streamable."
             case .timeout: "Couldn't prepare this file for AirPlay: nothing arrived from the file in time."
+            case .needsConversion: "This file needs converting for AirPlay."
             }
         }
     }
@@ -37,7 +40,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     private var player: VLCMediaPlayer?
     private var segmenter: Segmenter?
     private var readyContinuation: CheckedContinuation<Void, Error>?
-    private var currentDirectory: URL?
+    fileprivate(set) var currentDirectory: URL?
     /// What the segmenter reported before anyone was waiting for it (it can fail within a frame).
     private var outcome: Result<Void, Error>?
 
@@ -75,6 +78,24 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
             return done
         }
         guard player == nil else { throw RemuxError.alreadyRunning }
+        // What is in the file decides between a plain copy and a conversion: Apple's player takes only
+        // H.264/HEVC video and AAC-family audio, and the iPad's hardware encoder makes H.264 faster
+        // than real time, so XviD, VP9, AV1, MPEG-2 and the rest are converted as they stream. The
+        // probe can come up empty (a slow share, a container VLC's preparser skips); then the copy
+        // is tried, and if the segmenter meets codecs the player would refuse, the stream restarts
+        // as a conversion with what the segmenter saw.
+        let plan = await Self.plan(for: source)
+        do {
+            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: plan, status: status)
+        } catch RemuxError.needsConversion(let found) where plan.chain.isEmpty {
+            Diagnostics.log("airplay", "copy refused; converting instead")
+            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: found, status: status)
+        } catch RemuxError.needsConversion(let found) {
+            throw RemuxError.failed("the conversion still produced \(found.video.map { MP4Boxes.describe(codec: $0) } ?? found.audio.map { MP4Boxes.describe(codec: $0) }.joined(separator: ", ")), which AirPlay cannot carry")
+        }
+    }
+
+    private func attempt(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile], preferredAudio: Int?, preferredLanguage: String?, plan: Plan, status: @escaping @Sendable (String) -> Void) async throws -> URL {
         let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 ? "-partial" : ""), isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -84,10 +105,6 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         outcome = nil
 
         guard let media = VLCMedia(url: source) else { throw RemuxError.failed("VLC couldn't open the file") }
-        // What is in the file decides between a plain copy and a conversion: Apple's player takes only
-        // H.264/HEVC video and AAC-family audio, and the iPad's hardware encoder makes H.264 faster
-        // than real time, so XviD, VP9, AV1, MPEG-2 and the rest are converted as they stream.
-        let plan = await Self.plan(for: source)
         if let note = plan.description { status(note); Diagnostics.log("airplay", note) }
         // mp4frag is VLC 4's fragmented, streamable MP4 muxer: index first, then moof/mdat fragments.
         media.addOption(":sout=#\(plan.chain)std{access=file,mux=mp4frag,dst=\(pipe.path)}")
@@ -132,10 +149,11 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     /// What the stream output must do to a file: copy its tracks, or convert the ones Apple's
     /// player would refuse.
-    struct Plan {
+    public struct Plan: Sendable {
         var video: String?      // the source video codec when it needs converting
         var audio: [String] = []   // the source audio codecs when they need converting
         var width = 0, height = 0
+        init(video: String? = nil, audio: [String] = [], width: Int = 0, height: Int = 0) { self.video = video; self.audio = audio; self.width = width; self.height = height }
         var chain: String {
             var parts: [String] = []
             if video != nil {
@@ -156,16 +174,24 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     /// Reads the file's track codecs (a parse, no playback) and decides what to convert. A file that
     /// cannot be read in time is copied as is; the segmenter still checks what arrives.
+    /// Debug builds: skip the probe to exercise the copy-then-convert fallback.
+    public static var debugSkipProbe = false
+
     @MainActor
     static func plan(for source: URL) async -> Plan {
         var plan = Plan()
+        if debugSkipProbe { Diagnostics.log("airplay", "probe skipped (debug)"); return plan }
         guard let media = VLCMedia(url: source) else { return plan }
         media.addOption(":network-caching=1500")
         let watcher = ParseWatcher()
         media.delegate = watcher
-        guard media.parse(options: [.parseNetwork], timeout: 15000) == 0 else { return plan }
+        let started = Date()
+        let rc = media.parse(options: [.parseNetwork], timeout: 15000)
+        guard rc == 0 else { Diagnostics.log("airplay", "probe: parse refused (\(rc))"); return plan }
         await watcher.wait(seconds: 16)
         media.delegate = nil
+        let codecs = (media.videoTracks + media.audioTracks).map { Self.fourcc($0.codec) }
+        Diagnostics.log("airplay", "probe: status \(media.parsedStatus.rawValue) after \(String(format: "%.1f", Date().timeIntervalSince(started)))s, tracks \(codecs)")
         guard media.parsedStatus == .done else { return plan }
         if let v = media.videoTracks.first {
             let fourcc = Self.fourcc(v.codec)
@@ -215,7 +241,12 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
             seg?.cancel()
             old?.stop()
             _ = old
-            if let dir { try? await Task.sleep(for: .seconds(1)); try? FileManager.default.removeItem(at: dir) }
+            if let dir {
+                try? await Task.sleep(for: .seconds(1))
+                // A retry (copy → conversion) may have taken the same folder meanwhile: leave it alone then.
+                let reused = await MainActor.run { HLSRemuxer.shared.currentDirectory == dir }
+                if !reused { try? FileManager.default.removeItem(at: dir) }
+            }
         }
     }
 
@@ -234,6 +265,11 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
             Diagnostics.log("airplay", "stream failed: \(message)")
             outcome = .failure(RemuxError.failed(message))
             if let c = readyContinuation { readyContinuation = nil; c.resume(throwing: RemuxError.failed(message)) }
+            stop(discard: true)
+        case .unsupported(let plan):
+            Diagnostics.log("airplay", "copy has codecs AirPlay refuses: video \(plan.video ?? "ok"), audio \(plan.audio)")
+            outcome = .failure(RemuxError.needsConversion(plan))
+            if let c = readyContinuation { readyContinuation = nil; c.resume(throwing: RemuxError.needsConversion(plan)) }
             stop(discard: true)
         }
     }
@@ -274,7 +310,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 /// which lists the video with every audio track as an alternate rendition (Apple's player then
 /// offers them in its own audio menu and switches without a restart) and the subtitle files.
 final class Segmenter: @unchecked Sendable {
-    enum Event { case ready, finished(segments: Int, seconds: Double), failed(String) }
+    enum Event { case ready, finished(segments: Int, seconds: Double), failed(String), unsupported(HLSRemuxer.Plan) }
 
     private let directory: URL
     private let pipe: URL
@@ -361,15 +397,19 @@ final class Segmenter: @unchecked Sendable {
                         Diagnostics.log("airplay", "tracks: " + tracks.map { "\($0.isVideo ? "video" : "audio") \($0.codec) \($0.language)" }.joined(separator: ", "))
                         guard let video = tracks.first(where: \.isVideo) else { throw RemuxFailure("no video track") }
                         // Apple's player takes only H.264 and HEVC video, and AAC, AC-3, E-AC-3, ALAC or FLAC audio,
-                        // in a segment; anything else would sit there waiting. Say so instead.
-                        guard MP4Boxes.airPlayVideo.contains(video.codec) else {
-                            throw RemuxFailure("AirPlay can carry only H.264 and HEVC video, and this file is \(MP4Boxes.describe(codec: video.codec)). Turn on Screen Mirroring in Control Centre and Reel will put the picture on the TV.")
-                        }
+                        // in a segment; anything else would sit there waiting. Hand back what to convert instead.
                         let unsupportedAudio = tracks.filter { !$0.isVideo && !MP4Boxes.airPlayAudio.contains($0.codec) }
-                        tracks.removeAll { !$0.isVideo && !MP4Boxes.airPlayAudio.contains($0.codec) }
-                        guard tracks.contains(where: { !$0.isVideo }) || unsupportedAudio.isEmpty else {
-                            throw RemuxFailure("AirPlay can carry only AAC, AC-3, E-AC-3, ALAC or FLAC audio, and this file's sound is \(unsupportedAudio.map { MP4Boxes.describe(codec: $0.codec) }.joined(separator: ", ")). Turn on Screen Mirroring in Control Centre and Reel will put the picture and sound on the TV.")
+                        if !MP4Boxes.airPlayVideo.contains(video.codec) || (!unsupportedAudio.isEmpty && unsupportedAudio.count == tracks.count - 1) {
+                            var plan = HLSRemuxer.Plan(width: video.width, height: video.height)
+                            if !MP4Boxes.airPlayVideo.contains(video.codec) { plan.video = video.codec }
+                            if !unsupportedAudio.isEmpty { plan.audio = unsupportedAudio.map(\.codec) }
+                            onEvent(.unsupported(plan))
+                            cancelled = true
+                            var sink = [UInt8](repeating: 0, count: 1 << 16)
+                            while read(fd, &sink, sink.count) > 0 {}
+                            return
                         }
+                        tracks.removeAll { !$0.isVideo && !MP4Boxes.airPlayAudio.contains($0.codec) }
                         if !unsupportedAudio.isEmpty { Diagnostics.log("airplay", "leaving out audio AirPlay cannot carry: \(unsupportedAudio.map(\.codec).joined(separator: ", "))") }
                         videoID = video.id
                         for t in tracks {
