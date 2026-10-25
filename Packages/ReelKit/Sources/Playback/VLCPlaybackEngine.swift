@@ -211,8 +211,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // decoder that fell behind drop every frame as late, forever, while audio played on: the
         // frozen-picture-with-sound report. Late frames are shown rather than dropped, so a slow
         // stretch catches up visibly instead of freezing.
-        media.addOption(":no-drop-late-frames")
-        media.addOption(":no-skip-frames")
+        if options.allowFrameDrops {
+            media.addOption(":drop-late-frames")
+            media.addOption(":skip-frames")
+        } else {
+            media.addOption(":no-drop-late-frames")
+            media.addOption(":no-skip-frames")
+        }
         if options.hardwareDecoding {
             media.addOption(":codec=avcodec")
             media.addOption(":avcodec-hw=videotoolbox")

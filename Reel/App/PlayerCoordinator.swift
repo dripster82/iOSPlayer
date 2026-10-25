@@ -122,6 +122,16 @@ final class PlayerCoordinator: ObservableObject {
             .sink { [weak self] _ in self?.routeChanged() }
     }
     private var routeWatcher: AnyCancellable?
+    private var displayWatcher: AnyCancellable?
+    /// The TV appeared or went away mid-play: reload at the same position with the matching
+    /// frame-timing options (a two-second gap, once, rather than judder for the whole episode).
+    func watchExternalDisplay(settings: AppSettings) {
+        displayWatcher = ExternalDisplay.shared.$isConnected.dropFirst().removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] connected in
+            guard let self, self.isPresented, self.current != nil else { return }
+            Diagnostics.log("player", connected ? "TV connected mid-play; reloading with frame drops allowed" : "TV gone mid-play; reloading for the device")
+            self.reapplyOptions(settings: settings)
+        }
+    }
 
     /// A forward jump inside the first ten minutes, 20 s to 4 min long, is probably the viewer skipping
     /// the titles; remember it for the show and see whether two such jumps agree.
@@ -260,6 +270,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
         opts.dialogueBoost = settings.dialogueBoost
+        opts.allowFrameDrops = ExternalDisplay.shared.isConnected
         Self.applySubtitleStyle(&opts, settings)
         if let choice = TrackMemory.choice(for: Self.memoryKey(item)) {
             if let audio = choice.audioLanguage { opts.preferredAudioLanguage = audio }
@@ -343,6 +354,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
         opts.subtitlesOnByDefault = settings.subtitlesOnByDefault
         opts.dialogueBoost = settings.dialogueBoost
+        opts.allowFrameDrops = ExternalDisplay.shared.isConnected
         Self.applySubtitleStyle(&opts, settings)
         preferredFill = nil; pendingRate = nil; learnedIntro = nil
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)

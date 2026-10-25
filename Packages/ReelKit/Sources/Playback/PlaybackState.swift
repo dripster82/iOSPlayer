@@ -48,6 +48,10 @@ public struct PlaybackOptions: Sendable {
     public var subtitleMargin = 0
     /// Dynamic range compression that lifts quiet dialogue ("night mode").
     public var dialogueBoost = false
+    /// Let VLC drop frames that are late rather than show them late. Off on the device, where a late
+    /// frame shown is better than a skipped one; on when the picture goes to a mirrored TV, where
+    /// the AirPlay encoder adds its own delay and held-back frames turn into judder.
+    public var allowFrameDrops = false
     public init() {}
 }
 

@@ -119,6 +119,7 @@ struct ReelApp: App {
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task {
                     _ = ExternalDisplay.shared   // start watching for a mirrored TV
+                    player.watchExternalDisplay(settings: settings)
                     library.purgePendingDeletions()
                     // Launch work that nobody is waiting for runs after Home has drawn its first rows.
                     try? await Task.sleep(for: .seconds(2))
