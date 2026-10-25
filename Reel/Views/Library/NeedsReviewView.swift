@@ -28,6 +28,7 @@ struct NeedsReviewView: View {
     var body: some View {
         let files = library.filesNeedingReview()
         let low = library.lowConfidenceItems()
+        let _ = refresh
         List {
             if files.isEmpty && low.isEmpty {
                 ContentUnavailableView("All clear", systemImage: "checkmark.seal", description: Text("Titles matched on a weak signal, and files with no match at all, wait here. Nothing is changed on your drive."))
@@ -37,20 +38,25 @@ struct NeedsReviewView: View {
                     ForEach(low) { item in
                         let sample = item.files.first ?? item.episodes.first?.files.first
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .top, spacing: 10) {
-                                ArtworkImage(url: ArtworkURL.poster(item.posterPath), title: item.title, cornerRadius: 6).frame(width: 44, height: 66)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.title + (item.year.map { " (\($0))" } ?? "")).font(.footnote.weight(.semibold))
-                                    if let sample { Text(sample.fileName).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                                    Text(item.kind == .show ? "\(item.episodes.count) episodes matched on a weak signal" : "Matched on a weak signal").font(.caption2).foregroundStyle(.yellow)
+                            // The title opens the page as it was matched, to judge it by its artwork and overview.
+                            NavigationLink(value: item.itemKey) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    ArtworkImage(url: ArtworkURL.poster(item.posterPath), title: item.title, cornerRadius: 6).frame(width: 44, height: 66)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.title + (item.year.map { " (\($0))" } ?? "")).font(.footnote.weight(.semibold)).foregroundStyle(.primary)
+                                        if let sample { Text(sample.fileName).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                        Text(item.kind == .show ? "\(item.episodes.count) episodes matched on a weak signal" : "Matched on a weak signal").font(.caption2).foregroundStyle(.yellow)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                                 }
-                            }
+                            }.buttonStyle(.plain)
                             if let sample { CandidateRow(file: sample) { id, kind in refit(item, tmdbID: id, kind: kind) } }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
-                                    Button("Keep") { try? library.confirmMatch(item) }.buttonStyle(.borderedProminent)
+                                    Button("Keep") { try? library.confirmMatch(item); refresh += 1 }.buttonStyle(.borderedProminent)
                                     Button("Fix match") { fixingItem = item }.buttonStyle(.bordered)
-                                    Button("Hide", role: .destructive) { try? library.hide(item) }.buttonStyle(.bordered)
+                                    Button("Hide", role: .destructive) { try? library.hide(item); refresh += 1 }.buttonStyle(.bordered)
                                 }.controlSize(.small)
                             }
                         }
@@ -73,7 +79,7 @@ struct NeedsReviewView: View {
                                     Button("Fix match") { fixing = f }.buttonStyle(.bordered)
                                     Button("Treat as TV") { resolve(f, kind: .episode) }.buttonStyle(.bordered)
                                     Button("Treat as Film") { resolve(f, kind: .film) }.buttonStyle(.bordered)
-                                    Button("Ignore", role: .destructive) { try? library.ignoreFile(f) }.buttonStyle(.bordered)
+                                    Button("Ignore", role: .destructive) { try? library.ignoreFile(f); refresh += 1 }.buttonStyle(.bordered)
                                 }.controlSize(.small)
                             }
                         }
@@ -109,6 +115,8 @@ struct NeedsReviewView: View {
 
     @State private var fixingItem: MediaItem?
     @State private var busyItem: String?
+    /// Bumped after a change the store does not publish, so the lists are read again.
+    @State private var refresh = 0
 
     private func refit(_ item: MediaItem, tmdbID: Int, kind: MediaKind) {
         guard let tmdb = settings.tmdb else { library.lastError = "Add a TMDb API key in Settings first."; return }
@@ -173,7 +181,7 @@ struct NeedsReviewView: View {
                                             Text(c.title).font(.caption2).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(.primary)
                                             if let y = c.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
                                         }.frame(width: 84)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(.borderless)
                                 }
                             }
                         }
