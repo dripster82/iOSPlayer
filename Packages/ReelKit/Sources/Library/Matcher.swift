@@ -40,12 +40,15 @@ struct Matcher {
         let override = try? fetchOverride(fileKey)
         if override?.hidden == true { file.ignored = true; return .skipped(nil) }
 
-        let isReview = file.classificationRaw == "review"
-        let guessed: MediaKind? = isReview ? file.guessKindRaw.flatMap(MediaKind.init(rawValue:)) : (file.classificationRaw == "episode" ? .episode : .film)
-        guard let kind = override?.forcedKind ?? guessed, !parsed.title.isEmpty || override?.forcedTMDbID != nil else { return markReview(file) }
         // The viewer said what this is (Accept, Treat as Film/TV): a title TMDb cannot find still
         // becomes a library item, named from the file, rather than falling back into review.
         let decided = override?.forcedKind != nil
+        // Strict (a sure hit only) when the classifier was unsure and the viewer has not weighed in.
+        // A file the viewer accepted is matched as leniently as one the classifier was sure about.
+        let isReview = file.classificationRaw == "review" && !decided
+        let guessed: MediaKind? = file.classificationRaw == "review" ? file.guessKindRaw.flatMap(MediaKind.init(rawValue:)) : (file.classificationRaw == "episode" ? .episode : .film)
+        guard let kind = override?.forcedKind ?? guessed, !parsed.title.isEmpty || override?.forcedTMDbID != nil else { return markReview(file) }
+        let folderTitle = FilenameParser.parse(relativePath: file.relativePath).folderTitle
         file.guessKindRaw = kind.rawValue   // so a later scan retries this file with the same guess
         do {
             switch kind {
@@ -65,9 +68,7 @@ struct Matcher {
                     showID = anime.tmdbShow; season = anime.season; episode = anime.episode
                 }
                 else {
-                    let results = try await searchShowsShortening(parsed)
-                    let d = MatchScorer.decideShow(results, parsed: parsed)
-                    if let pick = d.pick, !isReview || d.confidence == .autoHigh { showID = pick.id; confidence = d.confidence }
+                    if let found = try await findShow(parsed, folderTitle: folderTitle, strict: isReview) { showID = found.0; confidence = found.1 }
                     else if let viaTVDB = try await resolveShowViaTVDB(parsed) { showID = viaTVDB; confidence = .autoLow }
                     else if decided {
                         let show = try upsertLocalShow(parsed, confidence: .manual)
@@ -93,17 +94,15 @@ struct Matcher {
                 else if let forced = override?.forcedTMDbID { movieID = forced; confidence = .manual }
                 else if let animeFilm = await resolveAnimeFilm(parsed) { movieID = animeFilm }
                 else {
-                    let results = try await searchMoviesShortening(parsed)
-                    let d = MatchScorer.decideMovie(results, parsed: parsed)
-                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else {
+                    guard let found = try await findMovie(parsed, folderTitle: folderTitle, strict: isReview) else {
                         guard decided else { return markReview(file) }
                         file.item = try upsertLocalFilm(parsed, confidence: .manual)
                         file.classificationRaw = "film"
                         file.pendingSync = true; file.updatedAt = Date()
                         return .matched
                     }
-                    movieID = pick.id
-                    confidence = d.confidence
+                    movieID = found.0
+                    confidence = found.1
                 }
                 let film = try await upsertFilm(id: movieID, confidence: confidence)
                 let placeholder = file.item
@@ -119,19 +118,47 @@ struct Matcher {
         }
     }
 
-    /// "Sword Art Online Alicization War of Underworld" is a season, not a show, so TMDb returns nothing.
-    /// Drop trailing words until something comes back, as Kodi and Plex do; the scorer still has to agree.
-    private func searchShowsShortening(_ parsed: ParsedName) async throws -> [TMDbShowSummary] {
-        var words = parsed.title.split(separator: " ").map(String.init)
-        var query = parsed.title
-        while true {
-            var results = try await tmdb.searchShows(query: query, year: parsed.year)
-            // A year taken from a folder may be a season's year, not the show's: retry unfiltered.
-            if results.isEmpty, parsed.year != nil { results = try await tmdb.searchShows(query: query, year: nil) }
-            if !results.isEmpty || words.count <= 2 { return results }
-            words.removeLast()
-            query = words.joined(separator: " ")
+    // MARK: - Searching until the scorer agrees
+
+    /// The titles to try: the file's, then the folder's when it says something different (a special
+    /// filed under its own name, "Family Guy {400mn}.mkv" in "Something, Something, Something, Dark Side").
+    private func titlesToTry(_ parsed: ParsedName, folderTitle: String?) -> [String] {
+        var out = [parsed.title]
+        if let f = folderTitle, !f.isEmpty, MatchScorer.normalise(f) != MatchScorer.normalise(parsed.title) { out.append(f) }
+        return out
+    }
+
+    /// Each query form in turn (as given, trailing words dropped, leading words dropped; with the
+    /// year, then without) until TMDb returns something the scorer will stand behind. Stopping at the
+    /// first non-empty answer was not enough: a shortened query often returns the wrong film first.
+    private func findMovie(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence)? {
+        for title in titlesToTry(parsed, folderTitle: folderTitle) {
+            let wanted = ParsedName(title: title, year: parsed.year)
+            for query in TMDbClient.queries(for: title) {
+                for year in Set([parsed.year, nil]).sorted(by: { ($0 ?? 0) > ($1 ?? 0) }) {
+                    let results = try await tmdb.searchMovies(query: query, year: year)
+                    guard !results.isEmpty else { continue }
+                    let d = MatchScorer.decideMovie(results, parsed: wanted, yearFiltered: year != nil)
+                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence) }
+                }
+            }
         }
+        return nil
+    }
+
+    private func findShow(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence)? {
+        for title in titlesToTry(parsed, folderTitle: folderTitle) {
+            let wanted = ParsedName(title: title, year: parsed.year)
+            for query in TMDbClient.queries(for: title) {
+                for year in Set([parsed.year, nil]).sorted(by: { ($0 ?? 0) > ($1 ?? 0) }) {
+                    let results = try await tmdb.searchShows(query: query, year: year)
+                    guard !results.isEmpty else { continue }
+                    let d = MatchScorer.decideShow(results, parsed: wanted, yearFiltered: year != nil)
+                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence) }
+                }
+            }
+        }
+        return nil
     }
 
     // MARK: - Anime (AniDB titles + Anime-Lists → TMDb)
@@ -191,19 +218,6 @@ struct Matcher {
             if let found = try? await tmdb.findShow(tvdbID: series.id) { return found.id }
         }
         return nil
-    }
-
-    /// "South Park The Movie (1999)" finds nothing; "South Park" with the year finds Bigger, Longer & Uncut.
-    private func searchMoviesShortening(_ parsed: ParsedName) async throws -> [TMDbMovieSummary] {
-        var words = parsed.title.split(separator: " ").map(String.init)
-        var query = parsed.title
-        while true {
-            var results = try await tmdb.searchMovies(query: query, year: parsed.year)
-            if results.isEmpty, parsed.year != nil { results = try await tmdb.searchMovies(query: query, year: nil) }
-            if !results.isEmpty || words.count <= 2 { return results }
-            words.removeLast()
-            query = words.joined(separator: " ")
-        }
     }
 
     /// Needs Review, and meanwhile a placeholder in Films or TV Shows named from the file, so the

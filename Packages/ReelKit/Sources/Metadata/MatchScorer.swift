@@ -10,15 +10,18 @@ public enum MatchScorer {
         public var alternatives: [T]
     }
 
-    public static func decideMovie(_ results: [TMDbMovieSummary], parsed: ParsedName) -> Decision<TMDbMovieSummary> {
-        decide(results, parsed: parsed, title: \.title, altTitle: \.originalTitle, year: \.year, popularity: \.popularity)
+    /// `yearFiltered`: the results came from a search TMDb already narrowed to the file's year (it
+    /// matches any release, regional ones included), so a lone answer is from that year even when
+    /// its primary date says otherwise (A Grand Day Out: UK 1989, US 1990, re-release 1994).
+    public static func decideMovie(_ results: [TMDbMovieSummary], parsed: ParsedName, yearFiltered: Bool = false) -> Decision<TMDbMovieSummary> {
+        decide(results, parsed: parsed, yearFiltered: yearFiltered, title: \.title, altTitle: \.originalTitle, year: \.year, popularity: \.popularity)
     }
 
-    public static func decideShow(_ results: [TMDbShowSummary], parsed: ParsedName) -> Decision<TMDbShowSummary> {
-        decide(results, parsed: parsed, title: \.name, altTitle: \.originalName, year: \.year, popularity: \.popularity)
+    public static func decideShow(_ results: [TMDbShowSummary], parsed: ParsedName, yearFiltered: Bool = false) -> Decision<TMDbShowSummary> {
+        decide(results, parsed: parsed, yearFiltered: yearFiltered, title: \.name, altTitle: \.originalName, year: \.year, popularity: \.popularity)
     }
 
-    private static func decide<T: Sendable>(_ results: [T], parsed: ParsedName, title: KeyPath<T, String>, altTitle: KeyPath<T, String?>, year: KeyPath<T, Int?>, popularity: KeyPath<T, Double?>) -> Decision<T> {
+    private static func decide<T: Sendable>(_ results: [T], parsed: ParsedName, yearFiltered: Bool = false, title: KeyPath<T, String>, altTitle: KeyPath<T, String?>, year: KeyPath<T, Int?>, popularity: KeyPath<T, Double?>) -> Decision<T> {
         guard !results.isEmpty else { return Decision(pick: nil, confidence: .unmatched, alternatives: []) }
         let wanted = normalise(parsed.title)
 
@@ -29,7 +32,13 @@ public enum MatchScorer {
             else if t.hasPrefix(wanted) || wanted.hasPrefix(t) { score += 5 }
             else if similarity(t, wanted) > 0.8 { score += 4 }
             if let py = parsed.year, let ry = r[keyPath: year] {
-                if py == ry { score += 6 } else if abs(py - ry) == 1 { score += 3 } else { score -= 4 }
+                // Premieres, festival runs and regional releases put a title's year a little either
+                // side of its primary date; only a gap of several years counts against it.
+                let gap = abs(py - ry)
+                if gap == 0 { score += 6 } else if gap == 1 { score += 3 } else if gap > 3 && !yearFiltered { score -= 4 }
+                // TMDb's one and only answer for the year: its own fuzzy search has already done the
+                // hard part ("South Park Post Covid Covid Returns" → "...: The Return of COVID").
+                if results.count == 1, yearFiltered || gap <= 1 { score += 3 }
             }
             score += min(3, (r[keyPath: popularity] ?? 0) / 50) // tie-breaker only
             return (r, score)

@@ -199,13 +199,9 @@ struct NeedsReviewView: View {
             kind = seed.season != nil ? .show : .film
             do {
                 if kind == .show {
-                    var r = try await tmdb.searchShows(query: seed.title, year: seed.year)
-                    if r.isEmpty, seed.year != nil { r = try await tmdb.searchShows(query: seed.title, year: nil) }
-                    candidates = r.prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath) }
+                    candidates = try await tmdb.searchShowsForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath) }
                 } else {
-                    var r = try await tmdb.searchMovies(query: seed.title, year: seed.year)
-                    if r.isEmpty, seed.year != nil { r = try await tmdb.searchMovies(query: seed.title, year: nil) }
-                    candidates = r.prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath) }
+                    candidates = try await tmdb.searchMoviesForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath) }
                 }
             } catch { candidates = [] }
         }
@@ -352,8 +348,8 @@ struct FixMatchView: View {
         Task {
             do {
                 if animeMode { try await searchAnime(tmdb: tmdb) }
-                else if kind == .film { films = try await tmdb.searchMovies(query: query, year: y) }
-                else { shows = try await tmdb.searchShows(query: query, year: y) }
+                else if kind == .film { films = try await tmdb.searchMoviesForgiving(ParsedName(title: query, year: y)) }
+                else { shows = try await tmdb.searchShowsForgiving(ParsedName(title: query, year: y)) }
             } catch { self.error = error.localizedDescription }
             searching = false
         }

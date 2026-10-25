@@ -170,9 +170,10 @@ public actor LibraryScanner {
             // Review files are tried too when the classifier had a guess; the matcher only accepts a sure hit for them.
             func inScope(_ path: String) -> Bool { scope.map { $0.isEmpty || path.hasPrefix($0 + "/") } ?? true }
             // Reviewed files without an item are tried again too: the viewer has said what they are.
-            // A review file's placeholder item does not count as matched: TMDb is asked again each scan.
+            // A placeholder does not count as matched: TMDb is asked again each scan (answers are cached),
+            // so a title it learns later, or a search that has since got more forgiving, takes over.
             for file in record.files where inScope(file.relativePath) && !file.ignored
-                && (file.item == nil || (file.item?.itemKey.hasPrefix("local-") == true && !file.reviewed))
+                && (file.item == nil || file.item?.itemKey.hasPrefix("local-") == true)
                 && (file.reviewed || file.classificationRaw != "review" || file.guessKindRaw != nil) {
                 try Task.checkCancellation()
                 let outcome = await matcher.match(file)
