@@ -120,6 +120,10 @@ struct FixMatchView: View {
     @State private var kind: MediaKind = .film
     @State private var films: [TMDbMovieSummary] = []
     @State private var shows: [TMDbShowSummary] = []
+    /// Anime mode: AniDB entries, each with where Anime-Lists puts it on TMDb (nil when unmapped).
+    struct AnimeHit: Identifiable { var id: Int; var title: String; var target: String?; var tmdbShow: Int?; var tmdbMovie: Int? }
+    @State private var anime: [AnimeHit] = []
+    @State private var animeMode = false
     @State private var searching = false
     @State private var error: String?
     /// For a show or an episode: every file of the series, ticked ones take the new match. From an
@@ -174,17 +178,33 @@ struct FixMatchView: View {
                         TextField("Title", text: $query).textInputAutocapitalization(.words).onSubmit(search)
                         TextField("Year", text: $year).keyboardType(.numberPad).frame(width: 64)
                     }
-                    Picker("Type", selection: $kind) { Text("Film").tag(MediaKind.film); Text("TV Show").tag(MediaKind.show) }.pickerStyle(.segmented)
-                    Button(searching ? "Searching…" : "Search TMDb", action: search).disabled(searching || query.isEmpty)
+                    Picker("Type", selection: Binding(get: { animeMode ? 2 : (kind == .film ? 0 : 1) }, set: { v in animeMode = v == 2; if v == 0 { kind = .film } else if v == 1 { kind = .show } })) {
+                        Text("Film").tag(0); Text("TV Show").tag(1); Text("Anime").tag(2)
+                    }.pickerStyle(.segmented)
+                    Button(searching ? "Searching…" : (animeMode ? "Search AniDB" : "Search TMDb"), action: search).disabled(searching || query.isEmpty)
+                    if animeMode {
+                        Text(settings.animeMatching ? "Anime titles are matched by AniDB's own entries, so a season released under its own name (Alicization – War of Underworld) is found; Anime-Lists then places its episodes on the right TMDb season."
+                             : "Turn on Anime matching in Settings → Metadata to search AniDB.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
                 Section {
-                    if kind == .film {
+                    if animeMode {
+                        ForEach(anime) { a in
+                            Button { chooseAnime(a) } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(a.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                    Text(a.target ?? "Not mapped to TMDb by Anime-Lists").font(.caption).foregroundStyle(a.target == nil ? .red : .secondary)
+                                }
+                            }.disabled(a.target == nil)
+                        }
+                        if !searching, anime.isEmpty, !query.isEmpty, searchedAnime { Text("No AniDB title contains “\(query)”. Try fewer words.").foregroundStyle(.secondary) }
+                    } else if kind == .film {
                         ForEach(films) { m in ResultRow(title: m.title, year: m.year, overview: m.overview, poster: m.posterPath) { choose(m.id) } }
                     } else {
                         ForEach(shows) { s in ResultRow(title: s.name, year: s.year, overview: s.overview, poster: s.posterPath) { choose(s.id) } }
                     }
-                } footer: { Text("Results from TMDb. Your choice is saved in the app and synced to your other devices. The file is not renamed.") }
+                } footer: { Text(animeMode ? "AniDB titles, placed on TMDb by Anime-Lists. Episode numbers in the file names are mapped through that entry, so “- 03” of a later cour lands on the right TMDb episode." : "Results from TMDb. Your choice is saved in the app and synced to your other devices. The file is not renamed.") }
             }
             .navigationTitle("Fix Match")
             .navigationBarTitleDisplayMode(.inline)
@@ -205,16 +225,69 @@ struct FixMatchView: View {
         }
     }
 
+    @State private var searchedAnime = false
+
     private func search() {
         guard let tmdb = settings.tmdb else { error = "Add a TMDb API key in Settings first."; return }
         searching = true; error = nil
         let y = Int(year)
         Task {
             do {
-                if kind == .film { films = try await tmdb.searchMovies(query: query, year: y) }
+                if animeMode { try await searchAnime(tmdb: tmdb) }
+                else if kind == .film { films = try await tmdb.searchMovies(query: query, year: y) }
                 else { shows = try await tmdb.searchShows(query: query, year: y) }
             } catch { self.error = error.localizedDescription }
             searching = false
+        }
+    }
+
+    /// AniDB's title index, then each hit's TMDb home from Anime-Lists, named via TMDb so the row can
+    /// say "Sword Art Online · season 4 from episode 13" rather than an id.
+    private func searchAnime(tmdb: TMDbClient) async throws {
+        let providers = settings.providers
+        guard let anidb = providers.anidb, let lists = providers.animeLists else { error = "Turn on Anime matching in Settings → Metadata first."; return }
+        let hits = await anidb.search(query, limit: 20)
+        searchedAnime = true
+        guard await anidb.isAvailable else { error = "The AniDB title index has not downloaded yet (it needs a network connection once). Try again in a minute."; return }
+        var out: [AnimeHit] = []
+        var names: [Int: String] = [:]
+        for h in hits {
+            var hit = AnimeHit(id: h.aid, title: h.title, target: nil)
+            if let entry = await lists.entry(forAniDB: h.aid) {
+                if let tv = entry.tmdbTV {
+                    if names[tv] == nil { names[tv] = (try? await tmdb.show(id: tv))?.name ?? "TMDb show \(tv)" }
+                    let first = entry.resolve(anidbSeason: 1, episode: 1)
+                    hit.tmdbShow = tv
+                    hit.target = names[tv]! + (first.map { " · season \($0.season)" + ($0.episode > 1 ? " from episode \($0.episode)" : "") } ?? "")
+                } else if let film = entry.tmdbMovie {
+                    if names[film] == nil { names[film] = (try? await tmdb.movie(id: film))?.title ?? "TMDb film \(film)" }
+                    hit.tmdbMovie = film
+                    hit.target = names[film]! + " · film"
+                }
+            }
+            out.append(hit)
+        }
+        anime = out
+    }
+
+    private func chooseAnime(_ a: AnimeHit) {
+        guard let tmdb = settings.tmdb, !applying else { return }
+        let providers = settings.providers
+        let targetKind: MediaKind = a.tmdbMovie != nil && a.tmdbShow == nil ? .film : .show
+        guard let tmdbID = targetKind == .film ? a.tmdbMovie : a.tmdbShow else { return }
+        applying = true
+        Task {
+            defer { applying = false }
+            do {
+                if let item, series != nil {
+                    let chosen = seriesFiles.filter { selected.contains($0.id) }
+                    guard !chosen.isEmpty else { error = "Tick at least one file."; return }
+                    try await library.fixMatch(item, files: chosen, tmdbID: tmdbID, kind: targetKind, anidbID: a.id, tmdb: tmdb, providers: providers)
+                } else if let item { try await library.fixMatch(item, tmdbID: tmdbID, kind: targetKind, anidbID: a.id, tmdb: tmdb, providers: providers) }
+                else if let file { try await library.resolveReview(file, as: targetKind == .show ? .episode : .film, tmdbID: tmdbID, anidbID: a.id, tmdb: tmdb, providers: providers) }
+                else if !files.isEmpty { try await library.resolveReview(files, as: targetKind == .show ? .episode : .film, tmdbID: tmdbID, anidbID: a.id, tmdb: tmdb, providers: providers) }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
         }
     }
 
@@ -227,8 +300,8 @@ struct FixMatchView: View {
                 if let item, series != nil {
                     let chosen = seriesFiles.filter { selected.contains($0.id) }
                     guard !chosen.isEmpty else { error = "Tick at least one file."; return }
-                    try await library.fixMatch(item, files: chosen, tmdbID: id, kind: kind, tmdb: tmdb)
-                } else if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb) }
+                    try await library.fixMatch(item, files: chosen, tmdbID: id, kind: kind, tmdb: tmdb, providers: settings.providers)
+                } else if let item { try await library.fixMatch(item, tmdbID: id, kind: kind, tmdb: tmdb, providers: settings.providers) }
                 else if let file { try await library.resolveReview(file, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
                 else if !files.isEmpty { try await library.resolveReview(files, as: kind == .show ? .episode : .film, tmdbID: id, tmdb: tmdb) }
                 dismiss()

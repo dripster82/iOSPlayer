@@ -434,7 +434,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case "override":
             guard let o = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first else { return nil }
             let r = baseRecord("ItemOverride", id)
-            r["fileKey"] = o.fileKey; r["forcedTMDbID"] = o.forcedTMDbID; r["forcedKind"] = o.forcedKindRaw; r["hidden"] = o.hidden ? 1 : 0; r["updatedAt"] = o.updatedAt
+            r["fileKey"] = o.fileKey; r["forcedTMDbID"] = o.forcedTMDbID; r["forcedKind"] = o.forcedKindRaw; r["forcedAniDBID"] = o.forcedAniDBID; r["hidden"] = o.hidden ? 1 : 0; r["updatedAt"] = o.updatedAt
             return r
         case "collection":
             guard let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first else { return nil }
@@ -519,6 +519,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             guard remoteUpdated > o.updatedAt else { return }
             o.forcedTMDbID = r["forcedTMDbID"] as? Int
             o.forcedKindRaw = r["forcedKind"] as? String
+            o.forcedAniDBID = r["forcedAniDBID"] as? Int
             o.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             o.updatedAt = remoteUpdated; o.pendingSync = false
         case "Collection":

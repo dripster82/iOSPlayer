@@ -287,6 +287,9 @@ public final class ItemOverride {
     @Attribute(.unique) public var fileKey: String
     public var forcedTMDbID: Int?
     public var forcedKindRaw: String?
+    /// Fix Match → Anime: the AniDB entry the viewer chose. The matcher maps its episodes to TMDb
+    /// through Anime-Lists (season and episode offsets), with `forcedTMDbID` as the plain fallback.
+    public var forcedAniDBID: Int? = nil
     public var hidden: Bool
     public var updatedAt: Date
     public var pendingSync: Bool

@@ -274,28 +274,30 @@ public final class LibraryStore: ObservableObject {
 
     // MARK: - Review and fix match
 
-    public func resolveReview(_ file: MediaFile, as kind: MediaKind?, tmdbID: Int?, tmdb: TMDbClient) async throws {
+    public func resolveReview(_ file: MediaFile, as kind: MediaKind?, tmdbID: Int?, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws {
         let o = override(for: file)
         o.forcedKindRaw = kind?.rawValue
         o.forcedTMDbID = tmdbID
+        o.forcedAniDBID = anidbID
         o.updatedAt = Date(); o.pendingSync = true
         file.reviewed = true
         file.classificationRaw = kind == .episode ? "episode" : "film"
         file.pendingSync = true; file.updatedAt = Date()
         try context.save()
-        let matcher = Matcher(context: context, tmdb: tmdb)
+        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
         _ = await matcher.match(file)
         try context.save()
         notifySync()
     }
 
     /// Same decision for a whole folder of review items: one TMDb lookup per file, one save, one sync.
-    public func resolveReview(_ files: [MediaFile], as kind: MediaKind?, tmdbID: Int?, tmdb: TMDbClient) async throws {
-        let matcher = Matcher(context: context, tmdb: tmdb)
+    public func resolveReview(_ files: [MediaFile], as kind: MediaKind?, tmdbID: Int?, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws {
+        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
         for file in files {
             let o = override(for: file)
             o.forcedKindRaw = kind?.rawValue
             o.forcedTMDbID = tmdbID
+            o.forcedAniDBID = anidbID
             o.updatedAt = Date(); o.pendingSync = true
             file.reviewed = true
             file.classificationRaw = kind == .episode ? "episode" : "film"
@@ -332,25 +334,26 @@ public final class LibraryStore: ObservableObject {
 
     /// Returns the key of the item the files now belong to. For a show, every episode's file moves.
     @discardableResult
-    public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws -> String? {
-        try await fixMatch(item, files: item.kind == .show ? item.episodes.flatMap(\.files) : item.files, tmdbID: tmdbID, kind: kind, tmdb: tmdb)
+    public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws -> String? {
+        try await fixMatch(item, files: item.kind == .show ? item.episodes.flatMap(\.files) : item.files, tmdbID: tmdbID, kind: kind, anidbID: anidbID, tmdb: tmdb, providers: providers)
     }
 
     /// Re-points just `files` (some of a show's episodes, or one episode's file) at `tmdbID`. `item` is
     /// the page the sheet was opened from; it is retired only if it ends up with nothing.
     @discardableResult
-    public func fixMatch(_ item: MediaItem, files: [MediaFile], tmdbID: Int, kind: MediaKind, tmdb: TMDbClient) async throws -> String? {
+    public func fixMatch(_ item: MediaItem, files: [MediaFile], tmdbID: Int, kind: MediaKind, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws -> String? {
         var previous: [MediaItem] = []
         for f in files {
             if let p = f.item, !previous.contains(where: { $0 === p }) { previous.append(p) }
             let o = override(for: f)
             o.forcedTMDbID = tmdbID
             o.forcedKindRaw = kind.rawValue
+            o.forcedAniDBID = anidbID
             o.updatedAt = Date(); o.pendingSync = true
             f.item = nil
         }
         try context.save()
-        let matcher = Matcher(context: context, tmdb: tmdb)
+        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
         for f in files { _ = await matcher.match(f) }
         // Only now, with the new title in place, retire the old one. The page under the sheet redraws
         // on every save; flagging the orphan before its replacement existed left it with nothing to show.

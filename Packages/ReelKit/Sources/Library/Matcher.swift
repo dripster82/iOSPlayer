@@ -51,7 +51,12 @@ struct Matcher {
                 let showID: Int
                 var season = s, episode = e
                 var confidence: MatchConfidence = .autoHigh
-                if let forced = override?.forcedTMDbID { showID = forced; confidence = .manual }
+                if let aid = override?.forcedAniDBID, let animeLists, let entry = await animeLists.entry(forAniDB: aid),
+                   let target = entry.resolve(anidbSeason: s == 0 ? 0 : 1, episode: e) {
+                    // The viewer named the AniDB entry; Anime-Lists says which TMDb season and episode that is.
+                    showID = target.tmdbShow; season = target.season; episode = target.episode; confidence = .manual
+                }
+                else if let forced = override?.forcedTMDbID { showID = forced; confidence = .manual }
                 else if let anime = await resolveAnime(parsed) {
                     // AniDB knows the title exactly and Anime-Lists says where it sits on TMDb.
                     showID = anime.tmdbShow; season = anime.season; episode = anime.episode
@@ -72,7 +77,8 @@ struct Matcher {
             case .film:
                 let movieID: Int
                 var confidence: MatchConfidence = .autoHigh
-                if let forced = override?.forcedTMDbID { movieID = forced; confidence = .manual }
+                if let aid = override?.forcedAniDBID, let animeLists, let film = await animeLists.entry(forAniDB: aid)?.tmdbMovie { movieID = film; confidence = .manual }
+                else if let forced = override?.forcedTMDbID { movieID = forced; confidence = .manual }
                 else if let animeFilm = await resolveAnimeFilm(parsed) { movieID = animeFilm }
                 else {
                     let results = try await searchMoviesShortening(parsed)

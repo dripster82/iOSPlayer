@@ -48,6 +48,41 @@ public actor AniDBTitles {
         return aids.map { Hit(aid: $0, title: index.mainTitles[$0] ?? title) }
     }
 
+    /// Titles containing every word of `query` (after normalisation), for a picker. Entries whose
+    /// main title starts with the query come first, then shorter titles; one row per AniDB id.
+    public func search(_ query: String, limit: Int = 30) async -> [Hit] {
+        await ensureLoaded()
+        guard let index else { return [] }
+        let q = MatchScorer.normalise(query)
+        guard !q.isEmpty else { return [] }
+        let all = q.split(separator: " ").map(String.init)
+        // "SAO Alicization War of Underworld": the fan abbreviation is in no full title, so when every
+        // word matches nothing, drop words from the front, then from the back, until something does.
+        var attempts: [[String]] = [all]
+        if all.count > 1 {
+            for n in 1..<all.count { attempts.append(Array(all.dropFirst(n))) }
+            for n in 1..<all.count { attempts.append(Array(all.dropLast(n))) }
+        }
+        for words in attempts {
+            let hits = search(words: words, exact: words.joined(separator: " "), in: index, limit: limit)
+            if !hits.isEmpty { return hits }
+        }
+        return []
+    }
+
+    private func search(words: [String], exact: String, in index: Index, limit: Int) -> [Hit] {
+        var best: [Int: (score: Int, title: String)] = [:]
+        for (key, aids) in index.titles {
+            guard words.allSatisfy({ key.contains($0) }) else { continue }
+            let score = (key == exact ? 0 : key.hasPrefix(exact) ? 1 : 2) * 1000 + key.count
+            for aid in aids {
+                let title = index.mainTitles[aid] ?? key
+                if best[aid].map({ score < $0.score }) ?? true { best[aid] = (score, title) }
+            }
+        }
+        return best.sorted { ($0.value.score, $0.value.title) < ($1.value.score, $1.value.title) }.prefix(limit).map { Hit(aid: $0.key, title: $0.value.title) }
+    }
+
     public var isAvailable: Bool { get async { await ensureLoaded(); return index != nil } }
 
     // MARK: - Loading

@@ -104,6 +104,24 @@ final class AniDBTitlesTests: XCTestCase {
         XCTAssertTrue(miss.isEmpty)
     }
 
+    func testSearchFindsPartialTitlesOnePerEntry() async {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let index = AniDBTitles.parse(xml: Data(fixture.utf8))
+        try? JSONEncoder().encode(index).write(to: dir.appendingPathComponent("anidb-titles.json"))
+        let titles = AniDBTitles(directory: dir, transport: MockTransport())
+        // "sao alicization war of underworld" as typed into Fix Match: words, not the exact AniDB title.
+        let hits = await titles.search("war of underworld")
+        XCTAssertEqual(hits.map(\.aid), [15146], "one row per entry even though two titles match")
+        XCTAssertEqual(hits.first?.title, "Sword Art Online: Alicization - War of Underworld (2020)")
+        let code = await titles.search("code black")
+        XCTAssertEqual(code.map(\.aid), [15775])
+        let abbreviated = await titles.search("Sao Alicization War Of Underworld")
+        XCTAssertEqual(abbreviated.map(\.aid), [15146], "a fan abbreviation that is in no title is dropped")
+        let none = await titles.search("nothing like this")
+        XCTAssertTrue(none.isEmpty)
+    }
+
     func testGunzipStripsHeaderAndInflates() throws {
         // `printf 'hello anidb' | gzip -n | base64`
         let gz = Data(base64Encoded: "H4sIAAAAAAAAA8tIzcnJV0jMy0xJAgBud59rCwAAAA==")!
