@@ -17,7 +17,17 @@ import MediaCore
 public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDelegate {
     public static let shared = ScrubPreview()
 
-    private let player = VLCMediaPlayer()
+    /// A new player per open: stop in libvlc 4 is asynchronous, and reusing the player right after
+    /// a stop (new media, play) raced the old input and left the bubble black.
+    private var player = VLCMediaPlayer()
+    /// The one view VLC ever paints into. The bubble re-parents it; handing VLC a new drawable for
+    /// each bubble left its output bound to the old, gone view, which is the other black bubble.
+    public let canvas: UIView = {
+        let v = UIView()
+        v.backgroundColor = .black
+        v.isUserInteractionEnabled = false
+        return v
+    }()
     private var url: URL?
     private var target: TimeInterval?
     private var seeking: Task<Void, Never>?
@@ -36,19 +46,15 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private override init() {
         super.init()
         player.delegate = self
-    }
-
-    /// The view the preview paints into. Set by the bubble when it appears, cleared when it goes.
-    public var drawable: UIView? {
-        get { player.drawable as? UIView }
-        set { player.drawable = newValue }
+        player.drawable = canvas
     }
 
     /// A drag began at `time` on `url`. Opens (or resumes) the preview player there.
     public func begin(url: URL, at time: TimeInterval, hardwareDecoding: Bool) {
         idle?.cancel(); idle = nil
         self.hardwareDecoding = hardwareDecoding
-        if self.url == url, player.state == .paused || player.state == .playing {
+        // Resume whatever is still open on this file (paused after the last drag, or mid-settle).
+        if self.url == url, player.media != nil, player.state != .stopped, player.state != .error {
             scrub(to: time)
             return
         }
@@ -59,7 +65,18 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         self.url = url
         hasPicture = false
         target = nil
-        if player.state != .stopped { player.stop() }
+        settling?.cancel(); settling = nil
+        if player.media != nil {
+            let old = player
+            old.delegate = nil
+            old.drawable = nil
+            if old.state != .stopped { old.stop() }
+            // Released off the main thread: dealloc joins the input thread, which can block on a share.
+            Task.detached(priority: .background) { [old] in try? await Task.sleep(for: .seconds(2)); _ = old }
+            player = VLCMediaPlayer()
+            player.delegate = self
+            player.drawable = canvas
+        }
         guard let media = VLCMedia(url: url) else { return }
         // Position zero of this open is the wanted time: libvlc 4 drops seeks issued before playback.
         media.addOption(":start-time=\(Int(time))")

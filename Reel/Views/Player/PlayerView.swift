@@ -492,18 +492,23 @@ struct Scrubber: View {
     }
 }
 
-/// The view the scrub preview player paints into. Exists only while the bubble is up.
+/// Hosts the scrub preview's one canvas while the bubble is up. The canvas belongs to the preview
+/// player for its whole life; this view only parents it.
 struct LivePreviewView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
-        let v = UIView()
-        v.backgroundColor = .black
-        v.isUserInteractionEnabled = false
-        ScrubPreview.shared.drawable = v
-        return v
+        let host = UIView()
+        host.backgroundColor = .black
+        host.isUserInteractionEnabled = false
+        let canvas = ScrubPreview.shared.canvas
+        canvas.removeFromSuperview()
+        canvas.frame = host.bounds
+        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.addSubview(canvas)
+        return host
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
-    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
-        Task { @MainActor in if ScrubPreview.shared.drawable === uiView { ScrubPreview.shared.drawable = nil } }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        let canvas = ScrubPreview.shared.canvas
+        if canvas.superview !== uiView { canvas.removeFromSuperview(); canvas.frame = uiView.bounds; uiView.addSubview(canvas) }
     }
 }
 
