@@ -9,6 +9,10 @@ import MediaCore
 /// thumbnail strip stays underneath until the first live picture lands, and between seeks the last
 /// live picture stays up, so the bubble is never empty. The player is kept paused for a while after
 /// a scrub so the next drag starts at once, then stopped to release the connection.
+///
+/// The preview is a still, not a playing picture: each seek lets the player run only until the
+/// first frame at the new position has been shown, then pauses it there. (A seek on a paused
+/// libvlc 4 player does not repaint, so it has to run for that one tick.)
 @MainActor
 public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDelegate {
     public static let shared = ScrubPreview()
@@ -23,6 +27,11 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// The time the last shown frame came from, so the view can fade when it is far from the finger.
     @Published public private(set) var shownTime: TimeInterval = 0
     private var hardwareDecoding = true
+    /// Runs after each seek: waits for the player to reach the target, then pauses it and makes sure
+    /// the pause stuck. VLC reports the old position for a few ticks after a seek, so pausing on the
+    /// first tick stopped the player before the seek landed, or not at all.
+    private var settling: Task<Void, Never>?
+    private var settleTarget: TimeInterval?
 
     private override init() {
         super.init()
@@ -40,7 +49,6 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         idle?.cancel(); idle = nil
         self.hardwareDecoding = hardwareDecoding
         if self.url == url, player.state == .paused || player.state == .playing {
-            player.play()
             scrub(to: time)
             return
         }
@@ -61,6 +69,7 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         media.addOption(hardwareDecoding ? ":avcodec-hw=videotoolbox" : ":avcodec-hw=none")
         player.media = media
         player.play()
+        settle(at: time)   // show the first frame, then hold it
         Diagnostics.log("player", "scrub preview opened at \(Int(time))s")
     }
 
@@ -77,15 +86,41 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     private func applyTarget() {
-        guard let t = target, player.isPlaying, player.isSeekable else { return }
+        guard let t = target, player.isSeekable, player.state == .playing || player.state == .paused else { return }
         target = nil
+        // Seek, run until the frame at the new position is shown, then hold it.
         player.time = VLCTime(int: Int32(t * 1000))
+        if !player.isPlaying { player.play() }
+        settle(at: t)
+    }
+
+    private func settle(at target: TimeInterval) {
+        settling?.cancel()
+        settleTarget = target
+        settling = Task { @MainActor [weak self] in
+            let started = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let self, !Task.isCancelled else { return }
+                let now = TimeInterval(self.player.time.intValue) / 1000
+                let landed = abs(now - target) < 2.5
+                // Pause once the seek has landed, or after a second regardless (a keyframe far away).
+                if landed || Date().timeIntervalSince(started) > 1.2 {
+                    if self.player.isPlaying { self.player.pause() }
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    if self.player.isPlaying { self.player.pause() }   // pause issued mid-seek can be lost
+                    self.settling = nil
+                    return
+                }
+            }
+        }
     }
 
     /// The drag ended: the picture stays, the player pauses, and after a while stops.
     public func end() {
         target = nil
-        if player.isPlaying { player.pause() }
+        if player.isPlaying, settling == nil { player.pause() }
         idle?.cancel()
         idle = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(30))
@@ -98,6 +133,7 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     public func stop() {
         idle?.cancel(); idle = nil
         seeking?.cancel(); seeking = nil
+        settling?.cancel(); settling = nil
         target = nil
         if player.state != .stopped { player.stop() }
         url = nil
