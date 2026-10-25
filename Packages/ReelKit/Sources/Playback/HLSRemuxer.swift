@@ -67,7 +67,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// Every audio track is copied and offered as an HLS audio rendition, so Apple's player has its
     /// own audio menu; `preferredAudio` (an index among the audio tracks, VLC's order) or
     /// `preferredLanguage` picks the one marked DEFAULT.
-    public func start(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile] = [], preferredAudio: Int? = nil, preferredLanguage: String? = nil) async throws -> URL {
+    /// `status` is told what the copy is doing when it is more than a copy ("Converting XviD video…").
+    public func start(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile] = [], preferredAudio: Int? = nil, preferredLanguage: String? = nil, status: @escaping @Sendable (String) -> Void = { _ in }) async throws -> URL {
         if startAt <= 0, let done = Self.completed(for: key) {
             let subs = Segmenter.writeSubtitleFiles(subtitles, in: done, offset: 0, duration: Self.duration(of: done))
             Segmenter.writeMaster(in: done, tracks: Segmenter.tracksFromInits(in: done), subtitleLines: subs, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage)
@@ -83,8 +84,13 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         outcome = nil
 
         guard let media = VLCMedia(url: source) else { throw RemuxError.failed("VLC couldn't open the file") }
+        // What is in the file decides between a plain copy and a conversion: Apple's player takes only
+        // H.264/HEVC video and AAC-family audio, and the iPad's hardware encoder makes H.264 faster
+        // than real time, so XviD, VP9, AV1, MPEG-2 and the rest are converted as they stream.
+        let plan = await Self.plan(for: source)
+        if let note = plan.description { status(note); Diagnostics.log("airplay", note) }
         // mp4frag is VLC 4's fragmented, streamable MP4 muxer: index first, then moof/mdat fragments.
-        media.addOption(":sout=#std{access=file,mux=mp4frag,dst=\(pipe.path)}")
+        media.addOption(":sout=#\(plan.chain)std{access=file,mux=mp4frag,dst=\(pipe.path)}")
         media.addOption(":no-sout-keep")
         media.addOption(":no-sout-display")
         media.addOption(":sout-mux-caching=300")
@@ -122,6 +128,73 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
             throw error
         }
         return dir
+    }
+
+    /// What the stream output must do to a file: copy its tracks, or convert the ones Apple's
+    /// player would refuse.
+    struct Plan {
+        var video: String?      // the source video codec when it needs converting
+        var audio: [String] = []   // the source audio codecs when they need converting
+        var width = 0, height = 0
+        var chain: String {
+            var parts: [String] = []
+            if video != nil {
+                // Bit rate by picture size; the VideoToolbox encoder in real-time mode keeps up with playback.
+                let kbps = height <= 480 ? 2500 : height <= 720 ? 5000 : height <= 1080 ? 8000 : 14000
+                parts.append("vcodec=h264,venc=avcodec{codec=h264_videotoolbox,options{realtime=1}},vb=\(kbps)")
+            }
+            if !audio.isEmpty { parts.append("acodec=mp4a,ab=192,channels=2,samplerate=48000") }
+            return parts.isEmpty ? "" : "transcode{\(parts.joined(separator: ","))}:"
+        }
+        var description: String? {
+            var bits: [String] = []
+            if let video { bits.append("\(MP4Boxes.describe(codec: video)) video to H.264") }
+            if !audio.isEmpty { bits.append("\(Set(audio).map { MP4Boxes.describe(codec: $0) }.sorted().joined(separator: "/")) audio to AAC") }
+            return bits.isEmpty ? nil : "Converting " + bits.joined(separator: " and ") + " for AirPlay…"
+        }
+    }
+
+    /// Reads the file's track codecs (a parse, no playback) and decides what to convert. A file that
+    /// cannot be read in time is copied as is; the segmenter still checks what arrives.
+    @MainActor
+    static func plan(for source: URL) async -> Plan {
+        var plan = Plan()
+        guard let media = VLCMedia(url: source) else { return plan }
+        media.addOption(":network-caching=1500")
+        let watcher = ParseWatcher()
+        media.delegate = watcher
+        guard media.parse(options: [.parseNetwork], timeout: 15000) == 0 else { return plan }
+        await watcher.wait(seconds: 16)
+        media.delegate = nil
+        guard media.parsedStatus == .done else { return plan }
+        if let v = media.videoTracks.first {
+            let fourcc = Self.fourcc(v.codec)
+            if !["h264", "avc1", "hevc", "hvc1", "hev1"].contains(fourcc) { plan.video = fourcc }
+            plan.width = Int(v.video?.width ?? 0); plan.height = Int(v.video?.height ?? 0)
+        }
+        let supported: Set<String> = ["mp4a", "aac ", "a52 ", "ac-3", "eac3", "ec-3", "alac", "flac", "fLaC"]
+        let audio = media.audioTracks.map { Self.fourcc($0.codec) }
+        if audio.contains(where: { !supported.contains($0) }) { plan.audio = audio.filter { !supported.contains($0) } }
+        return plan
+    }
+
+    private static func fourcc(_ code: UInt32) -> String {
+        let bytes = [UInt8(code & 0xFF), UInt8((code >> 8) & 0xFF), UInt8((code >> 16) & 0xFF), UInt8((code >> 24) & 0xFF)]
+        return String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    private final class ParseWatcher: NSObject, VLCMediaDelegate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var finished = false
+        func wait(seconds: Double) async {
+            if finished { return }
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                continuation = c
+                Task { try? await Task.sleep(for: .seconds(seconds)); self.finish() }
+            }
+        }
+        private func finish() { finished = true; continuation?.resume(); continuation = nil }
+        func mediaDidFinishParsing(_ aMedia: VLCMedia) { finish() }
     }
 
     /// Stops the copy (the user backed out). A stream that was not finished is discarded.

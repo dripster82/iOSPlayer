@@ -132,7 +132,9 @@ final class PlayerCoordinator: ObservableObject {
             let subtitles = await nativeSubtitles(for: item, file: file)
             // Every audio track travels; the one the player was on (else the preferred language) starts.
             let language = playbackOptions(for: item, settings: AppSettings.current).preferredAudioLanguage
-            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language)
+            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language) { note in
+                Task { @MainActor [weak self] in self?.loadingMessage = note }
+            }
             loadingMessage = nil
             await bridgeTeardown?.value
             let base = try await StreamBridge.shared.register(directory: dir)

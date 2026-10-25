@@ -280,12 +280,20 @@ enum MP4Boxes {
     /// A plain-language name for a codec AirPlay refuses.
     static func describe(codec: String) -> String {
         switch codec {
-        case "mp4v", "xvid", "XVID", "DX50", "DIVX", "divx": "MPEG-4 Part 2 (XviD/DivX)"
-        case "vp08", "vp09": "VP9"
+        case "mp4v", "xvid", "dx50", "divx", "div3", "div4", "div5", "div6", "fmp4": "MPEG-4 Part 2 (XviD/DivX)"
+        case "mpgv", "mp2v", "mpg2": "MPEG-2"
+        case "mp1v", "mpg1": "MPEG-1"
+        case "wmv1", "wmv2", "wmv3", "wvc1", "vc-1": "Windows Media Video"
+        case "vp08", "vp80": "VP8"
+        case "vp09", "vp90": "VP9"
+        case "theo": "Theora"
+        case "mpga", "mp3 ", "mp3": "MP3"
+        case "wma1", "wma2", "wmap", "wmal": "Windows Media Audio"
+        case "vorb": "Vorbis"
+        case "pcm", "araw", "lpcm", "s16l": "PCM"
+        case "opus": "Opus"
         case "av01": "AV1"
-        case "mp3": "MP3"
-        case "Opus": "Opus"
-        case "dtsc", "dtsh", "dtsl", "dtse": "DTS"
+        case "dts ", "dtsc", "dtsh", "dtsl", "dtse": "DTS"
         case "mlpa": "TrueHD"
         case "mjpg", "jpeg": "Motion JPEG"
         default: codec
