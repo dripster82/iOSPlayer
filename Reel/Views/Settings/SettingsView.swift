@@ -17,7 +17,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                SecureField("TMDb API key (v3)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField(AppSettings.BuiltIn.tmdb.isEmpty ? "TMDb API key (v3)" : "TMDb API key (built in · optional override)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                     // A v3 key is 32 hex characters. The moment a complete one lands, match everything scanned without it.
                     .onChange(of: settings.tmdbAPIKey) { _, key in
                         if key.count == 32, unmatchedCount > 0 { library.scanAll(providers: settings.providers) }
@@ -32,18 +32,18 @@ struct SettingsView: View {
                 if !settings.tvdbAPIKey.isEmpty {
                     SecureField("TheTVDB subscriber PIN (optional)", text: $settings.tvdbPIN).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                SecureField("fanart.tv API key (optional)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField(AppSettings.BuiltIn.fanart.isEmpty ? "fanart.tv API key (optional)" : "fanart.tv personal key (built in · optional)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("How do I get a key?") { showKeyHelp = true }
                 Picker("Metadata language", selection: $settings.metadataLanguage) {
                     ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }
                 }
             } header: { Text("Metadata") } footer: {
-                Text(settings.tmdbAPIKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information. fanart.tv adds logos and extra backgrounds on detail screens; a project key is free at fanart.tv/get-an-api-key.")
+                Text(settings.effectiveTMDbKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information. fanart.tv adds logos and extra backgrounds on detail screens; a project key is free at fanart.tv/get-an-api-key.")
             }
 
             Section {
-                SecureField("OpenSubtitles API key (optional)", text: $settings.openSubtitlesAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-                if !settings.openSubtitlesAPIKey.isEmpty {
+                SecureField(AppSettings.BuiltIn.openSubtitles.isEmpty ? "OpenSubtitles API key (optional)" : "OpenSubtitles API key (built in · optional)", text: $settings.openSubtitlesAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                if !settings.effectiveOpenSubtitlesKey.isEmpty {
                     TextField("OpenSubtitles username", text: $settings.openSubtitlesUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("OpenSubtitles password", text: $settings.openSubtitlesPassword)
                 }
@@ -233,8 +233,15 @@ struct AttributionView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("TMDb").font(.headline)
-                    Text("This product uses the TMDb API but is not endorsed or certified by TMDb. Film and TV metadata, posters, backdrops and cast information are provided by The Movie Database (themoviedb.org).").font(.footnote)
+                    // TMDB's terms ask for an approved logo, smaller than the app's own branding, in About.
+                    // Drop TMDB's "blue short" logo into Assets.xcassets as "tmdb-logo"; until then, the name.
+                    if UIImage(named: "tmdb-logo") != nil {
+                        Image("tmdb-logo").resizable().scaledToFit().frame(height: 22).accessibilityLabel("TMDB")
+                    } else {
+                        Text("TMDB").font(.headline)
+                    }
+                    Text("This product uses the TMDB API but is not endorsed or certified by TMDB. Film and TV metadata, posters, backdrops and cast information are provided by The Movie Database (themoviedb.org).").font(.footnote)
+                    Link("themoviedb.org", destination: URL(string: "https://www.themoviedb.org")!).font(.footnote)
                 }
             }
             Section {

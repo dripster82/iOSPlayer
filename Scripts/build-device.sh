@@ -17,6 +17,7 @@ DD="${DERIVED_DATA:-$ROOT/DerivedData}"   # gitignored
 
 cd "$ROOT"
 [[ -d Packages/ReelKit/Vendor/VLCKit.xcframework ]] || Scripts/fetch-vlckit.sh
+Scripts/ensure-secrets.sh
 [[ -d Reel.xcodeproj ]] || xcodegen generate
 
 # Only the keychain-only build makes Xcode empty Reel.entitlements; restore it afterwards in that case.

@@ -14,9 +14,12 @@ struct OnboardingView: View {
             Image(systemName: "play.rectangle.fill").font(.system(size: 56)).foregroundStyle(Color.accentColor)
             Text("Every file.\nEvery screen.").font(.system(size: 40, weight: .bold, design: .rounded))
             Text("Plays MKV and almost everything else, straight from your NAS or this device. Sorted into TV and Films with artwork.").foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                SecureField("TMDb API key (optional, for artwork)", text: $key).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Free at themoviedb.org → Settings → API. You can add it later in Settings.").font(.caption).foregroundStyle(.secondary)
+            if AppSettings.BuiltIn.tmdb.isEmpty {
+                // Development builds without Secrets.xcconfig: the user supplies the key.
+                VStack(alignment: .leading, spacing: 6) {
+                    SecureField("TMDb API key (optional, for artwork)", text: $key).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("Free at themoviedb.org → Settings → API. You can add it later in Settings.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             Button {
                 if !key.isEmpty { settings.tmdbAPIKey = key }

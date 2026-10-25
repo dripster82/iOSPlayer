@@ -85,9 +85,16 @@ public actor ImageLoader {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    /// Evict least-recently-used files until under the limit. Call on launch and after scans.
+    /// Anything TMDB served may not be kept longer than six months (its API terms).
+    public static let maxAge: TimeInterval = 182 * 24 * 3600
+
+    /// Evict least-recently-used files until under the limit, and anything untouched for six months
+    /// whatever the limit. Call on launch and after scans.
     public func enforceLimit() {
         var all = files().sorted { $0.modified < $1.modified }
+        let cutoff = Date().addingTimeInterval(-Self.maxAge)
+        for old in all.prefix(while: { $0.modified < cutoff }) { try? FileManager.default.removeItem(at: old.url) }
+        all.removeAll { $0.modified < cutoff }
         var total = all.reduce(0) { $0 + $1.size }
         while total > diskLimitBytes, let oldest = all.first {
             try? FileManager.default.removeItem(at: oldest.url)

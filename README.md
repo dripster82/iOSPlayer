@@ -108,3 +108,12 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 
 The first compile (Xcode 26.6, 24 Oct 2026) needed only small fixes, listed in `HANDOVER.md` §3.1.
 The device build is warning-free.
+
+## Shipped API keys
+
+Reel ships with its own TMDB, fanart.tv and OpenSubtitles keys so a fresh install gets artwork
+without the user registering anywhere. They live in `Secrets.xcconfig` at the repo root, which is
+git-ignored; copy `Secrets.example.xcconfig` to it and fill in the values. `Scripts/ensure-secrets.sh`
+(run by the build script) creates an empty one so a clone builds without keys. The values reach the
+app through Info.plist (`REEL_TMDB_KEY` and friends) and a key typed into Settings overrides the
+built-in one. Never commit the real file.

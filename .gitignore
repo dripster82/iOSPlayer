@@ -16,3 +16,6 @@ Package.resolved
 vendor/
 Packages/ReelKit/Vendor/
 Reel/Info.plist
+
+# Shipped API keys (copy Secrets.example.xcconfig)
+Secrets.xcconfig

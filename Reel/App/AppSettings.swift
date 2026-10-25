@@ -18,6 +18,22 @@ final class AppSettings: ObservableObject {
 
     private let d = UserDefaults.standard
 
+    /// Keys the app ships with (Secrets.xcconfig → Info.plist), used when the matching Settings field
+    /// is empty. Never shown; never logged.
+    enum BuiltIn {
+        static let tmdb = value("REEL_TMDB_KEY")
+        static let fanart = value("REEL_FANART_KEY")
+        static let openSubtitles = value("REEL_OPENSUBTITLES_KEY")
+        private static func value(_ key: String) -> String {
+            let v = (Bundle.main.infoDictionary?[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return v.hasPrefix("$(") ? "" : v   // an unexpanded placeholder means no key was configured
+        }
+    }
+    /// The key in use for each service: the user's own if typed, else the built-in one.
+    var effectiveTMDbKey: String { tmdbAPIKey.isEmpty ? BuiltIn.tmdb : tmdbAPIKey }
+    var effectiveFanartKey: String { fanartAPIKey.isEmpty ? BuiltIn.fanart : fanartAPIKey }
+    var effectiveOpenSubtitlesKey: String { openSubtitlesAPIKey.isEmpty ? BuiltIn.openSubtitles : openSubtitlesAPIKey }
+
     @Published var tmdbAPIKey: String { didSet { d.set(tmdbAPIKey, forKey: "tmdbAPIKey") } }
     @Published var tvdbAPIKey: String { didSet { d.set(tvdbAPIKey, forKey: "tvdbAPIKey") } }
     @Published var tvdbPIN: String { didSet { d.set(tvdbPIN, forKey: "tvdbPIN") } }
@@ -96,9 +112,10 @@ final class AppSettings: ObservableObject {
 
     /// nil until the user has entered a key.
     var tmdb: TMDbClient? {
-        guard !tmdbAPIKey.isEmpty else { return nil }
+        let key = effectiveTMDbKey
+        guard !key.isEmpty else { return nil }
         let region = metadataLanguage.split(separator: "-").count > 1 ? String(metadataLanguage.split(separator: "-")[1]) : "GB"
-        return TMDbClient(apiKey: tmdbAPIKey, language: metadataLanguage, region: region)
+        return TMDbClient(apiKey: key, language: metadataLanguage, region: region)
     }
 
     /// nil until the user has entered a TheTVDB project key.
@@ -109,14 +126,16 @@ final class AppSettings: ObservableObject {
 
     /// nil until the user has entered a fanart.tv project key.
     var fanart: FanartClient? {
-        guard !fanartAPIKey.isEmpty else { return nil }
-        return FanartClient(apiKey: fanartAPIKey, language: metadataLanguage)
+        let key = effectiveFanartKey
+        guard !key.isEmpty else { return nil }
+        return FanartClient(apiKey: key, language: metadataLanguage)
     }
 
     /// nil until the user has entered an OpenSubtitles API key. Searching works with the key alone.
     var openSubtitles: OpenSubtitlesClient? {
-        guard !openSubtitlesAPIKey.isEmpty else { return nil }
-        return OpenSubtitlesClient(apiKey: openSubtitlesAPIKey, username: openSubtitlesUsername, password: openSubtitlesPassword)
+        let key = effectiveOpenSubtitlesKey
+        guard !key.isEmpty else { return nil }
+        return OpenSubtitlesClient(apiKey: key, username: openSubtitlesUsername, password: openSubtitlesPassword)
     }
 
     /// Shared so the AniDB and Anime-Lists indexes load once per launch, not once per scan.

@@ -1,9 +1,12 @@
 import Foundation
 
 /// Disk cache for raw TMDb responses, keyed by request URL. Metadata expires after 7 days;
-/// a stale entry is still returned when the network is down so the library keeps working offline.
+/// a stale entry is still returned when the network is down so the library keeps working offline,
+/// but never past six months: TMDB's terms forbid caching anything longer than that.
 public actor MetadataCache {
     public static let defaultTTL: TimeInterval = 7 * 24 * 3600
+    /// The hard limit from TMDB's API terms ("cache, for longer than 6 months" is prohibited).
+    public static let maxAge: TimeInterval = 182 * 24 * 3600
 
     private let directory: URL
     private let ttl: TimeInterval
@@ -23,7 +26,20 @@ public actor MetadataCache {
         guard let data = try? Data(contentsOf: url),
               let attrs = try? fm.attributesOfItem(atPath: url.path),
               let modified = attrs[.modificationDate] as? Date else { return nil }
-        return Entry(data: data, isFresh: Date().timeIntervalSince(modified) < ttl)
+        let age = Date().timeIntervalSince(modified)
+        if age > Self.maxAge { try? fm.removeItem(at: url); return nil }
+        return Entry(data: data, isFresh: age < ttl)
+    }
+
+    /// Deletes every entry older than six months. Call at launch.
+    public func purgeExpired() -> Int {
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return 0 }
+        var removed = 0
+        for f in files {
+            let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if Date().timeIntervalSince(modified) > Self.maxAge, (try? fm.removeItem(at: f)) != nil { removed += 1 }
+        }
+        return removed
     }
 
     public func write(_ key: String, data: Data) {

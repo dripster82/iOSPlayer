@@ -27,6 +27,10 @@ targets:
     type: application
     platform: iOS
     supportedDestinations: [iOS, iPadOS]
+    # Shipped API keys live in Secrets.xcconfig (git-ignored; Scripts/ensure-secrets.sh makes an empty one).
+    configFiles:
+      Debug: Secrets.xcconfig
+      Release: Secrets.xcconfig
     sources:
       - path: Reel
         excludes: [Demo]
@@ -49,6 +53,10 @@ targets:
       path: Reel/Info.plist
       properties:
         CFBundleDisplayName: Reel
+        # Built-in keys from Secrets.xcconfig; empty when the file has none.
+        REEL_TMDB_KEY: $(REEL_TMDB_KEY)
+        REEL_FANART_KEY: $(REEL_FANART_KEY)
+        REEL_OPENSUBTITLES_KEY: $(REEL_OPENSUBTITLES_KEY)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
