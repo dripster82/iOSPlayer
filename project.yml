@@ -29,6 +29,10 @@ targets:
     supportedDestinations: [iOS, iPadOS]
     sources:
       - path: Reel
+        excludes: [Demo]
+      - path: Reel/Demo
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ReelKit
         products: [MediaCore, Metadata, MediaSources, Playback, Library, Sync]

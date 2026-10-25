@@ -400,7 +400,7 @@ struct EpisodeRow: View {
     var body: some View {
         let ws = state
         HStack(alignment: .top, spacing: 12) {
-            ArtworkImage(url: ArtworkURL.still(episode.stillPath), title: episode.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 120)
+            ArtworkImage(url: episode.stillURL, title: episode.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 120)
                 .overlay(alignment: .topLeading) { if ws?.watched == true { Image(systemName: "checkmark").font(.caption2.bold()).foregroundStyle(.black).padding(4).background(.green, in: Circle()).padding(6) } }
                 .overlay(alignment: .topTrailing) {
                     if downloaded { Image(systemName: "arrow.down.circle.fill").font(.caption).foregroundStyle(.white, .blue).padding(6) }

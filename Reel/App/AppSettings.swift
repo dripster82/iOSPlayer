@@ -53,6 +53,11 @@ final class AppSettings: ObservableObject {
     @Published var hasCompletedOnboarding: Bool { didSet { d.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") } }
     @Published var autoPlayNext: Bool { didSet { d.set(autoPlayNext, forKey: "autoPlayNext") } }
     @Published var dialogueBoost: Bool { didSet { d.set(dialogueBoost, forKey: "dialogueBoost") } }
+    /// Answer VLC's own link schemes (vlc://, vlcx://, vlc-x-callback://) so apps that only know how
+    /// to hand a stream to VLC (DS file) can hand it to Reel. Off by default: they are VLC's schemes.
+    @Published var acceptVLCLinks: Bool { didSet { d.set(acceptVLCLinks, forKey: "acceptVLCLinks") } }
+    /// The sample library has been installed (Try with sample media).
+    @Published var demoInstalled: Bool { didSet { d.set(demoInstalled, forKey: "demoInstalled") } }
     /// Seconds shown on the Up Next card before the next episode starts on its own.
     @Published var autoPlayCountdown: Int { didSet { d.set(autoPlayCountdown, forKey: "autoPlayCountdown") } }
 
@@ -84,6 +89,8 @@ final class AppSettings: ObservableObject {
         hasCompletedOnboarding = d.bool(forKey: "hasCompletedOnboarding")
         autoPlayNext = d.object(forKey: "autoPlayNext") as? Bool ?? true
         dialogueBoost = d.bool(forKey: "dialogueBoost")
+        acceptVLCLinks = d.bool(forKey: "acceptVLCLinks")
+        demoInstalled = d.bool(forKey: "demoInstalled")
         autoPlayCountdown = d.object(forKey: "autoPlayCountdown") as? Int ?? 10
     }
 

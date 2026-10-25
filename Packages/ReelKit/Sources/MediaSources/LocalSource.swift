@@ -19,7 +19,17 @@ public actor LocalSource: MediaSource {
         #endif
     }
 
+    /// `path` prefix for a folder shipped inside the app bundle (the sample library): "bundle:Demo".
+    public static let bundlePrefix = "bundle:"
+
     public func connect(credentials: Credentials?) async throws {
+        if config.path.hasPrefix(Self.bundlePrefix) {
+            let sub = String(config.path.dropFirst(Self.bundlePrefix.count))
+            guard let base = Bundle.main.resourceURL?.appendingPathComponent(sub, isDirectory: true),
+                  FileManager.default.fileExists(atPath: base.path) else { throw SourceError.notFound(config.name) }
+            root = base
+            return
+        }
         guard let data = Data(base64Encoded: config.path) else { throw SourceError.notFound(config.name) }
         var stale = false
         #if os(iOS)

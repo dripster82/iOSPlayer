@@ -59,6 +59,11 @@ struct ReelApp: App {
         if url.isFileURL { player.playExternal(url, settings: settings); return }
         let scheme = url.scheme?.lowercased() ?? ""
         guard ["reel", "vlc-x-callback", "vlc", "vlcx"].contains(scheme) else { return }
+        if scheme != "reel", !settings.acceptVLCLinks {
+            Diagnostics.log("app", "ignored \(scheme) link: VLC links are off in Settings → Library")
+            library.lastError = "A \(scheme):// link was ignored. Turn on “Accept VLC links” in Settings → Library to let other apps hand streams to Reel this way."
+            return
+        }
         // The plain VLC form embeds the stream after the scheme: vlc://http://host/path or vlc://smb://…
         if scheme == "vlc" || scheme == "vlcx", url.host != "x-callback-url" {
             let raw = String(url.absoluteString.dropFirst(scheme.count + 3))

@@ -78,7 +78,11 @@ struct SettingsView: View {
 
             Section("Library") {
                 Toggle(isOn: $settings.scanOnLaunch) { VStack(alignment: .leading) { Text("Scan for new media on launch"); Text("Checks every source when the app opens (at most every 10 minutes). Sources → Refresh all does it on demand.").font(.caption).foregroundStyle(.secondary) } }
+                Toggle(isOn: $settings.acceptVLCLinks) { VStack(alignment: .leading) { Text("Accept VLC links"); Text("Lets apps that only know VLC (DS file, some browsers) open streams in Reel through vlc:// links. reel:// links always work.").font(.caption).foregroundStyle(.secondary) } }
                 NavigationLink { SourcesView() } label: { Label("Sources", systemImage: "externaldrive.connected.to.line.below") }
+                Toggle(isOn: Binding(get: { DemoLibrary.installed(in: library) != nil }, set: { on in if on { DemoLibrary.install(in: library) } else { DemoLibrary.remove(from: library) }; settings.demoInstalled = on })) {
+                    VStack(alignment: .leading) { Text("Sample library"); Text("Three short films and a show, built into the app, to try Reel without a server. The titles are invented and the clips are test patterns.").font(.caption).foregroundStyle(.secondary) }
+                }
                 NavigationLink(value: LibraryRoute.favourites) { Label("Favourites", systemImage: "heart") }
                 NavigationLink(value: LibraryRoute.collections) { Label("Collections", systemImage: "rectangle.stack") }
                 NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }

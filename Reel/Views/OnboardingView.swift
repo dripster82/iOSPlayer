@@ -4,6 +4,7 @@ import Library
 /// First run: one screen, then straight into Add Source. The scan runs in the background with a banner on Home.
 struct OnboardingView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var library: LibraryStore
     @State private var adding = false
     @State private var key = ""
 
@@ -21,6 +22,12 @@ struct OnboardingView: View {
                 if !key.isEmpty { settings.tmdbAPIKey = key }
                 adding = true
             } label: { Text("Get started").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).controlSize(.large)
+            Button {
+                if !key.isEmpty { settings.tmdbAPIKey = key }
+                DemoLibrary.install(in: library)
+                settings.demoInstalled = true
+                settings.hasCompletedOnboarding = true
+            } label: { Label("Try with sample media", systemImage: "sparkles").frame(maxWidth: .infinity) }.buttonStyle(.bordered).controlSize(.large)
             Button("Skip for now") { settings.hasCompletedOnboarding = true }.frame(maxWidth: .infinity).font(.footnote)
             Text("No account. Your files stay where they are.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }
