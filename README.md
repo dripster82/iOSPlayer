@@ -1,119 +1,81 @@
-# Reel
+<p align="center"><strong>Reel</strong></p>
+<p align="center">Every file. Every screen.</p>
+<p align="center"><a href="https://dripster82.github.io/iOSPlayer/">Website</a> · <a href="https://dripster82.github.io/iOSPlayer/support.html">Support</a> · <a href="https://dripster82.github.io/iOSPlayer/privacy.html">Privacy</a> · <a href="https://dripster82.github.io/iOSPlayer/terms.html">Terms</a></p>
 
-A media player for iPhone and iPad that plays nearly any video file (MKV included), streams from
-network shares or local storage, sorts the library into TV and Films, and fetches artwork from TMDb.
+Reel is a media player for iPhone and iPad that plays your own video files, straight from a NAS share
+or the device, and turns them into a proper library: TV shows and films with artwork, episode names,
+cast, collections, continue watching and next up. There is no account, no server to install and
+nothing is uploaded anywhere.
 
-- **Plan:** [`PLAN.md`](PLAN.md) — scope, features, UI flow, solution design, decisions.
-- **Prototype:** [`prototype/index.html`](prototype/index.html) — clickable UI mock-up (open in any browser).
-- **Code:** `Reel/` (SwiftUI app) and `Packages/ReelKit/` (six Swift modules).
+## What it does
 
-"Reel" is a placeholder name.
+**Plays almost anything.** MKV, MP4, AVI, WebM and more, through VLC's engine: HEVC and 10-bit video,
+Dolby and DTS audio, embedded and external subtitles, chapters, playback speed, audio and subtitle
+delay. Hardware decoding where the device has it.
 
-## Requirements
+**Straight from your NAS.** SMB and WebDAV shares, or folders on the device. Reel reconnects on its
+own when a share drops, and can send Wake-on-LAN to a NAS that has gone to sleep.
 
-- Xcode 15.3 or later, iOS 17 deployment target.
-- A paid Apple Developer account (needed for iCloud sync and TestFlight).
-- A free TMDb v3 API key for metadata and artwork (themoviedb.org → Settings → API). The app works without one but shows plain file names.
+**A real library.** Titles, posters, backdrops, episode names, cast and ratings from
+[TMDB](https://www.themoviedb.org), matched from your file names. Anime is recognised by its own
+titles through AniDB and Anime-Lists. Anything Reel is unsure about goes to Needs Review, where a
+whole folder can be fixed at once; Fix Match sets any title straight, with an Anime option.
 
-## Build
+**Made for watching.** Skip intro (from chapters, or learned from your own skips), live preview
+frames while scrubbing, resume or start over, auto-play next with a countdown, a sleep timer,
+dialogue boost for quiet speech, Picture in Picture, AirPlay, keyboard shortcuts on iPad.
 
-The Xcode project is generated from `project.yml` so it never conflicts in git. VLCKit is not
-on Swift Package Manager, so VideoLAN's official VLCKit 4 binary is fetched once per checkout.
+**Finds things.** Continue Watching and Next Up on Home, favourites, your own collections, smart
+collections that fill themselves, film series and universes (Marvel, Pixar, Star Wars and the like),
+people pages with filmographies, and a search that covers titles, people and collections.
+
+**Picks up where you left off.** Progress, favourites, collections, match fixes and sources sync
+between your devices through your own iCloud. Passwords travel only through iCloud Keychain.
+
+**Offline.** Download films or whole seasons to the device.
+
+**Try it without a server.** The first screen offers a sample library, three short films and a
+show built into the app, so you can look around before adding a share.
+
+## Metadata and artwork
+
+Reel ships with its own keys for TMDB, fanart.tv and OpenSubtitles, so there is nothing to register
+for. Your own keys can be added in Settings → Metadata: a TMDB key overrides the built-in one; a
+fanart.tv personal key is sent alongside the project key, as fanart.tv asks, and brings newly
+approved images sooner; subtitle downloads use your own OpenSubtitles account because quotas are per
+person. TheTVDB is an optional fallback that needs your own key and subscriber PIN.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB. Logos and extra artwork
+are images from [fanart.tv](https://fanart.tv). Anime titles come from [AniDB](https://anidb.net)
+and the [Anime-Lists](https://github.com/Anime-Lists/anime-lists) mapping. Subtitles from
+[OpenSubtitles](https://www.opensubtitles.com). Playback by [VLCKit](https://code.videolan.org/videolan/VLCKit)
+(LGPL 2.1, dynamically linked). The full review of each provider's terms is in
+[docs/METADATA-TERMS.md](docs/METADATA-TERMS.md).
+
+## Privacy
+
+No analytics, no advertising, no tracking, no account. The only things that leave the device are
+requests to the servers you add and to the metadata services above, and your own iCloud if you turn
+sync on. The [privacy policy](https://dripster82.github.io/iOSPlayer/privacy.html) has the detail.
+
+## Building from source
+
+Xcode 15.3 or later, iOS 17. Install XcodeGen, fetch VLCKit once, generate the project:
 
 ```sh
 brew install xcodegen
-Scripts/fetch-vlckit.sh    # ~520 MB download → Packages/ReelKit/Vendor/VLCKit.xcframework (iOS slices only, ~140 MB, gitignored)
-xcodegen generate          # creates Reel.xcodeproj
-open Reel.xcodeproj
+Scripts/fetch-vlckit.sh
+xcodegen generate && open Reel.xcodeproj
 ```
 
-`project.yml` already carries the team (`834D8P4J32`, automatic signing) and bundle ID
-`uk.co.ketelle.reel`. Xcode resolves AMSMB2 and KeychainAccess on first open.
+Shipped API keys go in `Secrets.xcconfig` (git-ignored; copy `Secrets.example.xcconfig`). Tests:
+`cd Packages/ReelKit && swift test`. Everything else, including signing, iCloud setup, the VLCKit
+licence arrangement and the feature status table, is in [BUILDING.md](BUILDING.md); the project
+history and decisions are in [HANDOVER.md](HANDOVER.md).
 
-**iCloud needs one interactive step.** The App ID has to be registered with the iCloud capability and
-the `iCloud.uk.co.ketelle.reel` container created. Xcode does this itself the first time you build with
-an Apple ID signed in (Xcode → Settings → Accounts). Until then signing fails with "No Accounts" and
-"profile doesn't include the iCloud capability". For a device build without iCloud in the meantime run
-`Scripts/build-device.sh`, which signs with `Reel/Reel-NoiCloud.entitlements` and installs on the phone.
-Xcode rewrites `Reel/Reel.entitlements` to an empty `<dict/>` on every such build; the script restores it,
-otherwise `git checkout -- Reel/Reel.entitlements`.
+## Support
 
-**No XcodeGen?** Create an empty iOS App project named `Reel` in Xcode, delete its generated
-`ContentView.swift`/`ReelApp.swift`, drag the `Reel/` folder in, add the local package at
-`Packages/ReelKit` (File → Add Package Dependencies → Add Local) and link all six products, then
-copy the `info.properties` and entitlements from `project.yml`/`Reel/Reel.entitlements` into the target.
+[Support page](https://dripster82.github.io/iOSPlayer/support.html) ·
+[GitHub Issues](https://github.com/dripster82/iOSPlayer/issues) · barley_gilt6r@icloud.com
 
-### VLCKit
-
-`Packages/ReelKit/Package.swift` declares `VLCKit` as a local binary target at
-`Packages/ReelKit/Vendor/VLCKit.xcframework`, only when that folder exists. Without it the pure
-modules still build and test (Linux CI, fresh checkout); `VLCPlaybackEngine` is behind
-`#if canImport(VLCKit)`. The fetch script pins VLCKit **4.0.0a19** (a prerelease: the first VLCKit with
-Picture in Picture) by sha256 from `download.videolan.org/pub/cocoapods/unstable/`, keeps only the iOS
-device and simulator slices and strips the dSYMs. To upgrade, change `VERSION` and `SHA256` in the
-script and delete the `Vendor` folder. `VLCKIT_ARCHIVE=/path/to/VLCKit-4.…tar.xz` reuses a download.
-
-The licence route is LGPL: VLCKit 4 is a **dynamic** framework (verified with `file`), embedded
-by Xcode, and credited in Settings → About → Licences. Do not switch to a static build.
-
-## Run
-
-1. Launch on a device (the simulator can't reach SMB shares on most networks, and has no hardware decoder).
-2. First run: paste the TMDb key (optional), then **Get started** → add a source.
-   - **Local:** pick a folder in Files (USB drives and iCloud Drive appear there).
-   - **Network:** choose a discovered host or enter one manually → Test Connection → tick folders and tag them TV / Films / Mixed → Start scanning.
-3. The scan runs in the background; a banner on Home shows progress. Unmatched files land in **Needs Review** (wrench icon on Home).
-
-## Tests
-
-`Packages/ReelKit/Tests` holds pure-logic tests that need no device:
-
-```sh
-cd Packages/ReelKit && swift test --filter 'MediaCoreTests|MetadataTests'
-```
-
-or run the `Reel` scheme's tests in Xcode. `FilenameParserTests` is the table of real-world names
-that the classifier must get right; add a row whenever a file is misfiled.
-
-## Status
-
-What is built (phase 1–2 of PLAN.md §7). Compiles for iOS with Xcode 26.6, all 27 unit tests pass, and a
-signed Debug build installs on a device. The device smoke test (HANDOVER.md §4) has not been run yet.
-
-| Area | State |
-|---|---|
-| Filename parser, classifier, item keys | Done, unit tested |
-| TMDb client, cache, rate limiter, match scoring | Done, unit tested |
-| Sources: Local (bookmarks), WebDAV, SMB (AMSMB2) | Done |
-| Discovery (Bonjour SMB/WebDAV) | Done |
-| Scanner (incremental), matcher, SwiftData schema | Done |
-| iCloud sync (CKSyncEngine): sources, scanned library, watch state, favourites, overrides, collections; passwords via iCloud Keychain | Done |
-| VLCKit engine: tracks, subtitles, delays, chapters, rate | Done |
-| Picture in Picture (VLCKit 4; auto on swipe-home, button in player) | Done |
-| Player UI: gestures, scrubber, sheets, Up Next, error card, lock | Done |
-| Home, TV, Films (genre/year/sort filters), detail pages, Search, Favourites, Collections, History | Done |
-| Sources, Add Source (discovered/manual/local), folder tags, file browser | Done |
-| Needs Review, Fix Match, Settings, Licences, Attribution | Done |
-| FTP/SFTP/NFS/DLNA browsing | Not yet (greyed out in Add Source) |
-| Anime matching (AniDB titles + Anime-Lists → TMDb), TheTVDB fallback (optional key) | Done |
-| Picture in Picture (VLCKit 4) | Done |
-| "Open in Reel" from other apps + `reel://play?url=` scheme | Done |
-| OpenSubtitles search/download (own key + account), fanart.tv logos (own key) | Done (24 Oct) |
-| Offline downloads (Downloads tab), Wake-on-LAN for a sleeping NAS, film collections, diagnostics log | Done (24 Oct) |
-| Scrub thumbnails, subtitle style, trailers, person pages, universes, smart collections, artwork editing, Siri shortcuts | Done (24 Oct) |
-| Home Screen widgets | Not yet (needs an App Group in the provisioning profile) |
-| Background scan continuation (background task + BGProcessingTask) | Done |
-
-## First build
-
-The first compile (Xcode 26.6, 24 Oct 2026) needed only small fixes, listed in `HANDOVER.md` §3.1.
-The device build is warning-free.
-
-## Shipped API keys
-
-Reel ships with its own TMDB, fanart.tv and OpenSubtitles keys so a fresh install gets artwork
-without the user registering anywhere. They live in `Secrets.xcconfig` at the repo root, which is
-git-ignored; copy `Secrets.example.xcconfig` to it and fill in the values. `Scripts/ensure-secrets.sh`
-(run by the build script) creates an empty one so a clone builds without keys. The values reach the
-app through Info.plist (`REEL_TMDB_KEY` and friends) and a key typed into Settings overrides the
-built-in one. Never commit the real file.
+Made by dripster82.

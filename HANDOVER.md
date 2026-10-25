@@ -6,7 +6,7 @@ a **compiling, signed, device-installable** state on Paul's Mac (Xcode 26.6). Th
 (§4) has not been run. Your first job is that smoke test, then continue the phase plan.
 Everything you need is in this repo; this document is the map.
 
-Read in this order: this file → `PLAN.md` §6, §10, §11, §12 → `README.md` → the code.
+Read in this order: this file → `PLAN.md` §6, §10, §11, §12 → `BUILDING.md` → the code.
 
 ---
 
@@ -31,7 +31,7 @@ Decisions already made by the owner (don't re-open without asking): VLCKit engin
 
 ```
 PLAN.md                 Product plan + solution design. §11 = architecture, §12 = first-build checklist.
-README.md               Human-facing build/run instructions.
+README.md               App overview for the GitHub page; BUILDING.md has the build/run instructions.
 HANDOVER.md             This file.
 project.yml             XcodeGen spec → generates Reel.xcodeproj (gitignored).
 Scripts/fetch-vlckit.sh Downloads VideoLAN's VLCKit 4.0.0a19 xcframework (iOS slices) into Packages/ReelKit/Vendor (gitignored).
@@ -273,7 +273,7 @@ are decoded in `ImageLoader`'s background task (`preparingForDisplay`). Keep it 
 - Match the surrounding comment density: a one-line `///` on public types, comments only where the *why* isn't obvious.
 - Commit messages: imperative subject, short body. Push to the branch above. Don't open a PR unless asked.
 - UI follows `prototype/index.html`. When you change a screen's behaviour, update the prototype's `QS` notes or the plan if the decision changes.
-- Keep `PLAN.md` truthful: when a "Not yet" row in README's status table ships, flip it.
+- Keep `PLAN.md` truthful: when a "Not yet" row in BUILDING.md's status table ships, flip it.
 
 ---
 
