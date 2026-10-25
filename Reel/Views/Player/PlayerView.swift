@@ -448,15 +448,18 @@ struct Scrubber: View {
                 Circle().fill(.white).frame(width: 14, height: 14).shadow(radius: 2).offset(x: g.size.width * frac - 7)
                 if let p = preview, duration > 0 {
                     let frame = itemKey.flatMap { thumbs.image(for: $0, fraction: p / duration) }
+                    // The bubble lives inside the 28 pt scrubber row, so it must size itself: left to the
+                    // row's proposal, the picture was squeezed to a one-pixel line and only the time showed.
                     VStack(spacing: 4) {
                         if let frame {
-                            Image(uiImage: frame).resizable().aspectRatio(16 / 9, contentMode: .fit).frame(width: 160)
+                            Image(uiImage: frame).resizable().scaledToFill().frame(width: 176, height: 99)
                                 .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.8), lineWidth: 1)).shadow(radius: 4)
                         }
                         Text(MediaFormat.clock(p)).font(.caption.bold()).monospacedDigit().padding(.horizontal, 8).padding(.vertical, 4)
                             .background(.white, in: RoundedRectangle(cornerRadius: 6)).foregroundStyle(.black)
                     }
-                    .offset(x: max(0, min(g.size.width - (frame == nil ? 60 : 160), g.size.width * CGFloat(p / duration) - (frame == nil ? 30 : 80))), y: frame == nil ? -30 : -75)
+                    .fixedSize()
+                    .offset(x: max(0, min(g.size.width - (frame == nil ? 60 : 176), g.size.width * CGFloat(p / duration) - (frame == nil ? 30 : 88))), y: frame == nil ? -30 : -82)
                 }
             }
             .frame(height: 28)

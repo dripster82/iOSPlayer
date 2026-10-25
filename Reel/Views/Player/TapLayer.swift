@@ -31,6 +31,8 @@ struct GestureLayer: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: c, action: #selector(Coordinator.panned(_:)))
         pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: c, action: #selector(Coordinator.pinched(_:)))
+        c.hold = hold
+        c.pan = pan
         for g in [single, double, hold, pan, pinch] {
             g.cancelsTouchesInView = false
             g.delaysTouchesBegan = false
@@ -47,6 +49,9 @@ struct GestureLayer: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: GestureLayer
         private var dragStart: CGPoint = .zero
+        weak var hold: UILongPressGestureRecognizer?
+        weak var pan: UIPanGestureRecognizer?
+        private var holding = false
         init(parent: GestureLayer) { self.parent = parent }
 
         @objc func tapped() { parent.onTap() }
@@ -56,15 +61,23 @@ struct GestureLayer: UIViewRepresentable {
         }
         @objc func held(_ g: UILongPressGestureRecognizer) {
             switch g.state {
-            case .began: parent.onHoldBegan()
-            case .ended, .cancelled, .failed: parent.onHoldEnded()
+            case .began:
+                // A finger that is already dragging (a slow scrub) is not a hold: the two recognisers run
+                // together, and without this a slow scrub turned into 2× and the drag was ignored.
+                if let pan, pan.state == .began || pan.state == .changed { return }
+                holding = true
+                parent.onHoldBegan()
+            case .ended, .cancelled, .failed:
+                if holding { holding = false; parent.onHoldEnded() }
             default: break
             }
         }
         @objc func panned(_ g: UIPanGestureRecognizer) {
             guard let v = g.view else { return }
             switch g.state {
-            case .began: dragStart = g.location(in: v)
+            case .began:
+                dragStart = g.location(in: v)
+                if holding { holding = false; parent.onHoldEnded() }
             case .changed:
                 let t = g.translation(in: v)
                 parent.onDragChanged(Drag(translation: CGSize(width: t.x, height: t.y), start: dragStart, size: v.bounds.size))
