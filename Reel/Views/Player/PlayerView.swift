@@ -17,6 +17,7 @@ struct PlayerContentView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject var engine: VLCPlaybackEngine
+    @ObservedObject private var external = ExternalDisplay.shared
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var controlsVisible = true
@@ -41,6 +42,13 @@ struct PlayerContentView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 VLCVideoView(engine: engine).ignoresSafeArea()
+                if external.isConnected {
+                    VStack(spacing: 10) {
+                        Image(systemName: "tv").font(.system(size: 44)).foregroundStyle(.white.opacity(0.8))
+                        Text("Playing on your TV").font(.headline).foregroundStyle(.white)
+                        Text(player.current.map { $0.kind == .episode ? "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" : $0.title } ?? "").font(.footnote).foregroundStyle(.white.opacity(0.7))
+                    }
+                }
                 gestureLayer(size: geo.size)
                 if engine.status == .opening || engine.status == .buffering || player.isLoading {
                     VStack(spacing: 12) {

@@ -69,7 +69,7 @@ final class PlayerCoordinator: ObservableObject {
             Diagnostics.log("player", "AirPlay route appeared mid-play; moving to the native player")
             switchToNativePlayer(item: item, url: url)
         } else {
-            show(notice: "AirPlay is carrying the sound. This is an MKV, which Apple's player cannot stream; for the picture on the TV, use Screen Mirroring in Control Centre.")
+            show(notice: "AirPlay is carrying the sound only: this is an MKV, which Apple's player cannot stream. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
         }
     }
 
@@ -212,8 +212,8 @@ final class PlayerCoordinator: ObservableObject {
                     nativePlayback = NativePlayback(itemKey: item.itemKey, url: target, startAt: resume)
                     return
                 }
-                if Self.airPlayActive, !Self.isNativeContainer(url) {
-                    show(notice: "AirPlay is carrying the sound. This is an MKV, which Apple's player cannot stream; for the picture on the TV, use Screen Mirroring in Control Centre.")
+                if Self.airPlayActive, !Self.isNativeContainer(url), !ExternalDisplay.shared.isConnected {
+                    show(notice: "AirPlay is carrying the sound only: this is an MKV, which Apple's player cannot stream. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
                 }
                 let opts = playbackOptions(for: item, settings: settings)
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)

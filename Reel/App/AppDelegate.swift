@@ -9,6 +9,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// The TV gets its own scene when the device is mirrored; SwiftUI keeps the main one.
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        if connectingSceneSession.role == .windowExternalDisplayNonInteractive {
+            let config = UISceneConfiguration(name: "External display", sessionRole: connectingSceneSession.role)
+            config.delegateClass = ExternalSceneDelegate.self
+            return config
+        }
+        return connectingSceneSession.configuration
+    }
+
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         NotificationCenter.default.post(name: Self.remoteNotification, object: nil)
         // Give the sync engine a moment to fetch before iOS suspends us again.

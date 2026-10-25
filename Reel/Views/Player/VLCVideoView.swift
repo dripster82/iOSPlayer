@@ -31,11 +31,15 @@ struct VLCVideoView: UIViewRepresentable {
         host.frame = container.bounds
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(host)
+        // With a TV connected the picture goes there instead; the container stays black behind the controls.
+        ExternalDisplay.shared.deviceContainer = container
+        ExternalDisplay.shared.attach(host)
         return container
     }
     func updateUIView(_ uiView: UIView, context: Context) {}
     static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
         // Keep the host alive (and VLC's output attached); it is re-parented by the next player screen.
+        if let host = uiView.subviews.first { ExternalDisplay.shared.release(host) }
         uiView.subviews.forEach { $0.removeFromSuperview() }
     }
 }
