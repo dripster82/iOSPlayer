@@ -9,6 +9,23 @@ public enum ItemKey {
         "show:\(showTMDbID):S\(String(format: "%02d", season))E\(String(format: "%02d", episode))"
     }
 
+    /// Titles TMDb does not know (home video, a fictional test set, an obscure release) once the
+    /// viewer has said what they are: keyed by the parsed title so copies and episodes group.
+    public static func localFilm(title: String, year: Int?) -> String {
+        var h = FNV1a(); h.update(normalise(title)); if let year { h.update(String(year)) }
+        return "local-movie:\(h.hexDigest)"
+    }
+    public static func localShow(title: String) -> String {
+        var h = FNV1a(); h.update(normalise(title))
+        return "local-show:\(h.hexDigest)"
+    }
+    public static func localEpisode(showTitle: String, season: Int, episode: Int) -> String {
+        "\(localShow(title: showTitle)):S\(String(format: "%02d", season))E\(String(format: "%02d", episode))"
+    }
+    static func normalise(_ title: String) -> String {
+        title.lowercased().replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    }
+
     /// Fallback for unmatched files: filename, size and duration hashed together.
     /// Duration is optional because a scan knows size before it knows duration.
     public static func unmatched(fileName: String, size: Int64, duration: TimeInterval?) -> String {

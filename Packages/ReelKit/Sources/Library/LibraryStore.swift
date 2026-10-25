@@ -285,8 +285,9 @@ public final class LibraryStore: ObservableObject {
         file.pendingSync = true; file.updatedAt = Date()
         try context.save()
         let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
-        _ = await matcher.match(file)
+        let outcome = await matcher.match(file)
         try context.save()
+        Diagnostics.log("library", "review: \(file.fileName.prefix(50)) set to \(kind?.rawValue ?? "auto")\(tmdbID.map { " tmdb \($0)" } ?? "") → \(outcome)\(file.item.map { ", item \($0.itemKey)" } ?? ", no item")")
         notifySync()
     }
 

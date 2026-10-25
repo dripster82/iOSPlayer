@@ -48,3 +48,12 @@ final class ClassifierTests: XCTestCase {
         XCTAssertEqual(Classifier.classify(relativePath: "Torrents/2 Sort/Tokyo Underground/(Hi10)_Tokyo_Underground_-_NCED_(480p)_(V-A).mkv", folderTag: nil), .ignore)
     }
 }
+
+final class LocalItemKeyTests: XCTestCase {
+    func testLocalKeysGroupByTitle() {
+        XCTAssertEqual(ItemKey.localFilm(title: "Aurora Over the Fjord", year: 2021), ItemKey.localFilm(title: "aurora over the fjord", year: 2021))
+        XCTAssertNotEqual(ItemKey.localFilm(title: "Aurora Over the Fjord", year: 2021), ItemKey.localFilm(title: "Aurora Over the Fjord", year: 2022))
+        XCTAssertTrue(ItemKey.localFilm(title: "x", year: nil).hasPrefix("local-movie:"))
+        XCTAssertEqual(ItemKey.localEpisode(showTitle: "Starfall Station", season: 1, episode: 2), ItemKey.localShow(title: "Starfall  Station") + ":S01E02")
+    }
+}

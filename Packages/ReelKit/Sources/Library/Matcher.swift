@@ -43,6 +43,9 @@ struct Matcher {
         let isReview = file.classificationRaw == "review"
         let guessed: MediaKind? = isReview ? file.guessKindRaw.flatMap(MediaKind.init(rawValue:)) : (file.classificationRaw == "episode" ? .episode : .film)
         guard let kind = override?.forcedKind ?? guessed, !parsed.title.isEmpty || override?.forcedTMDbID != nil else { return markReview(file) }
+        // The viewer said what this is (Accept, Treat as Film/TV): a title TMDb cannot find still
+        // becomes a library item, named from the file, rather than falling back into review.
+        let decided = override?.forcedKind != nil
         file.guessKindRaw = kind.rawValue   // so a later scan retries this file with the same guess
         do {
             switch kind {
@@ -66,6 +69,13 @@ struct Matcher {
                     let d = MatchScorer.decideShow(results, parsed: parsed)
                     if let pick = d.pick, !isReview || d.confidence == .autoHigh { showID = pick.id; confidence = d.confidence }
                     else if let viaTVDB = try await resolveShowViaTVDB(parsed) { showID = viaTVDB; confidence = .autoLow }
+                    else if decided {
+                        let show = try upsertLocalShow(parsed)
+                        file.item = try upsertLocalEpisode(show: show, parsed: parsed, season: s, episode: e)
+                        file.classificationRaw = "episode"
+                        file.pendingSync = true; file.updatedAt = Date()
+                        return .matched
+                    }
                     else { return markReview(file) }
                 }
                 let show = try await upsertShow(id: showID, confidence: confidence)
@@ -83,7 +93,13 @@ struct Matcher {
                 else {
                     let results = try await searchMoviesShortening(parsed)
                     let d = MatchScorer.decideMovie(results, parsed: parsed)
-                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else { return markReview(file) }
+                    guard let pick = d.pick, !isReview || d.confidence == .autoHigh else {
+                        guard decided else { return markReview(file) }
+                        file.item = try upsertLocalFilm(parsed)
+                        file.classificationRaw = "film"
+                        file.pendingSync = true; file.updatedAt = Date()
+                        return .matched
+                    }
                     movieID = pick.id
                     confidence = d.confidence
                 }
@@ -262,6 +278,38 @@ struct Matcher {
             item.rating = d.voteAverage
             item.airDate = d.airDate.flatMap { ISO8601Day.date($0) }
         }
+        item.pendingSync = true; item.updatedAt = Date()
+        context.insert(item)
+        return item
+    }
+
+    // MARK: Items TMDb does not know
+
+    func upsertLocalFilm(_ parsed: ParsedName) throws -> MediaItem {
+        let key = ItemKey.localFilm(title: parsed.title, year: parsed.year)
+        if let existing = try fetchItem(key) { return existing }
+        let item = MediaItem(itemKey: key, kind: .film, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: .manual)
+        item.pendingSync = true; item.updatedAt = Date()
+        context.insert(item)
+        return item
+    }
+
+    func upsertLocalShow(_ parsed: ParsedName) throws -> MediaItem {
+        let key = ItemKey.localShow(title: parsed.title)
+        if let existing = try fetchItem(key) { return existing }
+        let item = MediaItem(itemKey: key, kind: .show, title: parsed.title, year: parsed.year, tmdbID: nil, confidence: .manual)
+        item.pendingSync = true; item.updatedAt = Date()
+        context.insert(item)
+        return item
+    }
+
+    func upsertLocalEpisode(show: MediaItem, parsed: ParsedName, season: Int, episode: Int) throws -> MediaItem {
+        let key = ItemKey.localEpisode(showTitle: parsed.title, season: season, episode: episode)
+        if let existing = try fetchItem(key) { return existing }
+        let item = MediaItem(itemKey: key, kind: .episode, title: "Episode \(episode)", year: show.year, tmdbID: nil, confidence: .manual)
+        item.seasonNumber = season
+        item.episodeNumber = episode
+        item.show = show
         item.pendingSync = true; item.updatedAt = Date()
         context.insert(item)
         return item
