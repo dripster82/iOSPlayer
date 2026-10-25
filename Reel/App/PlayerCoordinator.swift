@@ -6,6 +6,7 @@ import MediaCore
 import Library
 import Playback
 import Metadata
+import MediaSources
 
 /// Owns the single playback engine, decides what plays next, and saves progress.
 /// Presented as a full-screen cover from `RootView`.
@@ -33,12 +34,67 @@ final class PlayerCoordinator: ObservableObject {
     @Published private(set) var sleepFiresAt: Date?
     private var sleepTask: Task<Void, Never>?
 
-    /// True when AirPlay is the current audio route and AVFoundation can stream this URL itself.
-    static func prefersNativePlayer(for url: URL) -> Bool {
-        let airPlay = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
-        let native = ["mp4", "m4v", "mov"].contains(url.pathExtension.lowercased())
+    /// True while an AirPlay receiver is the audio route.
+    static var airPlayActive: Bool { AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay } }
+    /// A container Apple's player can read (and so AirPlay can carry as video). MKV is not one.
+    static func isNativeContainer(_ url: URL) -> Bool { ["mp4", "m4v", "mov"].contains(url.pathExtension.lowercased()) }
+    /// True when AirPlay is the current audio route and the file can play through Apple's player:
+    /// directly for a download or an HTTP URL, through the local bridge for SMB and WebDAV.
+    static func prefersNativePlayer(for url: URL) -> Bool { airPlayActive && isNativeContainer(url) }
+
+    /// The URL Apple's player should open for `file`: the URL itself when it can read it, else the
+    /// local bridge serving the file from its share.
+    private func nativeURL(for file: MediaFile?, playbackURL url: URL) async throws -> URL {
         let scheme = url.scheme?.lowercased() ?? ""
-        return airPlay && native && (url.isFileURL || scheme == "http" || scheme == "https")
+        if url.isFileURL || scheme == "http" || scheme == "https" { return url }
+        guard let file else { throw SourceError.unsupported("AirPlay from \(scheme)") }
+        let s = try await library.streamSource(for: file)
+        return try await StreamBridge.shared.register(source: s.source, path: s.path, size: s.size)
+    }
+
+    /// A short message over the player (AirPlay with an MKV, for one). Clears itself.
+    @Published var notice: String?
+    private var noticeTask: Task<Void, Never>?
+    func show(notice text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task { @MainActor [weak self] in try? await Task.sleep(for: .seconds(7)); guard !Task.isCancelled else { return }; self?.notice = nil }
+    }
+
+    /// AirPlay chosen while VLC is playing: hand an MP4/MOV to Apple's player at the same position so
+    /// the TV gets the picture; for anything else say why it is sound only.
+    private func routeChanged() {
+        guard Self.airPlayActive, isPresented, let item = current, let url = engine.currentURL else { return }
+        if Self.isNativeContainer(url) {
+            Diagnostics.log("player", "AirPlay route appeared mid-play; moving to the native player")
+            switchToNativePlayer(item: item, url: url)
+        } else {
+            show(notice: "AirPlay is carrying the sound. This is an MKV, which Apple's player cannot stream; for the picture on the TV, use Screen Mirroring in Control Centre.")
+        }
+    }
+
+    private func switchToNativePlayer(item: MediaItem, url: URL) {
+        let at = engine.time
+        saveProgress()
+        let file = currentFile
+        Task {
+            do {
+                let target = try await nativeURL(for: file, playbackURL: url)
+                engine.stop()
+                ScrubPreview.shared.stop()
+                isPresented = false
+                nativePlayback = NativePlayback(itemKey: item.itemKey, url: target, startAt: at)
+            } catch {
+                show(notice: "Couldn't move to AirPlay: \(error.localizedDescription)")
+                Diagnostics.log("player", "native hand-over failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Apple's player closed: release the bridge and its share connection.
+    func endNativePlayback() {
+        nativePlayback = nil
+        Task { await StreamBridge.shared.stop() }
     }
     /// What the spinner is waiting on, when it is something slow such as waking a sleeping NAS.
     @Published var loadingMessage: String?
@@ -61,7 +117,11 @@ final class PlayerCoordinator: ObservableObject {
             }
         }
         engine.onUserSeek = { [weak self] from, to in self?.noteUserSeek(from: from, to: to) }
+        routeWatcher = NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.routeChanged() }
     }
+    private var routeWatcher: AnyCancellable?
 
     /// A forward jump inside the first ten minutes, 20 s to 4 min long, is probably the viewer skipping
     /// the titles; remember it for the show and see whether two such jumps agree.
@@ -146,10 +206,14 @@ final class PlayerCoordinator: ObservableObject {
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
                 if Self.prefersNativePlayer(for: url) {
+                    let target = try await nativeURL(for: file, playbackURL: url)
                     isLoading = false
                     isPresented = false
-                    nativePlayback = NativePlayback(itemKey: item.itemKey, url: url, startAt: resume)
+                    nativePlayback = NativePlayback(itemKey: item.itemKey, url: target, startAt: resume)
                     return
+                }
+                if Self.airPlayActive, !Self.isNativeContainer(url) {
+                    show(notice: "AirPlay is carrying the sound. This is an MKV, which Apple's player cannot stream; for the picture on the TV, use Screen Mirroring in Control Centre.")
                 }
                 let opts = playbackOptions(for: item, settings: settings)
                 let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)

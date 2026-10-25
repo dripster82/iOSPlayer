@@ -85,6 +85,12 @@ public actor SMBSource: MediaSource {
         try await client.downloadItem(atPath: relativePath, to: destination, progress: { bytes, total in progress(bytes, total) })
     }
 
+    public func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data {
+        guard let client else { throw SourceError.unreachable(config.host) }
+        let start = UInt64(max(0, offset))
+        return try await client.contents(atPath: relativePath, range: start..<(start + UInt64(length)), progress: nil)
+    }
+
     public func disconnect() async {
         try? await client?.disconnectShare()
         client = nil

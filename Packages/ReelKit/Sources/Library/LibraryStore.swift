@@ -959,6 +959,16 @@ public final class LibraryStore: ObservableObject {
         return (url, subs)
     }
 
+    /// A connected source for one file, for the local HTTP bridge (AirPlay video from a share).
+    /// The caller owns it and disconnects it; the bridge does that when it stops.
+    public func streamSource(for file: MediaFile) async throws -> (source: any MediaSource, path: String, size: Int64) {
+        guard let record = file.source else { throw SourceError.notFound(file.relativePath) }
+        let source = SourceFactory.make(record.config)
+        try await source.connect(credentials: CredentialStore.shared.load(for: record.id))
+        let size = file.size > 0 ? file.size : ((try? await source.stat(file.relativePath).size) ?? 0) ?? 0
+        return (source, file.relativePath, size)
+    }
+
     /// Highest resolution first; ties broken by size.
     public func preferredFile(_ item: MediaItem) -> MediaFile? {
         if let id = item.preferredFileID, let chosen = item.files.first(where: { $0.id == id && !$0.ignored }) { return chosen }

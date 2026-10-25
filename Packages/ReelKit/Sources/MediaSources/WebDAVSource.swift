@@ -99,6 +99,23 @@ public actor WebDAVSource: MediaSource {
         _ = progress(written, total > 0 ? total : written)
     }
 
+    public func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data {
+        var req = URLRequest(url: resolve(relativePath, directory: false))
+        authorise(&req)
+        req.setValue("bytes=\(offset)-\(offset + Int64(length) - 1)", forHTTPHeaderField: "Range")
+        req.timeoutInterval = 30
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw SourceError.unreachable(config.host) }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.authFailed }
+        guard http.statusCode == 206 || http.statusCode == 200 else { throw SourceError.notFound(relativePath) }
+        // A server that ignored the range sent the whole file: cut the window out.
+        if http.statusCode == 200, data.count > length || offset > 0 {
+            let start = Int(min(Int64(data.count), offset))
+            return data.subdata(in: start..<min(data.count, start + length))
+        }
+        return data
+    }
+
     public func disconnect() async { credentials = nil }
 
     // MARK: -

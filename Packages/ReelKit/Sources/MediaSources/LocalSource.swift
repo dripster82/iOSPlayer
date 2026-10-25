@@ -71,6 +71,14 @@ public actor LocalSource: MediaSource {
         _ = progress(size, size)
     }
 
+    public func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data {
+        let url = try resolve(relativePath)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(max(0, offset)))
+        return try handle.read(upToCount: length) ?? Data()
+    }
+
     public func disconnect() async {
         if accessing { root?.stopAccessingSecurityScopedResource() }
         accessing = false

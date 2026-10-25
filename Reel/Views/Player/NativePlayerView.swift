@@ -34,7 +34,7 @@ struct NativePlayerView: View {
         if dur.isFinite, dur > 0 { library.recordProgress(itemKey: playback.itemKey, position: pos, duration: dur) }
         p.pause()
         avPlayer = nil
-        player.nativePlayback = nil
+        player.endNativePlayback()
     }
 }
 

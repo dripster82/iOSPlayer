@@ -57,6 +57,12 @@ struct PlayerContentView: View {
                 // redraw this body (and rebuild its gesture recognisers) every second.
                 TimedOverlays(engine: engine, locked: locked)
                 if controlsVisible && !locked { controls(size: geo.size) }
+                if let n = player.notice {
+                    Text(n).font(.footnote).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
+                        .background(Color(white: 0.1, opacity: 0.92), in: RoundedRectangle(cornerRadius: 12))
+                        .frame(maxWidth: 420).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.top, 70)
+                        .transition(.opacity)
+                }
                 if let err = player.loadError ?? failure { errorCard(err) }
                 keyboardShortcuts
             }

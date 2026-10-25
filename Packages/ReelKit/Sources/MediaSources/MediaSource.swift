@@ -67,7 +67,18 @@ public protocol MediaSource: Actor {
     /// and returns false to abort. Requires `connect` first.
     func download(_ relativePath: String, to destination: URL, progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws
 
+    /// `length` bytes from `offset` of a file, for the local HTTP bridge that lets Apple's player
+    /// (and so AirPlay video) read a file on a share. Requires `connect` first. May return fewer
+    /// bytes at the end of the file.
+    func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data
+
     func disconnect() async
+}
+
+public extension MediaSource {
+    func read(_ relativePath: String, offset: Int64, length: Int) async throws -> Data {
+        throw SourceError.unsupported("ranged reads on \(config.type.rawValue)")
+    }
 }
 
 public struct Credentials: Sendable, Hashable {
