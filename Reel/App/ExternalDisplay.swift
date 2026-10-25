@@ -22,8 +22,29 @@ final class ExternalDisplay: ObservableObject {
     /// Where the host view goes back to when the TV disconnects.
     weak var deviceContainer: UIView?
     private weak var host: UIView?
+    private var observers: [NSObjectProtocol] = []
+
+    /// Watches for the external-display scene UIKit creates when the device is mirrored. Done with
+    /// notifications rather than the app delegate's scene configuration hook: answering that hook
+    /// for the main scene took SwiftUI's own configuration away and the app came up blank.
+    init() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: UIScene.willConnectNotification, object: nil, queue: .main) { [weak self] n in
+            guard let scene = n.object as? UIWindowScene, scene.session.role == .windowExternalDisplayNonInteractive else { return }
+            Task { @MainActor in self?.connected(scene: scene) }
+        })
+        observers.append(center.addObserver(forName: UIScene.didDisconnectNotification, object: nil, queue: .main) { [weak self] n in
+            guard let scene = n.object as? UIWindowScene, scene.session.role == .windowExternalDisplayNonInteractive else { return }
+            Task { @MainActor in self?.disconnected() }
+        })
+        // A TV that was already connected when the app launched.
+        for scene in UIApplication.shared.connectedScenes {
+            if let ws = scene as? UIWindowScene, ws.session.role == .windowExternalDisplayNonInteractive { connected(scene: ws) }
+        }
+    }
 
     func connected(scene: UIWindowScene) {
+        guard window == nil else { return }
         let w = UIWindow(windowScene: scene)
         let vc = UIViewController()
         vc.view.backgroundColor = .black
@@ -72,13 +93,3 @@ final class ExternalDisplay: ObservableObject {
     }
 }
 
-/// UIKit calls this for the external-display scene role (see AppDelegate).
-final class ExternalSceneDelegate: UIResponder, UIWindowSceneDelegate {
-    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-        guard let ws = scene as? UIWindowScene else { return }
-        Task { @MainActor in ExternalDisplay.shared.connected(scene: ws) }
-    }
-    func sceneDidDisconnect(_ scene: UIScene) {
-        Task { @MainActor in ExternalDisplay.shared.disconnected() }
-    }
-}
