@@ -117,6 +117,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     private func attempt(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile], preferredAudio: Int?, preferredLanguage: String?, plan: Plan, adjustments: Adjustments, status: @escaping @Sendable (String) -> Void) async throws -> URL {
         let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 || adjustments.changesStream ? "-partial" : ""), isDirectory: true)
+        await teardown?.value
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // Its own name: the reader of a refused copy removes its pipe as it exits, which would take
@@ -319,6 +320,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     /// Stops the copy (the user backed out). A stream that was not finished is discarded.
     public func cancel() { stop(discard: !(segmenter?.finished ?? false)) }
+    /// The last stop's VLC shutdown and folder removal, still running.
+    private var teardown: Task<Void, Never>?
 
     private func stop(discard: Bool) {
         if let c = readyContinuation { readyContinuation = nil; c.resume(throwing: CancellationError()) }
@@ -331,12 +334,14 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         // VLC's stop can wait on a writer blocked on the pipe, and a folder of thousands of segments
         // takes a moment to delete: neither belongs on the main thread. The reader keeps draining the
         // pipe until VLC closes it, so that writer is never stuck.
-        Task.detached(priority: .userInitiated) { [old, seg, dir] in
+        // The next attempt waits for this before it makes its folder: a restart (dialogue boost, a
+        // seek past the copy) reuses the folder name, and a delete that landed after the new
+        // folder was made took the new stream's files with it ("init-2.mp4 doesn't exist").
+        teardown = Task.detached(priority: .userInitiated) { [old, seg, dir] in
             seg?.cancel()
             old?.stop()
             _ = old
             if let dir {
-                try? await Task.sleep(for: .seconds(1))
                 // A retry (copy → conversion) may have taken the same folder meanwhile: leave it alone then.
                 let reused = await MainActor.run { HLSRemuxer.shared.currentDirectory == dir }
                 guard !reused else { return }
