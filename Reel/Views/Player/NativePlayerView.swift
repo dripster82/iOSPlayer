@@ -28,6 +28,9 @@ struct NativePlayerView: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var playing = false
     @State private var sought = false
+    /// While set, a jump ahead in the first seconds (the receiver choosing a live copy's edge
+    /// rather than its start) is undone; a seek of the viewer's own ends it.
+    @State private var startGuardUntil: Date?
     @State private var audioOptions: [AVMediaSelectionOption] = []
     @State private var subtitleOptions: [AVMediaSelectionOption] = []
     @State private var selectedAudio: AVMediaSelectionOption?
@@ -207,7 +210,13 @@ struct NativePlayerView: View {
             for ev in item.errorLog()?.events ?? [] { Diagnostics.log("player", "native error log \(ev.errorStatusCode) \(ev.errorComment ?? "") \(ev.uri ?? "")") }
             if item.status == .readyToPlay {
                 Task { @MainActor in
-                    if !sought, playback.startAt > 0 { sought = true; p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity) }
+                    // A live copy is a growing playlist, and the receiver may begin at its edge, tens of
+                    // seconds past where the viewer was: ask for the start (or the resume point) outright.
+                    if !sought, playback.startAt > 0 || playback.timeOffset > 0 {
+                        sought = true
+                        startGuardUntil = Date().addingTimeInterval(20)
+                        p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
+                    }
                     loadSelections(item)
                 }
             }
@@ -218,6 +227,15 @@ struct NativePlayerView: View {
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { t in
             guard t.seconds.isFinite else { return }
             let now = t.seconds + playback.timeOffset
+            if let until = startGuardUntil {
+                if Date() > until { startGuardUntil = nil }
+                else if scrubTime == nil, t.seconds > playback.startAt + 15 {
+                    startGuardUntil = nil
+                    Diagnostics.log("player", "native playback began \(Int(t.seconds - playback.startAt))s past the start; seeking back")
+                    p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
+                    return
+                }
+            }
             player.nativeTime = now
             clock.set(time: now, duration: duration)
         }
@@ -271,6 +289,7 @@ struct NativePlayerView: View {
     /// A seek inside the copied part is a seek; one beyond it restarts the copy there, which with
     /// VLC's copy or conversion takes a few seconds rather than waiting for the copy to catch up.
     private func seek(to fileTime: TimeInterval) {
+        startGuardUntil = nil
         let target = max(0, min(duration, fileTime))
         if available.contains(target) || (playback.timeOffset == 0 && HLSRemuxer.completed(for: playback.itemKey) != nil) {
             avPlayer?.seek(to: CMTime(seconds: target - playback.timeOffset, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
