@@ -185,7 +185,9 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     private func switchToNativePlayer(item: MediaItem, url: URL) {
-        let at = engine.time
+        // With AirPlay already chosen, the route only switches once playback starts, so this runs
+        // moments after a load: use the resume point, not a clock that has not caught up yet.
+        let at = engine.effectiveTime
         saveProgress()
         let file = currentFile
         Task {

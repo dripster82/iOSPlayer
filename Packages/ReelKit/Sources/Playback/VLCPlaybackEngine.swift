@@ -83,6 +83,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard let item, item.startAt > 0 else { return false }
         return !resumeConfirmed
     }
+    /// Where playback is, or is about to be: the resume point until VLC has actually reached it.
+    /// The clock reads zero for the first moments after a load, which is not a position to hand on.
+    public var effectiveTime: TimeInterval { resumePending ? max(time, item?.startAt ?? 0) : time }
     private var resumeConfirmed = false
     private var resumeAttempts = 0
     private var lastResumeAttempt = Date.distantPast
