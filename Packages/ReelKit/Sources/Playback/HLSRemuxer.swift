@@ -152,7 +152,13 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         let p: VLCMediaPlayer
         if plan.video != nil {
             let lib = VLCLibrary(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
-            if let logURL = Self.conversionLogURL { lib.loggers = [Self.fileLogger(at: logURL, level: 3)] }
+            if let logURL = Self.conversionLogURL {
+                // One run per file; the run before it is kept, since a stall is usually noticed after the retry.
+                let previous = logURL.deletingPathExtension().appendingPathExtension("prev.log")
+                try? FileManager.default.removeItem(at: previous)
+                try? FileManager.default.moveItem(at: logURL, to: previous)
+                lib.loggers = [Self.fileLogger(at: logURL, level: 3)]
+            }
             conversionLibrary = lib
             p = VLCMediaPlayer(library: lib)
         } else {

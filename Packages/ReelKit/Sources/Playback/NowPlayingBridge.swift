@@ -8,6 +8,12 @@ import Combine
 /// Lock screen / Control Centre integration for whichever engine is active.
 @MainActor
 public final class NowPlayingBridge {
+    /// Playback category, active. Also what makes the audio route report AirPlay when it is chosen.
+    public static func activateSession() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
     private var cancellables: Set<AnyCancellable> = []
     private weak var engine: (any PlaybackEngine)?
 
@@ -33,8 +39,7 @@ public final class NowPlayingBridge {
             engine?.seek(to: e.positionTime); return .success
         }
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        Self.activateSession()
 
         // Once a second is plenty for the lock screen; per-tick updates are an IPC round trip each.
         engine.objectWillChange

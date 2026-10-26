@@ -220,15 +220,30 @@ struct NativePlayerView: View {
         }
         Diagnostics.log("player", "native AirPlay playback of \(Diagnostics.safe(playback.url)) from \(Int(playback.startAt + playback.timeOffset))s")
         heartbeat = Task { @MainActor in
-            var ticks = 0
+            var ticks = 0, stuckFor = 0, lastTime = -1.0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let p = avPlayer else { return }
                 ticks += 1
-                guard ticks <= 24 else { return }
+                let t = p.currentTime().seconds
                 let waiting = p.reasonForWaitingToPlay.map { " waiting: \($0.rawValue)" } ?? ""
                 let err = p.currentItem?.errorLog()?.events.last.map { " lastErr: \($0.errorStatusCode) \($0.errorComment ?? "")" } ?? ""
-                Diagnostics.log("player", "native: external=\(p.isExternalPlaybackActive) control=\(p.timeControlStatus.rawValue) t=\(Int(p.currentTime().seconds)) rate=\(p.rate) keepUp=\(p.currentItem?.isPlaybackLikelyToKeepUp ?? false)\(waiting)\(err)")
+                if ticks <= 24 {
+                    Diagnostics.log("player", "native: external=\(p.isExternalPlaybackActive) control=\(p.timeControlStatus.rawValue) t=\(Int(t)) rate=\(p.rate) keepUp=\(p.currentItem?.isPlaybackLikelyToKeepUp ?? false)\(waiting)\(err)")
+                }
+                // A live copy that stops growing (the converter stalled, or Apple's player gave up on a
+                // playlist that went stale) leaves the clock still while play is wanted: start the copy
+                // again from here rather than sit on a black screen.
+                let wantsPlay = p.timeControlStatus != .paused && scrubTime == nil
+                let stuck = wantsPlay && (t == lastTime || p.reasonForWaitingToPlay == .noItemToPlay)
+                stuckFor = stuck ? stuckFor + 1 : 0
+                lastTime = t
+                if stuckFor >= 3, playback.timeOffset > 0 || HLSRemuxer.completed(for: playback.itemKey) == nil {
+                    Diagnostics.log("player", "native playback stuck at \(Int(fileTime))s for \(stuckFor * 5)s\(err); restarting the stream there")
+                    stuckFor = 0
+                    player.restartNativeStream(at: fileTime)
+                    return
+                }
             }
         }
         scheduleHide()

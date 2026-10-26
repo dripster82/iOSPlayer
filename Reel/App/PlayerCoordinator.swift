@@ -174,7 +174,7 @@ final class PlayerCoordinator: ObservableObject {
             // The receiver went away (AirPlay turned off, headphones): back to the device's own player
             // from the same position.
             Diagnostics.log("player", "AirPlay route gone; returning to the device at \(Int(nativeTime))s")
-            library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: max(playback.knownDuration, nativeTime + 1))
+            if playback.knownDuration > 0 { library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: playback.knownDuration) }
             releaseNative()
             play(item, settings: AppSettings.current)   // the cover stays up; VLC takes the screen back
             return
@@ -204,9 +204,12 @@ final class PlayerCoordinator: ObservableObject {
                 guard current?.itemKey == item.itemKey else { return }
                 let chapters = nativeChapters(for: file)
                 let (t, s) = Self.titles(for: item)
+                // Stopping the engine zeroes its duration; without the real length a position
+                // late in the file reads as "finished" and the title is marked watched.
+                let known = engine.duration.nonZero ?? file?.duration ?? TimeInterval((item.runtimeMinutes ?? 0) * 60)
                 engine.stop()
                 ScrubPreview.shared.stop()
-                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: startAt, timeOffset: offset, knownDuration: engine.duration, title: t, subtitle: s, chapters: chapters))
+                await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: startAt, timeOffset: offset, knownDuration: known, title: t, subtitle: s, chapters: chapters))
             } catch {
                 isLoading = false
                 show(notice: "Couldn't move to AirPlay: \(error.localizedDescription)")
@@ -375,6 +378,10 @@ final class PlayerCoordinator: ObservableObject {
                 }
                 loadingMessage = nil
                 let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
+                // The audio route only reports AirPlay once the session is active; activating it here
+                // means a title opened with AirPlay already chosen goes straight to Apple's player,
+                // rather than starting VLC and handing over a moment later.
+                NowPlayingBridge.activateSession()
                 // An MP4 Apple's player can read straight from the share or server; otherwise (an MKV,
                 // or a server only VLC can read from) VLC's HLS copy below carries it.
                 if Self.prefersNativePlayer(for: url), await nativeSubtitles(for: item, file: file).isEmpty, let target = try? await nativeURL(for: file, playbackURL: url) {
@@ -594,8 +601,8 @@ final class PlayerCoordinator: ObservableObject {
     /// The position now (the app is about to be suspended, or sync asked). During AirPlay the
     /// native view keeps `nativeTime` current, so that is what gets written.
     func flushProgress() {
-        if let playback = nativePlayback, nativeTime > 0 {
-            library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: max(playback.knownDuration, nativeTime + 1))
+        if let playback = nativePlayback, nativeTime > 0, playback.knownDuration > 0 {
+            library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: playback.knownDuration)
             return
         }
         saveProgress()
