@@ -466,9 +466,10 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
-    /// Chapters first; then the scan's stored result; else the scan, after the thumbnails have had a
-    /// head start so the scrubber fills in first. Episodes only: a film's credits are not followed by
-    /// anything, and its length makes the scan dear.
+    /// Chapters first; then the scan's stored result; else the scan, soon into the play (it is some
+    /// fifty opens of the file, four seconds each over a share, so its answer is a few minutes away
+    /// and is wanted before the end). Episodes only: a film's credits are not followed by anything,
+    /// and its length makes the scan dear.
     private func resolveCredits(key: String, url: URL) {
         guard let current, current.kind == .episode, engine.duration > 0 else { return }
         if let byChapter = engine.chapters.creditsStart(fileDuration: engine.duration) {
@@ -483,7 +484,7 @@ final class PlayerCoordinator: ObservableObject {
         }
         let duration = engine.duration, software = Self.needsSoftwareDecoding(currentVideoCodec)
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(45))
+            try? await Task.sleep(for: .seconds(10))
             guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
             CreditsMemory.scan(itemKey: key, url: url, duration: duration, softwareDecoding: software) { [weak self] start in
                 guard let self, self.current?.itemKey == key else { return }

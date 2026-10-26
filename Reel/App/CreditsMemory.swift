@@ -36,6 +36,7 @@ enum CreditsMemory {
         Task {
             defer { inProgress.remove(itemKey) }
             let from = duration - CreditsScan.window(for: duration)
+            Diagnostics.log("player", "credits scan of \(itemKey.prefix(40)): \(Int((duration - from) / CreditsScan.step)) frames from \(Int(from))s")
             var samples: [CreditsScan.Sample] = []
             var t = from
             while t < duration - 2 {
