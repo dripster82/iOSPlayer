@@ -579,9 +579,10 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     func dismiss() {
+        let wasNative = nativePlayback != nil || bridgeLive
         if nativePlayback != nil { releaseNative() }
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
-        saveProgress()
+        if !wasNative { saveProgress() }   // Apple's player saved its own position as it closed
         HLSRemuxer.shared.cancel()
         Self.debugForceAirPlay = false
         ScrubPreview.shared.stop()
@@ -620,6 +621,8 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     private func saveProgress(markWatched: Bool = false) {
+        // While Apple's player is up it keeps the position itself; the engine's clock is stale.
+        guard nativePlayback == nil else { return }
         if let f = currentFile, !engine.chapters.isEmpty { library.recordChapters(fileID: f.id, chapters: engine.chapters) }
         if let f = currentFile, !engine.audioTracks.isEmpty { library.recordAudioTracks(fileID: f.id, names: engine.audioTracks.map(\.name), languages: engine.audioTracks.map { $0.language ?? "" }) }
         guard let item = current, engine.duration > 0, !engine.resumePending || markWatched else { return }

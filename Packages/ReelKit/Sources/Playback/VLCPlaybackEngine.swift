@@ -558,7 +558,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     nonisolated public func mediaPlayerLengthChanged(_ length: Int64) {
         Task { @MainActor in
-            if length > 0 { self.clock.duration = TimeInterval(length) / 1000 }
+            if length > 0, self.status != .idle { self.clock.duration = TimeInterval(length) / 1000 }
             self.pipController?.invalidatePlaybackState()
         }
     }
@@ -631,6 +631,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func handleTimeChange() {
+        // A tick that arrives after a stop (VLC stops asynchronously) would put the old position and
+        // length back on a clock that reads zero on purpose; the progress saver trusts that zero.
+        guard status != .idle else { return }
         // VLC reports time many times a second; publishing each one redraws the scrubber for nothing.
         let now = TimeInterval(player.time.intValue) / 1000
         lastTickAt = Date()
