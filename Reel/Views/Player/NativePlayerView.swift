@@ -52,6 +52,7 @@ struct NativePlayerView: View {
         }
         .onAppear { start() }
         .onDisappear { saveProgress(); tearDown() }
+        .onChange(of: player.sleepFired) { _, _ in avPlayer?.pause(); saveProgress() }
     }
 
     // MARK: - Controls (the VLC player's layout, in the file's own time)
@@ -77,6 +78,9 @@ struct NativePlayerView: View {
                     if subtitleOptions.isEmpty {
                         Divider()
                         Text("No subtitle tracks in this stream. Subtitle files next to the video travel with it; embedded ones do not yet.")
+                    } else {
+                        Divider()
+                        delayMenu("Subtitle delay", current: playback.adjustments.subtitleDelay) { var a = playback.adjustments; a.subtitleDelay = $0; restart(with: a) }
                     }
                 } label: { circleLabel("captions.bubble", on: selectedSubtitle != nil) }
                 Menu {
@@ -84,7 +88,19 @@ struct NativePlayerView: View {
                         Button { select(o, in: .audible) } label: { Label(o.displayName, systemImage: o == selectedAudio ? "checkmark" : "") }
                     }
                     if audioOptions.isEmpty { Text("One audio track") }
-                } label: { circleLabel("waveform") }
+                    Divider()
+                    delayMenu("Audio delay", current: playback.adjustments.audioDelay) { var a = playback.adjustments; a.audioDelay = $0; restart(with: a) }
+                    Toggle(isOn: Binding(get: { playback.adjustments.dialogueBoost }, set: { var a = playback.adjustments; a.dialogueBoost = $0; restart(with: a) })) { Label("Dialogue boost", systemImage: "waveform.badge.plus") }
+                } label: { circleLabel("waveform", on: playback.adjustments.dialogueBoost) }
+                Menu {
+                    Menu {
+                        Button { player.setSleepTimer(nil) } label: { Label("Off", systemImage: player.sleepTimer == nil ? "checkmark" : "") }
+                        ForEach([15, 30, 45, 60], id: \.self) { m in
+                            Button { player.setSleepTimer(.minutes(m)) } label: { Label("\(m) minutes", systemImage: player.sleepTimer == .minutes(m) ? "checkmark" : "") }
+                        }
+                        Button { player.setSleepTimer(.endOfEpisode) } label: { Label("End of episode", systemImage: player.sleepTimer == .endOfEpisode ? "checkmark" : "") }
+                    } label: { Label("Sleep timer", systemImage: "moon.zzz") }
+                } label: { circleLabel("ellipsis", on: player.sleepTimer != nil) }
             }
             Spacer()
             HStack(spacing: 44) {
@@ -121,6 +137,21 @@ struct NativePlayerView: View {
         .foregroundStyle(.white)
         .background(LinearGradient(colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom).ignoresSafeArea().allowsHitTesting(false))
         .transition(.opacity)
+    }
+
+    /// Delays in steps; a change restarts the stream from here with the new value (a few seconds).
+    private func delayMenu(_ title: String, current: TimeInterval, set: @escaping (TimeInterval) -> Void) -> some View {
+        Menu {
+            ForEach([-1.0, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1.0], id: \.self) { d in
+                Button { set(d) } label: { Label(d == 0 ? "None" : String(format: "%+.2f s", d), systemImage: abs(current - d) < 0.001 ? "checkmark" : "") }
+            }
+        } label: { Label(title + (current == 0 ? "" : String(format: " (%+.2f s)", current)), systemImage: "clock.arrow.2.circlepath") }
+    }
+
+    private func restart(with adjustments: HLSRemuxer.Adjustments) {
+        guard adjustments != playback.adjustments else { return }
+        saveProgress()
+        player.restartNativeStream(at: fileTime, adjustments: adjustments)
     }
 
     private func circle(_ icon: String, size: CGFloat = 38, on: Bool = false, action: @escaping () -> Void) -> some View {

@@ -75,9 +75,23 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// own audio menu; `preferredAudio` (an index among the audio tracks, VLC's order) or
     /// `preferredLanguage` picks the one marked DEFAULT.
     /// `status` is told what the copy is doing when it is more than a copy ("Converting XviD video…").
-    public func start(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile] = [], preferredAudio: Int? = nil, preferredLanguage: String? = nil, status: @escaping @Sendable (String) -> Void = { _ in }) async throws -> URL {
-        if startAt <= 0, let done = Self.completed(for: key) {
-            let subs = Segmenter.writeSubtitleFiles(subtitles, in: done, offset: 0, duration: Self.duration(of: done))
+    /// Adjustments the viewer can make from the AirPlay screen. `audioDelay` (seconds, positive =
+    /// sound later) goes in at the demux; `dialogueBoost` runs the audio through VLC's compressor,
+    /// which means converting it; `subtitleDelay` shifts the WebVTT cues. A stream with any of the
+    /// first two set is not kept for next time.
+    public struct Adjustments: Sendable, Equatable {
+        public var audioDelay: TimeInterval = 0
+        public var subtitleDelay: TimeInterval = 0
+        public var dialogueBoost = false
+        public init(audioDelay: TimeInterval = 0, subtitleDelay: TimeInterval = 0, dialogueBoost: Bool = false) {
+            self.audioDelay = audioDelay; self.subtitleDelay = subtitleDelay; self.dialogueBoost = dialogueBoost
+        }
+        public var changesStream: Bool { audioDelay != 0 || dialogueBoost }
+    }
+
+    public func start(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile] = [], preferredAudio: Int? = nil, preferredLanguage: String? = nil, adjustments: Adjustments = Adjustments(), status: @escaping @Sendable (String) -> Void = { _ in }) async throws -> URL {
+        if startAt <= 0, !adjustments.changesStream, let done = Self.completed(for: key) {
+            let subs = Segmenter.writeSubtitleFiles(subtitles, in: done, offset: -adjustments.subtitleDelay, duration: Self.duration(of: done))
             Segmenter.writeMaster(in: done, tracks: Segmenter.tracksFromInits(in: done), subtitleLines: subs, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage)
             return done
         }
@@ -88,19 +102,21 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         // probe can come up empty (a slow share, a container VLC's preparser skips); then the copy
         // is tried, and if the segmenter meets codecs the player would refuse, the stream restarts
         // as a conversion with what the segmenter saw.
-        let plan = await Self.plan(for: source)
+        var plan = await Self.plan(for: source)
+        plan.boost = adjustments.dialogueBoost
         do {
-            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: plan, status: status)
-        } catch RemuxError.needsConversion(let found) where plan.chain.isEmpty {
+            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: plan, adjustments: adjustments, status: status)
+        } catch RemuxError.needsConversion(var found) where plan.chain.isEmpty {
             Diagnostics.log("airplay", "copy refused; converting instead")
-            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: found, status: status)
+            found.boost = adjustments.dialogueBoost
+            return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: found, adjustments: adjustments, status: status)
         } catch RemuxError.needsConversion(let found) {
             throw RemuxError.failed("the conversion still produced \(found.video.map { MP4Boxes.describe(codec: $0) } ?? found.audio.map { MP4Boxes.describe(codec: $0) }.joined(separator: ", ")), which AirPlay cannot carry")
         }
     }
 
-    private func attempt(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile], preferredAudio: Int?, preferredLanguage: String?, plan: Plan, status: @escaping @Sendable (String) -> Void) async throws -> URL {
-        let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 ? "-partial" : ""), isDirectory: true)
+    private func attempt(source: URL, key: String, startAt: TimeInterval, subtitles: [SubtitleFile], preferredAudio: Int?, preferredLanguage: String?, plan: Plan, adjustments: Adjustments, status: @escaping @Sendable (String) -> Void) async throws -> URL {
+        let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 || adjustments.changesStream ? "-partial" : ""), isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pipe = dir.appendingPathComponent("pipe")
@@ -128,6 +144,11 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
+        if adjustments.audioDelay != 0 { media.addOption(":audio-desync=\(Int(adjustments.audioDelay * 1000))") }
+        if plan.boost {
+            // The same "night mode" compressor the device player uses, applied while converting the audio.
+            for o in [":compressor-rms-peak=0.0", ":compressor-attack=25", ":compressor-release=100", ":compressor-threshold=-20", ":compressor-ratio=8", ":compressor-knee=2.5", ":compressor-makeup-gain=12"] { media.addOption(o) }
+        }
         let p: VLCMediaPlayer
         if plan.video != nil {
             let lib = VLCLibrary(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
@@ -141,7 +162,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         player = p
         p.media = media
 
-        let seg = Segmenter(directory: dir, pipe: pipe, subtitles: subtitles, subtitleOffset: startAt, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage) { [weak self] event in
+        let seg = Segmenter(directory: dir, pipe: pipe, subtitles: subtitles, subtitleOffset: startAt - adjustments.subtitleDelay, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         segmenter = seg
@@ -175,6 +196,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         var video: String?      // the source video codec when it needs converting
         var audio: [String] = []   // the source audio codecs when they need converting
         var width = 0, height = 0
+        /// Dialogue boost: the audio is converted even when it could be copied, through VLC's compressor.
+        var boost = false
         init(video: String? = nil, audio: [String] = [], width: Int = 0, height: Int = 0) { self.video = video; self.audio = audio; self.width = width; self.height = height }
         var chain: String {
             var parts: [String] = []
@@ -183,13 +206,14 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
                 let kbps = height <= 480 ? 2500 : height <= 720 ? 5000 : height <= 1080 ? 8000 : 14000
                 parts.append("vcodec=h264,venc=avcodec{codec=h264_videotoolbox,options{realtime=1}},vb=\(kbps)")
             }
-            if !audio.isEmpty { parts.append("acodec=mp4a,ab=192,channels=2,samplerate=48000") }
+            if !audio.isEmpty || boost { parts.append("acodec=mp4a,ab=192,channels=2,samplerate=48000" + (boost ? ",afilter=compressor" : "")) }
             return parts.isEmpty ? "" : "transcode{\(parts.joined(separator: ","))}:"
         }
         var description: String? {
             var bits: [String] = []
             if let video { bits.append("\(MP4Boxes.describe(codec: video)) video to H.264") }
             if !audio.isEmpty { bits.append("\(Set(audio).map { MP4Boxes.describe(codec: $0) }.sorted().joined(separator: "/")) audio to AAC") }
+            else if boost { bits.append("audio with dialogue boost") }
             return bits.isEmpty ? nil : "Converting " + bits.joined(separator: " and ") + " for AirPlay…"
         }
     }

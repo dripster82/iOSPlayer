@@ -27,8 +27,12 @@ final class PlayerCoordinator: ObservableObject {
         var title = ""; var subtitle = ""
         /// Chapter starts in the file's own time (the view subtracts `timeOffset` when seeking).
         var chapters: [Chapter] = []
+        /// Audio delay, subtitle delay and dialogue boost the stream was made with.
+        var adjustments = HLSRemuxer.Adjustments()
         var id: String { itemKey }
     }
+    /// Pauses Apple's player when the sleep timer fires (the VLC engine is paused directly).
+    @Published private(set) var sleepFired = 0
     /// The audio track VLC is playing, as an index among the audio tracks, when it has chosen one.
     private var currentAudioIndex: Int? {
         guard let id = engine.currentAudioTrack else { return nil }
@@ -122,17 +126,18 @@ final class PlayerCoordinator: ObservableObject {
     /// playlist URL and the time offset the stream's clock starts from, or nil when it failed or the
     /// user backed out (the notice says why). A copy from the start is kept for next time; one
     /// started part-way is not, so the offset is zero whenever a kept copy exists.
-    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem, startAt: TimeInterval) async -> (URL, TimeInterval)? {
+    private func prepareForAirPlay(file: MediaFile?, url: URL, item: MediaItem, startAt: TimeInterval, adjustments: HLSRemuxer.Adjustments? = nil) async -> (URL, TimeInterval)? {
+        let adjustments = adjustments ?? HLSRemuxer.Adjustments(dialogueBoost: playbackOptions(for: item, settings: AppSettings.current).dialogueBoost)
         let key = file?.id.uuidString ?? url.absoluteString
         lastPlaybackURL = url
         isLoading = true
         loadingMessage = "Preparing for AirPlay…"
         do {
-            let offset: TimeInterval = HLSRemuxer.completed(for: key) != nil ? 0 : max(0, startAt - 5)
+            let offset: TimeInterval = HLSRemuxer.completed(for: key) != nil && !adjustments.changesStream ? 0 : max(0, startAt - 5)
             let subtitles = await nativeSubtitles(for: item, file: file)
             // Every audio track travels; the one the player was on (else the preferred language) starts.
             let language = playbackOptions(for: item, settings: AppSettings.current).preferredAudioLanguage
-            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language) { note in
+            let dir = try await HLSRemuxer.shared.start(source: url, key: key, startAt: offset, subtitles: subtitles, preferredAudio: currentAudioIndex, preferredLanguage: language, adjustments: adjustments) { note in
                 Task { @MainActor [weak self] in self?.loadingMessage = note }
             }
             loadingMessage = nil
@@ -210,15 +215,16 @@ final class PlayerCoordinator: ObservableObject {
 
     /// A seek beyond the part of the file copied so far: start the copy again from there. Apple's
     /// player gets a fresh stream whose clock starts at the new offset; the view rebuilds for the new URL.
-    func restartNativeStream(at fileTime: TimeInterval) {
+    func restartNativeStream(at fileTime: TimeInterval, adjustments: HLSRemuxer.Adjustments? = nil) {
         guard let playback = nativePlayback, let item = current, let url = engine.currentURL ?? lastPlaybackURL else { return }
         let file = currentFile
+        let adjustments = adjustments ?? playback.adjustments
         Task {
             HLSRemuxer.shared.cancel()
             await StreamBridge.shared.stop()
-            guard let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: fileTime) else { isLoading = false; return }
+            guard let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: fileTime, adjustments: adjustments) else { isLoading = false; return }
             var next = playback
-            next.url = target; next.timeOffset = offset; next.startAt = offset > 0 ? 0 : fileTime
+            next.url = target; next.timeOffset = offset; next.startAt = offset > 0 ? 0 : fileTime; next.adjustments = adjustments
             bridgeLive = true
             isLoading = false; loadingMessage = nil
             nativePlayback = next
@@ -307,6 +313,7 @@ final class PlayerCoordinator: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             Diagnostics.log("player", "sleep timer: pausing after \(m) min")
             self.engine.pause()
+            self.sleepFired += 1
             self.saveProgress()
             self.sleepTimer = nil
             self.sleepFiresAt = nil
