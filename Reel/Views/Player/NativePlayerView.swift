@@ -214,10 +214,15 @@ struct NativePlayerView: View {
                 Task { @MainActor in
                     // A live copy is a growing playlist, and the receiver may begin at its edge, tens of
                     // seconds past where the viewer was: ask for the start (or the resume point) outright.
+                    // Over AirPlay "ready" can arrive a few seconds into playback; a seek then would
+                    // replay those seconds, so the player is only moved when it is not already there.
                     if !sought, playback.startAt > 0 || playback.timeOffset > 0 {
                         sought = true
                         startGuardUntil = Date().addingTimeInterval(20)
-                        p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
+                        let now = p.currentTime().seconds
+                        if !now.isFinite || abs(now - playback.startAt) > 3 {
+                            p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
+                        }
                     }
                     loadSelections(item)
                 }
