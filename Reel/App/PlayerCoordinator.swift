@@ -208,6 +208,23 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
+    /// A seek beyond the part of the file copied so far: start the copy again from there. Apple's
+    /// player gets a fresh stream whose clock starts at the new offset; the view rebuilds for the new URL.
+    func restartNativeStream(at fileTime: TimeInterval) {
+        guard let playback = nativePlayback, let item = current, let url = engine.currentURL ?? lastPlaybackURL else { return }
+        let file = currentFile
+        Task {
+            HLSRemuxer.shared.cancel()
+            await StreamBridge.shared.stop()
+            guard let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: fileTime) else { isLoading = false; return }
+            var next = playback
+            next.url = target; next.timeOffset = offset; next.startAt = offset > 0 ? 0 : fileTime
+            bridgeLive = true
+            isLoading = false; loadingMessage = nil
+            nativePlayback = next
+        }
+    }
+
     /// Apple's player closed: release the stream and leave the player.
     func endNativePlayback() {
         guard nativePlayback != nil || bridgeLive else { return }

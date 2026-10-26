@@ -2,10 +2,15 @@ import SwiftUI
 import AVKit
 import MediaCore
 import Library
+import Playback
 
-/// Apple's own player, used when AirPlay is the active route: MP4, M4V and MOV directly (from a
-/// download, an HTTP URL, or a share through the local bridge), and MKV after a remux to MP4. Apple's
-/// player is the only path that sends the picture, not just the sound, over AirPlay.
+/// Apple's player, used when AirPlay is the active route: MP4, M4V and MOV directly (from a
+/// download, an HTTP URL, or a share through the local bridge), and anything else through the HLS
+/// copy VLC writes. Apple's player is the only path that sends the picture, not just the sound,
+/// over AirPlay. Its own controls are hidden: they treat the growing copy as a live stream (no
+/// times, a scrubber that cannot go past what has been copied), so Reel draws the controls it has
+/// in its own player, in the file's own time, and restarts the copy when a seek lands outside the
+/// part copied so far.
 struct NativePlayerView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var player: PlayerCoordinator
@@ -14,83 +19,248 @@ struct NativePlayerView: View {
     @State private var avPlayer: AVPlayer?
     @State private var endWatcher: Any?
     @State private var statusWatcher: NSKeyValueObservation?
+    @State private var rateWatcher: NSKeyValueObservation?
+    @State private var timeObserver: Any?
     @State private var heartbeat: Task<Void, Never>?
+    @StateObject private var clock = PlaybackClock()
+    @State private var scrubTime: TimeInterval?
+    @State private var controlsVisible = true
+    @State private var hideTask: Task<Void, Never>?
+    @State private var playing = false
+    @State private var sought = false
+    @State private var audioOptions: [AVMediaSelectionOption] = []
+    @State private var subtitleOptions: [AVMediaSelectionOption] = []
+    @State private var selectedAudio: AVMediaSelectionOption?
+    @State private var selectedSubtitle: AVMediaSelectionOption?
 
     var body: some View {
-        ZStack(alignment: .top) {
-            NativePlayerController(player: avPlayer)
-                .ignoresSafeArea()
-            // Apple's controller puts its own buttons in the corners (Picture in Picture, AirPlay, the
-            // audio and subtitle menu) and has no close button or chapter list when embedded, so what
-            // Reel adds sits in the top centre, clear of them.
-            HStack(spacing: 10) {
-                Button { close() } label: {
-                    Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                }
-                .accessibilityLabel("Close")
-                VStack(spacing: 1) {
-                    Text(playback.title).font(.footnote.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                    if !playback.subtitle.isEmpty { Text(playback.subtitle).font(.caption2).foregroundStyle(.white.opacity(0.75)).lineLimit(1) }
-                }
-                if !playback.chapters.isEmpty {
-                    Menu {
-                        ForEach(playback.chapters) { c in
-                            Button { seek(to: c.start) } label: { Label(c.title, systemImage: isCurrent(c) ? "checkmark" : "bookmark") }
-                        }
-                    } label: {
-                        Label("Chapters", systemImage: "list.bullet").labelStyle(.iconOnly).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                    }
-                    .accessibilityLabel("Chapters")
-                }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(Color.black.opacity(0.45), in: Capsule())
-            .frame(maxWidth: 420)
-            .padding(.top, 10)
-        }
-        .background(Color.black.ignoresSafeArea())
-        .onAppear {
-            // SwiftUI can build this view more than once for one presentation; the player is made once.
-            guard avPlayer == nil else { return }
-            let item = AVPlayerItem(url: playback.url)
-            // The title and episode show in the controls and on the TV's now-playing display.
-            item.externalMetadata = [metadata(.commonIdentifierTitle, playback.title), metadata(.iTunesMetadataTrackSubTitle, playback.subtitle)].compactMap { $0 }
-            let p = AVPlayer(playerItem: item)
-            p.allowsExternalPlayback = true
-            p.usesExternalPlaybackWhileExternalScreenIsActive = true
-            if playback.startAt > 0 { p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600)) }
-            p.play()
-            avPlayer = p
-            endWatcher = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in close(markWatched: true) }
-            // Why a black screen, when it is one: the item's status and error go to the log.
-            statusWatcher = p.currentItem?.observe(\.status, options: [.new]) { item, _ in
-                let message = item.error.map { " error: \(String(describing: $0))" } ?? ""
-                Diagnostics.log("player", "native item status \(item.status.rawValue)\(message)")
-                for ev in item.errorLog()?.events ?? [] { Diagnostics.log("player", "native error log \(ev.errorStatusCode) \(ev.errorComment ?? "") \(ev.uri ?? "")") }
-            }
-            Diagnostics.log("player", "native AirPlay playback of \(Diagnostics.safe(playback.url))")
-            // A heartbeat for the log: is the picture going to the receiver, and what is the player waiting on?
-            heartbeat = Task { @MainActor in
-                var ticks = 0
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(1))
-                    guard let p = avPlayer else { return }
-                    let t = p.currentTime().seconds
-                    if t.isFinite { player.nativeTime = t + playback.timeOffset }
-                    ticks += 1
-                    guard ticks % 5 == 0, ticks <= 120 else { continue }
-                    let waiting = p.reasonForWaitingToPlay.map { " waiting: \($0.rawValue)" } ?? ""
-                    let err = p.currentItem?.errorLog()?.events.last.map { " lastErr: \($0.errorStatusCode) \($0.errorComment ?? "")" } ?? ""
-                    let access = p.currentItem?.accessLog()?.events.last.map { " bytes: \($0.numberOfBytesTransferred) stalls: \($0.numberOfStalls)" } ?? ""
-                    Diagnostics.log("player", "native: external=\(p.isExternalPlaybackActive) control=\(p.timeControlStatus.rawValue) t=\(Int(p.currentTime().seconds)) rate=\(p.rate) keepUp=\(p.currentItem?.isPlaybackLikelyToKeepUp ?? false)\(waiting)\(err)\(access)")
+        ZStack {
+            Color.black.ignoresSafeArea()
+            NativePlayerController(player: avPlayer).ignoresSafeArea()
+            // Taps on the picture show or hide the controls.
+            Color.clear.contentShape(Rectangle()).ignoresSafeArea()
+                .onTapGesture { controlsVisible ? hideControls() : showControls() }
+            if controlsVisible { controls }
+            if player.isLoading {
+                VStack(spacing: 12) {
+                    ProgressView().controlSize(.large).tint(.white)
+                    if let m = player.loadingMessage { Text(m).font(.footnote).foregroundStyle(.white.opacity(0.8)) }
                 }
             }
         }
-        // The view can go without close(): the cover closes, or a new stream replaces this one.
-        // The player must not outlive it (a leaked one kept fetching and reporting its time).
+        .onAppear { start() }
         .onDisappear { saveProgress(); tearDown() }
+    }
+
+    // MARK: - Controls (the VLC player's layout, in the file's own time)
+
+    private var controls: some View {
+        VStack {
+            HStack(spacing: 10) {
+                circle("xmark") { close() }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(playback.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    HStack(spacing: 6) {
+                        if !playback.subtitle.isEmpty { Text(playback.subtitle).font(.caption).foregroundStyle(.white.opacity(0.75)).lineLimit(1) }
+                        Label("AirPlay", systemImage: "airplayvideo").font(.caption2).foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                Spacer()
+                AirPlayButton().frame(width: 38, height: 38)
+                if !subtitleOptions.isEmpty {
+                    Menu {
+                        Button { select(nil, in: .legible) } label: { Label("Off", systemImage: selectedSubtitle == nil ? "checkmark" : "") }
+                        ForEach(subtitleOptions, id: \.self) { o in
+                            Button { select(o, in: .legible) } label: { Label(o.displayName, systemImage: o == selectedSubtitle ? "checkmark" : "") }
+                        }
+                    } label: { circleLabel("captions.bubble", on: selectedSubtitle != nil) }
+                }
+                if audioOptions.count > 1 {
+                    Menu {
+                        ForEach(audioOptions, id: \.self) { o in
+                            Button { select(o, in: .audible) } label: { Label(o.displayName, systemImage: o == selectedAudio ? "checkmark" : "") }
+                        }
+                    } label: { circleLabel("waveform") }
+                }
+            }
+            Spacer()
+            HStack(spacing: 44) {
+                circle("gobackward.\(settings.skipInterval)", size: 54) { seek(to: fileTime - Double(settings.skipInterval)) }
+                Button { togglePlayPause() } label: {
+                    Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 32, weight: .bold)).foregroundStyle(.black).frame(width: 74, height: 74).background(Color.white, in: Circle())
+                }
+                circle("goforward.\(settings.skipInterval)", size: 54) { seek(to: fileTime + Double(settings.skipInterval)) }
+            }
+            Spacer()
+            VStack(spacing: 6) {
+                TimelineBar(clock: clock, chapters: playback.chapters, scrubTime: $scrubTime, itemKey: playback.itemKey) { seek(to: $0) }
+                HStack(spacing: 8) {
+                    if !playback.chapters.isEmpty {
+                        circle("backward.frame", size: 30) { jumpChapter(-1) }
+                        Menu {
+                            ForEach(playback.chapters) { c in
+                                Button { seek(to: c.start) } label: { Label(c.title, systemImage: isCurrent(c) ? "checkmark" : "bookmark") }
+                            }
+                        } label: { Text("Chapters").font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6).background(Color.white.opacity(0.15), in: Capsule()) }
+                        circle("forward.frame", size: 30) { jumpChapter(+1) }
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(.horizontal, 28).padding(.vertical, 18)
+        .foregroundStyle(.white)
+        .background(LinearGradient(colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom).ignoresSafeArea().allowsHitTesting(false))
+        .transition(.opacity)
+    }
+
+    private func circle(_ icon: String, size: CGFloat = 38, on: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { circleLabel(icon, size: size, on: on) }
+    }
+    private func circleLabel(_ icon: String, size: CGFloat = 38, on: Bool = false) -> some View {
+        Image(systemName: icon).font(.system(size: size * 0.42, weight: .semibold))
+            .foregroundStyle(on ? .black : .white)
+            .frame(width: size, height: size).background(on ? Color.accentColor : Color.white.opacity(0.12), in: Circle())
+    }
+
+    private func showControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }; scheduleHide() }
+    private func hideControls() { withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false } }
+    private func scheduleHide() {
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, playing, scrubTime == nil else { return }
+            hideControls()
+        }
+    }
+
+    // MARK: - Player
+
+    private func start() {
+        // SwiftUI can build this view more than once for one presentation; the player is made once.
+        guard avPlayer == nil else { return }
+        let item = AVPlayerItem(url: playback.url)
+        // The title and episode show on the TV's now-playing display.
+        item.externalMetadata = [metadata(.commonIdentifierTitle, playback.title), metadata(.iTunesMetadataTrackSubTitle, playback.subtitle)].compactMap { $0 }
+        let p = AVPlayer(playerItem: item)
+        p.allowsExternalPlayback = true
+        p.usesExternalPlaybackWhileExternalScreenIsActive = true
+        p.play()
+        avPlayer = p
+        playing = true
+        clock.set(time: playback.startAt + playback.timeOffset, duration: max(playback.knownDuration, 1))
+        endWatcher = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { _ in
+            // The copy's end is the file's end only when the copy ran to the end.
+            if playback.timeOffset == 0 || HLSRemuxer.completed(for: playback.itemKey) != nil { close(markWatched: true) } else { close() }
+        }
+        // Why a black screen, when it is one: the item's status and error go to the log. The start
+        // position is applied once the item is ready; before that a seek is clamped to zero.
+        statusWatcher = item.observe(\.status, options: [.new]) { item, _ in
+            let message = item.error.map { " error: \(String(describing: $0))" } ?? ""
+            Diagnostics.log("player", "native item status \(item.status.rawValue)\(message)")
+            for ev in item.errorLog()?.events ?? [] { Diagnostics.log("player", "native error log \(ev.errorStatusCode) \(ev.errorComment ?? "") \(ev.uri ?? "")") }
+            if item.status == .readyToPlay {
+                Task { @MainActor in
+                    if !sought, playback.startAt > 0 { sought = true; p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity) }
+                    loadSelections(item)
+                }
+            }
+        }
+        rateWatcher = p.observe(\.timeControlStatus, options: [.new]) { p, _ in
+            Task { @MainActor in playing = p.timeControlStatus != .paused; if playing { scheduleHide() } else { showControls() } }
+        }
+        timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { t in
+            guard t.seconds.isFinite else { return }
+            let now = t.seconds + playback.timeOffset
+            player.nativeTime = now
+            clock.set(time: now, duration: duration)
+        }
+        Diagnostics.log("player", "native AirPlay playback of \(Diagnostics.safe(playback.url)) from \(Int(playback.startAt + playback.timeOffset))s")
+        heartbeat = Task { @MainActor in
+            var ticks = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let p = avPlayer else { return }
+                ticks += 1
+                guard ticks <= 24 else { return }
+                let waiting = p.reasonForWaitingToPlay.map { " waiting: \($0.rawValue)" } ?? ""
+                let err = p.currentItem?.errorLog()?.events.last.map { " lastErr: \($0.errorStatusCode) \($0.errorComment ?? "")" } ?? ""
+                Diagnostics.log("player", "native: external=\(p.isExternalPlaybackActive) control=\(p.timeControlStatus.rawValue) t=\(Int(p.currentTime().seconds)) rate=\(p.rate) keepUp=\(p.currentItem?.isPlaybackLikelyToKeepUp ?? false)\(waiting)\(err)")
+            }
+        }
+        scheduleHide()
+    }
+
+    /// The file's length: what the library knows, else what the stream reports plus its offset.
+    private var duration: TimeInterval {
+        let streamed = (avPlayer?.currentItem?.duration.seconds ?? 0)
+        let fromStream = streamed.isFinite && streamed > 0 ? streamed + playback.timeOffset : 0
+        return max(playback.knownDuration, fromStream, 1)
+    }
+
+    private var fileTime: TimeInterval { clock.time }
+
+    /// Where the copy can be seeked to right now, in file time.
+    private var available: ClosedRange<TimeInterval> {
+        let ranges = avPlayer?.currentItem?.seekableTimeRanges.map(\.timeRangeValue) ?? []
+        let end = ranges.map { $0.end.seconds }.filter(\.isFinite).max() ?? 0
+        return playback.timeOffset...(playback.timeOffset + end)
+    }
+
+    /// A seek inside the copied part is a seek; one beyond it restarts the copy there, which with
+    /// VLC's copy or conversion takes a few seconds rather than waiting for the copy to catch up.
+    private func seek(to fileTime: TimeInterval) {
+        let target = max(0, min(duration, fileTime))
+        if available.contains(target) || (playback.timeOffset == 0 && HLSRemuxer.completed(for: playback.itemKey) != nil) {
+            avPlayer?.seek(to: CMTime(seconds: target - playback.timeOffset, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
+            clock.set(time: target, duration: duration)
+        } else {
+            Diagnostics.log("player", "native seek to \(Int(target))s is outside the copy (\(Int(available.lowerBound))–\(Int(available.upperBound))s); restarting the stream there")
+            saveProgress(at: target)
+            player.restartNativeStream(at: target)
+        }
+        showControls()
+    }
+
+    private func jumpChapter(_ step: Int) {
+        let chapters = playback.chapters
+        guard !chapters.isEmpty else { return }
+        let now = fileTime
+        let index = chapters.lastIndex { $0.start <= now + 1 } ?? 0
+        let next = max(0, min(chapters.count - 1, index + step))
+        seek(to: chapters[next].start)
+    }
+
+    private func isCurrent(_ c: Chapter) -> Bool { fileTime >= c.start && fileTime < c.start + c.duration }
+
+    private func togglePlayPause() {
+        guard let p = avPlayer else { return }
+        if p.timeControlStatus == .paused { p.play() } else { p.pause() }
+    }
+
+    private func loadSelections(_ item: AVPlayerItem) {
+        let asset = item.asset
+        Task {
+            let audible = try? await asset.loadMediaSelectionGroup(for: .audible)
+            let legible = try? await asset.loadMediaSelectionGroup(for: .legible)
+            await MainActor.run {
+                audioOptions = audible?.options ?? []
+                subtitleOptions = legible?.options.filter { !$0.hasMediaCharacteristic(.containsOnlyForcedSubtitles) } ?? []
+                if let audible { selectedAudio = item.currentMediaSelection.selectedMediaOption(in: audible) }
+                if let legible { selectedSubtitle = item.currentMediaSelection.selectedMediaOption(in: legible) }
+            }
+        }
+    }
+
+    private func select(_ option: AVMediaSelectionOption?, in characteristic: AVMediaCharacteristic) {
+        guard let item = avPlayer?.currentItem else { return }
+        Task {
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: characteristic) else { return }
+            await MainActor.run {
+                item.select(option, in: group)
+                if characteristic == .audible { selectedAudio = option } else { selectedSubtitle = option }
+            }
+        }
     }
 
     private func metadata(_ id: AVMetadataIdentifier, _ value: String) -> AVMetadataItem? {
@@ -102,25 +272,12 @@ struct NativePlayerView: View {
         return m
     }
 
-    /// Chapter starts are in the file's own time; the stream's clock may begin part-way in.
-    private func seek(to fileTime: TimeInterval) {
-        avPlayer?.seek(to: CMTime(seconds: max(0, fileTime - playback.timeOffset), preferredTimescale: 600))
-    }
-    private func isCurrent(_ c: Chapter) -> Bool {
-        guard let t = avPlayer?.currentTime().seconds, t.isFinite else { return false }
-        let now = t + playback.timeOffset
-        return now >= c.start && now < c.start + c.duration
-    }
-
-    private func saveProgress(markWatched: Bool = false) {
-        guard let p = avPlayer else { return }
-        let pos = p.currentTime().seconds
-        let dur = p.currentItem?.duration.seconds ?? 0
-        // An HLS stream started part-way runs its own clock from zero; a still-growing one reports its length so far.
-        if dur.isFinite, dur > 0 {
-            let total = max(dur + playback.timeOffset, playback.knownDuration)
-            library.recordProgress(itemKey: playback.itemKey, position: markWatched ? total : pos + playback.timeOffset, duration: total)
-        }
+    private func saveProgress(markWatched: Bool = false, at position: TimeInterval? = nil) {
+        guard avPlayer != nil else { return }
+        let pos = position ?? fileTime
+        let total = duration
+        guard total > 1 else { return }
+        library.recordProgress(itemKey: playback.itemKey, position: markWatched ? total : pos, duration: total)
     }
 
     private func close(markWatched: Bool = false) {
@@ -130,10 +287,13 @@ struct NativePlayerView: View {
     }
 
     private func tearDown() {
+        hideTask?.cancel()
+        if let o = timeObserver { avPlayer?.removeTimeObserver(o); timeObserver = nil }
         avPlayer?.pause()
         avPlayer?.replaceCurrentItem(with: nil)
         if let w = endWatcher { NotificationCenter.default.removeObserver(w); endWatcher = nil }
         statusWatcher = nil
+        rateWatcher = nil
         heartbeat?.cancel(); heartbeat = nil
         avPlayer = nil
     }
@@ -143,7 +303,9 @@ struct NativePlayerController: UIViewControllerRepresentable {
     let player: AVPlayer?
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
+        vc.showsPlaybackControls = false   // Reel draws its own, in the file's time
         vc.allowsPictureInPicturePlayback = true
+        vc.updatesNowPlayingInfoCenter = true
         return vc
     }
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) { if vc.player !== player { vc.player = player } }

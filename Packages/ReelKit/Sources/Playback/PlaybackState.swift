@@ -93,4 +93,9 @@ public final class PlaybackClock: ObservableObject {
     @Published public internal(set) var time: TimeInterval = 0
     @Published public internal(set) var duration: TimeInterval = 0
     public init() {}
+    /// For a clock driven from outside the engine (Apple's player during AirPlay).
+    public func set(time: TimeInterval, duration: TimeInterval) {
+        if self.time != time { self.time = time }
+        if self.duration != duration { self.duration = duration }
+    }
 }
