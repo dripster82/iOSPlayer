@@ -85,9 +85,27 @@ Demo account: not applicable (there is no sign-in).
 
 ## Screenshots
 
-Required sets: iPhone 6.9" (1320 × 2868) and iPad 13" (2064 × 2752), 3–10 each. Capture from the iPhone 17 Pro Max and iPad Pro 13" simulators at native scale with the sample library or a curated share; the downscaled copies in `docs/screenshots` are for the website only and are too small for App Store Connect.
+Sets in `docs/app-store/screenshots` (git-ignored), made by `Scripts/app-store-screenshot.sh` from
+the raw simulator captures in `screenshots/raw`: a dark canvas at the exact size, a short caption,
+the screen below with rounded corners. No transparency, PNG.
 
-Suggested order: Home · Film page · Player (with chapters) · TV show page · Collections · Search · Needs Review (iPad only) · Settings → Metadata.
+| Folder | Size | Required? | Contents |
+|---|---|---|---|
+| `iphone-6.1` | 1206 × 2622 | Required (iPhone with Dynamic Island, medium) | Home · Film · Show · Films · TV |
+| `iphone-6.9` | 1320 × 2868 | Optional (large) | same five |
+| `ipad-13` | 2064 × 2752 | Required (iPad) | Films · Film · Show · TV · Collections · Search |
+
+Still to add: two player screenshots per set (the sample films are test patterns, so take them on
+the iPad and iPhone during real playback: one with the controls, one of AirPlay/chapters), captioned
+"Plays MKV and nearly everything" and "AirPlay with the picture":
+
+```sh
+Scripts/app-store-screenshot.sh player.png docs/app-store/screenshots/ipad-13/07-player.png 2064x2752 "Plays MKV and nearly everything"
+```
+
+Apple's asset rules that apply: show the app in use, strongest first, captions that add to the
+picture; no prices, URLs, copyright symbols, other platforms' logos or unverifiable claims; suitable
+for 4+. App previews (video) and the product-page header art are optional and skipped for 1.0.
 
 ## Before submitting
 
