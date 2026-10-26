@@ -32,11 +32,13 @@ struct NativePlayerView: View {
     @State private var subtitleOptions: [AVMediaSelectionOption] = []
     @State private var selectedAudio: AVMediaSelectionOption?
     @State private var selectedSubtitle: AVMediaSelectionOption?
+    @State private var rate: Float = 1
+    @State private var fill = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayerController(player: avPlayer).ignoresSafeArea()
+            NativePlayerController(player: avPlayer, fill: fill).ignoresSafeArea()
             // Taps on the picture show or hide the controls.
             Color.clear.contentShape(Rectangle()).ignoresSafeArea()
                 .onTapGesture { controlsVisible ? hideControls() : showControls() }
@@ -67,21 +69,22 @@ struct NativePlayerView: View {
                 }
                 Spacer()
                 AirPlayButton().frame(width: 38, height: 38)
-                if !subtitleOptions.isEmpty {
-                    Menu {
-                        Button { select(nil, in: .legible) } label: { Label("Off", systemImage: selectedSubtitle == nil ? "checkmark" : "") }
-                        ForEach(subtitleOptions, id: \.self) { o in
-                            Button { select(o, in: .legible) } label: { Label(o.displayName, systemImage: o == selectedSubtitle ? "checkmark" : "") }
-                        }
-                    } label: { circleLabel("captions.bubble", on: selectedSubtitle != nil) }
-                }
-                if audioOptions.count > 1 {
-                    Menu {
-                        ForEach(audioOptions, id: \.self) { o in
-                            Button { select(o, in: .audible) } label: { Label(o.displayName, systemImage: o == selectedAudio ? "checkmark" : "") }
-                        }
-                    } label: { circleLabel("waveform") }
-                }
+                Menu {
+                    Button { select(nil, in: .legible) } label: { Label("Off", systemImage: selectedSubtitle == nil ? "checkmark" : "") }
+                    ForEach(subtitleOptions, id: \.self) { o in
+                        Button { select(o, in: .legible) } label: { Label(o.displayName, systemImage: o == selectedSubtitle ? "checkmark" : "") }
+                    }
+                    if subtitleOptions.isEmpty {
+                        Divider()
+                        Text("No subtitle tracks in this stream. Subtitle files next to the video travel with it; embedded ones do not yet.")
+                    }
+                } label: { circleLabel("captions.bubble", on: selectedSubtitle != nil) }
+                Menu {
+                    ForEach(audioOptions, id: \.self) { o in
+                        Button { select(o, in: .audible) } label: { Label(o.displayName, systemImage: o == selectedAudio ? "checkmark" : "") }
+                    }
+                    if audioOptions.isEmpty { Text("One audio track") }
+                } label: { circleLabel("waveform") }
             }
             Spacer()
             HStack(spacing: 44) {
@@ -95,6 +98,11 @@ struct NativePlayerView: View {
             VStack(spacing: 6) {
                 TimelineBar(clock: clock, chapters: playback.chapters, scrubTime: $scrubTime, itemKey: playback.itemKey) { seek(to: $0) }
                 HStack(spacing: 8) {
+                    Menu {
+                        ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in
+                            Button { setRate(Float(r)) } label: { Label("\(r.formatted())×", systemImage: rate == Float(r) ? "checkmark" : "") }
+                        }
+                    } label: { Text("\(rate.formatted())×").font(.caption.bold()).foregroundStyle(rate != 1 ? .black : .white).padding(.horizontal, 10).padding(.vertical, 6).background(rate != 1 ? Color.accentColor : Color.white.opacity(0.15), in: Capsule()) }
                     if !playback.chapters.isEmpty {
                         circle("backward.frame", size: 30) { jumpChapter(-1) }
                         Menu {
@@ -104,6 +112,7 @@ struct NativePlayerView: View {
                         } label: { Text("Chapters").font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6).background(Color.white.opacity(0.15), in: Capsule()) }
                         circle("forward.frame", size: 30) { jumpChapter(+1) }
                     }
+                    Button { fill.toggle() } label: { Text(fill ? "Fill" : "Fit").font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6).background(Color.white.opacity(0.15), in: Capsule()) }
                     Spacer()
                 }
             }
@@ -235,7 +244,13 @@ struct NativePlayerView: View {
 
     private func togglePlayPause() {
         guard let p = avPlayer else { return }
-        if p.timeControlStatus == .paused { p.play() } else { p.pause() }
+        if p.timeControlStatus == .paused { p.play(); p.rate = rate } else { p.pause() }
+    }
+
+    private func setRate(_ r: Float) {
+        rate = r
+        guard let p = avPlayer, p.timeControlStatus != .paused else { return }
+        p.rate = r
     }
 
     private func loadSelections(_ item: AVPlayerItem) {
@@ -301,6 +316,7 @@ struct NativePlayerView: View {
 
 struct NativePlayerController: UIViewControllerRepresentable {
     let player: AVPlayer?
+    var fill = false
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.showsPlaybackControls = false   // Reel draws its own, in the file's time
@@ -308,5 +324,9 @@ struct NativePlayerController: UIViewControllerRepresentable {
         vc.updatesNowPlayingInfoCenter = true
         return vc
     }
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) { if vc.player !== player { vc.player = player } }
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
+        let gravity: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
+        if vc.videoGravity != gravity { vc.videoGravity = gravity }
+    }
 }
