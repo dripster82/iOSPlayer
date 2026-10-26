@@ -318,6 +318,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         func mediaDidFinishParsing(_ aMedia: VLCMedia) { finish() }
     }
 
+    /// Whether the stream being served ran to the file's end (a part-way copy included).
+    public var streamFinished: Bool { segmenter?.finished ?? false }
     /// Stops the copy (the user backed out). A stream that was not finished is discarded.
     public func cancel() { stop(discard: !(segmenter?.finished ?? false)) }
     /// The last stop's VLC shutdown and folder removal, still running.

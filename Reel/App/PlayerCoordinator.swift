@@ -572,6 +572,9 @@ final class PlayerCoordinator: ObservableObject {
 
     func playNext(settings: AppSettings) {
         guard let next = upNext else { dismiss(); return }
+        // Leaving during the credits counts as having watched it; leaving earlier keeps the place.
+        let nearEnd = engine.status == .ended || (engine.duration > 0 && engine.time >= engine.duration - 60)
+        saveProgress(markWatched: nearEnd)
         play(next, settings: settings)
     }
 

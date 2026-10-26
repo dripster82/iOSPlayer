@@ -193,8 +193,11 @@ struct NativePlayerView: View {
         playing = true
         clock.set(time: playback.startAt + playback.timeOffset, duration: max(playback.knownDuration, 1))
         endWatcher = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { _ in
-            // The copy's end is the file's end only when the copy ran to the end.
-            if playback.timeOffset == 0 || HLSRemuxer.completed(for: playback.itemKey) != nil { close(markWatched: true, continuing: true) } else { close() }
+            // The copy's end is the file's end only when the copy ran to the end: a kept whole copy,
+            // or the live one (part-way copies included) having finished.
+            let atEnd = playback.timeOffset == 0 || HLSRemuxer.completed(for: playback.itemKey) != nil || HLSRemuxer.shared.streamFinished
+            Diagnostics.log("player", "native playback reached the copy's end\(atEnd ? ", the file's end" : "")")
+            if atEnd { close(markWatched: true, continuing: true) } else { close() }
         }
         // Why a black screen, when it is one: the item's status and error go to the log. The start
         // position is applied once the item is ready; before that a seek is clamped to zero.

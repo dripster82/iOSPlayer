@@ -372,6 +372,8 @@ struct TimedOverlays: View {
     @State private var now: TimeInterval = 0
     @State private var duration: TimeInterval = 0
     @State private var upNextCountdown: Int?
+    /// The viewer cancelled the countdown: the card stays, nothing starts on its own.
+    @State private var countdownCancelled = false
 
     var body: some View {
         ZStack {
@@ -380,18 +382,25 @@ struct TimedOverlays: View {
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
             }
-            if let next = player.upNext, duration > 0, duration - now < 20 || engine.status == .ended { upNextCard(next) }
+            if let next = player.upNext, duration > 0, duration - now < upNextLead || engine.status == .ended { upNextCard(next) }
         }
         .onChange(of: now) { _, t in
             if duration > 0, duration - t < 60, duration - t > 0, player.upNext != nil { player.prepareNext() }
+            // The countdown runs from the moment the card shows, so the next episode starts
+            // before the credits are over, not after them.
+            if duration > 0, duration - t < upNextLead, duration - t > 0, upNextCountdown == nil, !countdownCancelled { startCountdown() }
+            if duration > 0, duration - t > upNextLead + 5 { countdownCancelled = false }
         }
         .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
             let rounded = t.rounded()
             if rounded != now { now = rounded }
             if engine.clock.duration != duration { duration = engine.clock.duration }
         }
-        .onChange(of: engine.status) { _, s in if s == .ended { startCountdown() } }
+        .onChange(of: engine.status) { _, s in if s == .ended, upNextCountdown == nil, !countdownCancelled { startCountdown() } }
     }
+
+    /// How long before the end the Up Next card appears: the countdown plus a few seconds to read it.
+    private var upNextLead: TimeInterval { TimeInterval(max(3, settings.autoPlayCountdown)) + 10 }
 
     /// Chapters first (a named intro, or the unnamed-chapter shape rule); otherwise what the viewer's
     /// own skips have taught the app about this show.
@@ -409,7 +418,7 @@ struct TimedOverlays: View {
                 HStack(spacing: 6) {
                     Button("Play now") { player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
                     if upNextCountdown != nil {
-                        Button("Cancel") { upNextCountdown = nil }.buttonStyle(.bordered).controlSize(.small)
+                        Button("Cancel") { upNextCountdown = nil; countdownCancelled = true }.buttonStyle(.bordered).controlSize(.small)
                     } else {
                         Button("Stop") { player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
                     }
@@ -423,7 +432,7 @@ struct TimedOverlays: View {
     }
 
     private func startCountdown() {
-        guard player.upNext != nil, settings.autoPlayNext, !player.stopsAfterCurrent else { return }
+        guard player.upNext != nil, settings.autoPlayNext, !player.stopsAfterCurrent, upNextCountdown == nil else { return }
         upNextCountdown = max(3, settings.autoPlayCountdown)
         Task {
             while let c = upNextCountdown, c > 0 { try? await Task.sleep(for: .seconds(1)); if upNextCountdown != nil { upNextCountdown = c - 1 } }
@@ -447,6 +456,16 @@ struct TimelineBar: View {
         let shown = scrubTime ?? clock.time
         Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime, itemKey: itemKey, live: liveURL != nil) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
             .onChange(of: scrubTime) { was, now in
+                // A drag SwiftUI cancels without an end (the controls redraw under the finger) would
+                // leave the bar pinned where the finger was while playback runs on: a position that
+                // has not moved for a while is taken as the seek.
+                if let now {
+                    let token = now
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        if scrubTime == token { onSeek(token); scrubTime = nil }
+                    }
+                }
                 guard let liveURL else { return }
                 switch (was, now) {
                 case (nil, let t?): ScrubPreview.shared.begin(url: liveURL, at: t, hardwareDecoding: hardwareDecoding)
