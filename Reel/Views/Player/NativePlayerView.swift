@@ -3,6 +3,7 @@ import AVKit
 import MediaCore
 import Library
 import Playback
+import Metadata
 
 /// Apple's player, used when AirPlay is the active route: MP4, M4V and MOV directly (from a
 /// download, an HTTP URL, or a share through the local bridge), and anything else through the HLS
@@ -49,6 +50,7 @@ struct NativePlayerView: View {
             Color.clear.contentShape(Rectangle()).ignoresSafeArea()
                 .onTapGesture { controlsVisible ? hideControls() : showControls() }
             if controlsVisible { controls }
+            NativeUpNext(clock: clock, duration: { duration }, onStop: { close() })
             if player.isLoading {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -417,5 +419,64 @@ struct NativePlayerController: UIViewControllerRepresentable {
         if vc.player !== player { vc.player = player }
         let gravity: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
         if vc.videoGravity != gravity { vc.videoGravity = gravity }
+    }
+}
+
+
+/// The Up Next card over Apple's player: appears where the credits start (or the countdown plus ten
+/// seconds before the end), counts down, and goes on to the next episode. Its own view so that only
+/// it redraws on the clock's ticks.
+private struct NativeUpNext: View {
+    @ObservedObject var clock: PlaybackClock
+    let duration: () -> TimeInterval
+    let onStop: () -> Void
+    @EnvironmentObject private var player: PlayerCoordinator
+    @EnvironmentObject private var settings: AppSettings
+    @State private var countdown: Int?
+    @State private var cancelled = false
+
+    private var lead: TimeInterval { TimeInterval(max(3, settings.autoPlayCountdown)) + 10 }
+    private var showAt: TimeInterval { player.creditsStart ?? (duration() - lead) }
+
+    var body: some View {
+        let total = duration(), now = clock.time
+        ZStack {
+            if let next = player.upNext, total > 1, now >= showAt { card(next) }
+        }
+        .onChange(of: clock.time) { _, t in
+            if total > 1, t >= showAt, t < total, countdown == nil, !cancelled { start() }
+            if t < showAt - 5 { cancelled = false }
+        }
+    }
+
+    private func card(_ next: MediaItem) -> some View {
+        HStack(spacing: 10) {
+            ArtworkImage(url: ArtworkURL.still(next.stillPath) ?? ArtworkURL.poster(next.posterPath), title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90, height: 90 * 9 / 16)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Up next" + (countdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
+                Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 6) {
+                    Button("Play now") { countdown = nil; player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
+                    if countdown != nil {
+                        Button("Cancel") { countdown = nil; cancelled = true }.buttonStyle(.bordered).controlSize(.small)
+                    } else {
+                        Button("Stop") { onStop() }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12).frame(width: 300).background(Color(white: 0.1, opacity: 0.95), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.1)))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 110)
+    }
+
+    private func start() {
+        guard player.upNext != nil, settings.autoPlayNext, !player.stopsAfterCurrent else { return }
+        countdown = max(3, settings.autoPlayCountdown)
+        Task {
+            while let c = countdown, c > 0 { try? await Task.sleep(for: .seconds(1)); if countdown != nil { countdown = c - 1 } }
+            if countdown == 0 { countdown = nil; Diagnostics.log("player", "AirPlay: Up Next countdown done, on to the next episode"); player.playNext(settings: settings) }
+        }
     }
 }

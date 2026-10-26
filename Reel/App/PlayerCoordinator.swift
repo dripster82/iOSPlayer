@@ -136,6 +136,9 @@ final class PlayerCoordinator: ObservableObject {
         bridgeLive = true
         nativePlayback = playback
         isPresented = true
+        if let url = lastPlaybackURL ?? engine.currentURL, playback.knownDuration > 0 {
+            resolveCredits(key: playback.itemKey, url: url, duration: playback.knownDuration, chapters: playback.chapters)
+        }
     }
 
     /// Starts an HLS copy of an MKV near `startAt` and serves it through the bridge. Returns the
@@ -470,9 +473,10 @@ final class PlayerCoordinator: ObservableObject {
     /// fifty opens of the file, four seconds each over a share, so its answer is a few minutes away
     /// and is wanted before the end). Episodes only: a film's credits are not followed by anything,
     /// and its length makes the scan dear.
-    private func resolveCredits(key: String, url: URL) {
-        guard let current, current.kind == .episode, engine.duration > 0 else { return }
-        if let byChapter = engine.chapters.creditsStart(fileDuration: engine.duration) {
+    private func resolveCredits(key: String, url: URL, duration: TimeInterval? = nil, chapters: [Chapter]? = nil) {
+        let duration = duration ?? engine.duration, chapters = chapters ?? engine.chapters
+        guard let current, current.kind == .episode, duration > 0, creditsStart == nil else { return }
+        if let byChapter = chapters.creditsStart(fileDuration: duration) {
             creditsStart = byChapter
             Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
             return
@@ -482,7 +486,7 @@ final class PlayerCoordinator: ObservableObject {
             if let stored { Diagnostics.log("player", "credits known at \(Int(stored))s") }
             return
         }
-        let duration = engine.duration, software = Self.needsSoftwareDecoding(currentVideoCodec)
+        let software = Self.needsSoftwareDecoding(currentVideoCodec)
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
             guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
@@ -622,8 +626,13 @@ final class PlayerCoordinator: ObservableObject {
     func playNext(settings: AppSettings) {
         guard let next = upNext else { dismiss(); return }
         // Leaving during the credits counts as having watched it; leaving earlier keeps the place.
-        let nearEnd = engine.status == .ended || (engine.duration > 0 && engine.time >= engine.duration - 60)
-        saveProgress(markWatched: nearEnd)
+        if let playback = nativePlayback {
+            let total = playback.knownDuration
+            if total > 0 { library.recordProgress(itemKey: playback.itemKey, position: nativeTime >= total - 90 || (creditsStart.map { nativeTime >= $0 } ?? false) ? total : nativeTime, duration: total) }
+        } else {
+            let nearEnd = engine.status == .ended || (engine.duration > 0 && engine.time >= engine.duration - 60) || (creditsStart.map { engine.time >= $0 } ?? false)
+            saveProgress(markWatched: nearEnd)
+        }
         play(next, settings: settings)
     }
 
