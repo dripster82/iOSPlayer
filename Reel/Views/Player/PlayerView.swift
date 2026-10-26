@@ -456,16 +456,6 @@ struct TimelineBar: View {
         let shown = scrubTime ?? clock.time
         Scrubber(time: shown, duration: clock.duration, chapters: chapters, preview: scrubTime, itemKey: itemKey, live: liveURL != nil) { scrubTime = $0 } onCommit: { onSeek($0); scrubTime = nil }
             .onChange(of: scrubTime) { was, now in
-                // A drag SwiftUI cancels without an end (the controls redraw under the finger) would
-                // leave the bar pinned where the finger was while playback runs on: a position that
-                // has not moved for a while is taken as the seek.
-                if let now {
-                    let token = now
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(2))
-                        if scrubTime == token { onSeek(token); scrubTime = nil }
-                    }
-                }
                 guard let liveURL else { return }
                 switch (was, now) {
                 case (nil, let t?): ScrubPreview.shared.begin(url: liveURL, at: t, hardwareDecoding: hardwareDecoding)
@@ -529,10 +519,32 @@ struct Scrubber: View {
             }
             .frame(height: 28)
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in onChange(max(0, min(duration, Double(v.location.x / g.size.width) * duration))) }
-                .onEnded { v in onCommit(max(0, min(duration, Double(v.location.x / g.size.width) * duration))) })
+            // UIKit tracks the finger: a SwiftUI drag that the controls' redraws cancel never reports
+            // its end, which left the bar pinned where the finger was while playback ran on.
+            .overlay(ScrubTouchSurface(
+                onChange: { x in onChange(max(0, min(duration, Double(x / g.size.width) * duration))) },
+                onEnd: { x in onCommit(max(0, min(duration, Double(x / g.size.width) * duration))) }))
         }.frame(height: 28)
+    }
+}
+
+/// A touch surface over the scrubber. Every touch ends in `onEnd`, cancelled ones included (an
+/// incoming call, a system gesture), so the scrub always resolves into a seek.
+struct ScrubTouchSurface: UIViewRepresentable {
+    let onChange: (CGFloat) -> Void
+    let onEnd: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> TouchView { let v = TouchView(); v.backgroundColor = .clear; return v }
+    func updateUIView(_ v: TouchView, context: Context) { v.onChange = onChange; v.onEnd = onEnd }
+
+    final class TouchView: UIView {
+        var onChange: ((CGFloat) -> Void)?
+        var onEnd: ((CGFloat) -> Void)?
+        private func x(_ touches: Set<UITouch>) -> CGFloat? { touches.first.map { $0.location(in: self).x } }
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { if let x = x(touches) { onChange?(x) } }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { if let x = x(touches) { onChange?(x) } }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { if let x = x(touches) { onEnd?(x) } }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { if let x = x(touches) { onEnd?(x) } }
     }
 }
 

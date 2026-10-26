@@ -3,7 +3,7 @@ import UIKit
 import MediaCore
 import VLCKit
 
-/// Preview frames for the scrubber: one per minute of runtime (at least 9, at most 60), made with
+/// Preview frames for the scrubber: one per 20 s of runtime (at least 9, at most 150), made with
 /// VLC's thumbnailer a minute into a play (so they never compete with the opening buffer) and kept
 /// in Caches/scrub-v3/<item>/. Each frame is a separate open of the stream, a second or two over
 /// SMB, so they are made one at a time, coarse first (every ninth, then the gaps) so the scrubber
@@ -21,8 +21,9 @@ final class ScrubThumbnails: ObservableObject {
     private var inProgress: Set<String> = []
     @Published private(set) var version = 0
 
-    /// How many frames a title of this length gets: one a minute, 9 to 60.
-    static func frameCount(for duration: TimeInterval) -> Int { min(60, max(9, Int(duration / 60))) }
+    /// How many frames a title of this length gets: one every 20 s, 9 to 150 (so a two-hour film
+    /// gets one every 48 s). Holding the finger still brings up the live preview for the exact frame.
+    static func frameCount(for duration: TimeInterval) -> Int { min(150, max(9, Int(duration / 20))) }
     /// The order frames are made in: every ninth first, then the rest from the start.
     static func order(_ n: Int) -> [Int] {
         let stride = max(1, n / 9)
@@ -33,8 +34,8 @@ final class ScrubThumbnails: ObservableObject {
     private static var root: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         // Earlier caches: identical frames (before the start-time fix), then nine per title.
-        for old in ["scrub", "scrub-v2"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
-        let dir = caches.appendingPathComponent("scrub-v3", isDirectory: true)
+        for old in ["scrub", "scrub-v2", "scrub-v3"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
+        let dir = caches.appendingPathComponent("scrub-v4", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
