@@ -38,6 +38,10 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     }
 
     private var player: VLCMediaPlayer?
+    /// The libvlc instance a conversion runs on (its own, so --codec applies); kept while it runs.
+    private var conversionLibrary: VLCLibrary?
+    /// Debug builds: where the conversion instance writes VLC's log (set with `enableVLCLog`).
+    public static var conversionLogURL: URL?
     private var segmenter: Segmenter?
     private var readyContinuation: CheckedContinuation<Void, Error>?
     fileprivate(set) var currentDirectory: URL?
@@ -124,9 +128,15 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
-        let p = plan.video != nil
-            ? VLCMediaPlayer(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
-            : VLCMediaPlayer()
+        let p: VLCMediaPlayer
+        if plan.video != nil {
+            let lib = VLCLibrary(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
+            if let logURL = Self.conversionLogURL { lib.loggers = [Self.fileLogger(at: logURL, level: 3)] }
+            conversionLibrary = lib
+            p = VLCMediaPlayer(library: lib)
+        } else {
+            p = VLCMediaPlayer()
+        }
         p.delegate = self
         player = p
         p.media = media
@@ -192,12 +202,17 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// Sends VLC's own log to a file (debug builds; truncated each launch). Its messages say why a
     /// frame was dropped or a stream output stalled, which Reel's log cannot.
     public static func enableVLCLog(to url: URL, level: Int = 3) {
+        VLCLibrary.shared().loggers = [fileLogger(at: url, level: level)]
+        conversionLogURL = url.deletingPathExtension().appendingPathExtension("convert.log")
+    }
+
+    static func fileLogger(at url: URL, level: Int) -> VLCFileLogger {
         FileManager.default.createFile(atPath: url.path, contents: nil)
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        let handle = (try? FileHandle(forWritingTo: url)) ?? FileHandle.standardError
         let logger = VLCFileLogger(fileHandle: handle)
         logger.level = VLCLogLevel(rawValue: Int32(level)) ?? .warning
         logger.formatter = RedactingFormatter()
-        VLCLibrary.shared().loggers = [logger]
+        return logger
     }
 
     /// VLC prints the URLs it opens, credentials included; the log must not.
@@ -502,7 +517,7 @@ final class Segmenter: @unchecked Sendable {
                     index += 1
                     writePlaylists(ended: false)
                     if !readySent, (segments[videoID]?.count ?? 0) >= 2 { readySent = true; onEvent(.ready) }
-                    if index % 20 == 0, let v = segments[videoID] {
+                    if [1, 2, 3, 5, 10].contains(index) || index % 20 == 0, let v = segments[videoID] {
                         Diagnostics.log("airplay", "segments: \(v.count) video (\(Int(v.reduce(0) { $0 + $1.seconds }))s) after \(Int(Date().timeIntervalSince(startedAt)))s")
                     }
                 default:
