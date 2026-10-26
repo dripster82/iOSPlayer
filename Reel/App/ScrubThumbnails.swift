@@ -34,8 +34,9 @@ final class ScrubThumbnails: ObservableObject {
     private static var root: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         // Earlier caches: identical frames (before the start-time fix), then nine per title.
-        for old in ["scrub", "scrub-v2"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
-        let dir = caches.appendingPathComponent("scrub-v4", isDirectory: true)
+        // scrub-v4 held frames the hardware decoder got wrong (black, green); v3 is kept as the stand-in set.
+        for old in ["scrub", "scrub-v2", "scrub-v4"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
+        let dir = caches.appendingPathComponent("scrub-v5", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -61,7 +62,7 @@ final class ScrubThumbnails: ObservableObject {
 
     /// Makes whatever frames are missing. Safe to call repeatedly. `duration` is the title's length,
     /// which the player knows by the time this is called; without it no frame can be placed.
-    func ensure(key: String, url: URL, duration: TimeInterval) {
+    func ensure(key: String, url: URL, duration: TimeInterval, softwareDecoding: Bool = false) {
         guard duration > 0, !inProgress.contains(key) else { return }
         if memory[key] == nil { load(key) }
         var n = counts[key] ?? Self.frameCount(for: duration)
@@ -88,7 +89,7 @@ final class ScrubThumbnails: ObservableObject {
                 // Stop (and pick up next play) if the device heated up or went to Low Power Mode meanwhile.
                 guard DeviceConditions.allowsBackgroundWork else { break }
                 let at = (Double(i) + 0.5) / Double(n) * duration
-                guard let image = await Self.frame(url: url, at: at) else { continue }
+                guard let image = await Self.frame(url: url, at: at, softwareDecoding: softwareDecoding), Self.looksLikeAPicture(image) else { continue }
                 let ui = UIImage(cgImage: image)
                 if let data = ui.jpegData(compressionQuality: 0.7) { try? data.write(to: dir.appendingPathComponent("\(i).jpg")) }
                 memory[key, default: [:]][i] = ui
@@ -117,11 +118,12 @@ final class ScrubThumbnails: ObservableObject {
     }
 
     /// One frame at `seconds`, through VLCMediaThumbnailer and its delegate.
-    private static func frame(url: URL, at seconds: TimeInterval) async -> CGImage? {
+    private static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool) async -> CGImage? {
         guard let media = VLCMedia(url: url) else { return nil }
         media.addOption(":start-time=\(Int(seconds))")
         media.addOption(":no-audio")
         media.addOption(":network-caching=500")
+        if softwareDecoding { media.addOption(":avcodec-hw=none") }
         return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
             let job = ThumbJob(continuation: continuation)
             let thumbnailer = VLCMediaThumbnailer(media: media, andDelegate: job)
@@ -135,6 +137,18 @@ final class ScrubThumbnails: ObservableObject {
         }
     }
     private static var jobs = Set<ThumbJob>()
+
+    /// A frame the decoder got wrong is a flat colour (black, or green from a bad hardware decode).
+    /// A sample of pixels has to differ for the frame to be kept.
+    static func looksLikeAPicture(_ image: CGImage) -> Bool {
+        let w = 16, h = 9
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return true }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var lo = [255, 255, 255], hi = [0, 0, 0]
+        for p in 0..<(w * h) { for c in 0..<3 { let v = Int(pixels[p * 4 + c]); lo[c] = min(lo[c], v); hi[c] = max(hi[c], v) } }
+        return (0..<3).contains { hi[$0] - lo[$0] > 24 }
+    }
 
     private final class ThumbJob: NSObject, VLCMediaThumbnailerDelegate {
         var thumbnailer: VLCMediaThumbnailer?

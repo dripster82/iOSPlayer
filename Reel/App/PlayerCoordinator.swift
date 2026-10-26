@@ -39,7 +39,17 @@ final class PlayerCoordinator: ObservableObject {
         return engine.audioTracks.firstIndex { $0.id == id }
     }
     /// The last stream URL resolved for the current title (the engine forgets it once stopped).
-    private var lastPlaybackURL: URL?
+    private(set) var lastPlaybackURL: URL?
+    /// The playing file's video codec, as VLC names it, once it is known.
+    private(set) var currentVideoCodec: String?
+    /// MPEG-4 Part 2 (XviD/DivX) is what the iPad's hardware decoder gets wrong: green blocks or
+    /// black. The player's own output is checked elsewhere; previews and thumbnails avoid it outright.
+    static func needsSoftwareDecoding(_ codec: String?) -> Bool {
+        guard let c = codec?.lowercased() else { return false }
+        return ["mpeg-4 video", "mpeg-4 part 2", "xvid", "divx", "mp4v", "msmpeg"].contains { c.contains($0) }
+    }
+    /// Whether the scrubber's live preview may use the hardware decoder for the current file.
+    var previewHardwareDecoding: Bool { AppSettings.current.hardwareDecoding && !Self.needsSoftwareDecoding(currentVideoCodec) }
 
     private static func titles(for item: MediaItem) -> (String, String) {
         if item.kind == .episode { return (item.show?.title ?? item.title, [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ")) }
@@ -441,7 +451,7 @@ final class PlayerCoordinator: ObservableObject {
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
             }
-            ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration)
+            ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec))
         }
     }
 
@@ -594,6 +604,7 @@ final class PlayerCoordinator: ObservableObject {
         isPresented = false
         current = nil
         currentFile = nil
+        currentVideoCodec = nil
         externalURL = nil
         learnedIntro = nil
         if case .minutes = sleepTimer { } else { setSleepTimer(nil) }
@@ -606,6 +617,7 @@ final class PlayerCoordinator: ObservableObject {
         saveTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.saveProgress() }
         engine.onProbe = { [weak self] key, probe in
             guard let self, self.current?.itemKey == key else { return }
+            self.currentVideoCodec = probe.videoCodec
             self.library.recordProbe(itemKey: key, fileID: self.currentFile?.id, videoCodec: probe.videoCodec, audio: probe.audio, subtitles: probe.subtitles, duration: probe.duration)
         }
     }
