@@ -19,3 +19,4 @@ Reel/Info.plist
 
 # Shipped API keys (copy Secrets.example.xcconfig)
 Secrets.xcconfig
+docs/app-store/screenshots/

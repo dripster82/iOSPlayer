@@ -49,12 +49,14 @@ enum DemoLibrary {
         let config = SourceConfig(id: sourceID, name: sourceName, type: .local, path: LocalSource.bundlePrefix + folder)
         guard let record = try? library.addSource(config, credentials: nil, folderRules: []) else { return }
         let ctx = library.context
-        func size(_ rel: String) -> Int64 {
+        func attributes(_ rel: String) -> (Int64, Date?) {
             let url = Bundle.main.resourceURL?.appendingPathComponent(folder).appendingPathComponent(rel)
-            return Int64((try? url?.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            let v = try? url?.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return (Int64(v?.fileSize ?? 0), v?.contentModificationDate)
         }
         func file(_ rel: String, kind: String) -> MediaFile {
-            let f = MediaFile(relativePath: rel, size: size(rel), modified: Date(), source: record)
+            let (bytes, modified) = attributes(rel)
+            let f = MediaFile(relativePath: rel, size: bytes, modified: modified, source: record)
             f.classificationRaw = kind
             f.reviewed = true
             f.resolution = "360p"

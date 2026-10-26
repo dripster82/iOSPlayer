@@ -74,7 +74,8 @@ public final class LibraryStore: ObservableObject {
         context.delete(record)   // cascades to files and folder rules
         try context.save()
         // Items left with no files (from any source) go too, including shows emptied of episodes.
-        for item in touched where !item.isDeleted && item.files.isEmpty {
+        // The cascade has deleted this source's files, but an item's list may still hold them.
+        for item in touched where !item.isDeleted && item.files.allSatisfy({ $0.isDeleted || $0.source == nil }) {
             deleted.append(SyncKeys.item(item.itemKey))
             let show = item.show
             context.delete(item)
@@ -159,6 +160,10 @@ public final class LibraryStore: ObservableObject {
 
     public func scan(_ record: SourceRecord, providers: MetadataProviders) {
         guard scanTasks[record.id] == nil else { return }
+        // The sample library ships with its items and files already in place; a scan would see the
+        // bundle's own dates, treat every file as changed, detach it from its demo title and try to
+        // match made-up titles against TMDb.
+        if record.path.hasPrefix("bundle:") { record.status = .online; record.lastScan = Date(); return }
         let id = record.id
         let creds = CredentialStore.shared.load(for: id)
         let scanner = LibraryScanner(modelContainer: container)
@@ -392,10 +397,15 @@ public final class LibraryStore: ObservableObject {
     /// Deletes the orphans Fix Match left behind. Called once at launch, before any page can hold one.
     public func purgePendingDeletions() {
         let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingDeletion })
-        guard let orphans = try? context.fetch(d), !orphans.isEmpty else { return }
+        var orphans = (try? context.fetch(d)) ?? []
+        // Placeholders (titles TMDb did not know) whose files have gone are not worth keeping either.
+        let local = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey.starts(with: "local-") })
+        for p in (try? context.fetch(local)) ?? [] where p.kind != .show && p.files.isEmpty && !orphans.contains(where: { $0 === p }) { orphans.append(p) }
+        for p in (try? context.fetch(local)) ?? [] where p.kind == .show && p.episodes.allSatisfy({ $0.files.isEmpty }) && !orphans.contains(where: { $0 === p }) { orphans.append(p) }
+        guard !orphans.isEmpty else { return }
         for o in orphans where o.files.isEmpty { context.delete(o) }
         try? context.save()
-        Diagnostics.log("library", "purged \(orphans.count) rematched orphans")
+        Diagnostics.log("library", "purged \(orphans.count) orphaned items")
     }
 
     private func override(for file: MediaFile) -> ItemOverride {

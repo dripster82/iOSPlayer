@@ -16,7 +16,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: 834D8P4J32   # Team "Paul Ketelle" (same as AiBrain)
     CODE_SIGN_STYLE: Automatic

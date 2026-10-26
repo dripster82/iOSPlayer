@@ -101,6 +101,17 @@ enum DeepLinks {
         case "demo":
             DemoLibrary.install(in: library); settings.demoInstalled = true
             return true
+        case "removesource":
+            #if DEBUG
+            // reel://removesource?name=… (Debug builds only): drops a source and its items, for test clean-up.
+            if let name = q["name"], let record = library.sources().first(where: { $0.name == name }) {
+                try? library.removeSource(record)
+                Diagnostics.log("app", "debug link removed source \(name)")
+            }
+            return true
+            #else
+            return false
+            #endif
         case "addsource":
             #if DEBUG
             guard let type = SourceType(rawValue: q["type"] ?? ""), let host = q["host"] else { return false }

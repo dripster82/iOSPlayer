@@ -11,7 +11,7 @@ documentation as last known, which should be re-read in a browser before submiss
 | TheTVDB | fallback show search, artwork ids | **Project key yes, but every user must subscribe (PIN)**, or a negotiated licence | Keep as an optional, user-keyed extra, or drop it. Do not ship a key without subscriptions. |
 | OpenSubtitles | subtitle search and download | **App (consumer) key yes**; downloads need the user's own account | Ship the consumer key for search; keep user login for downloads. Blocked, re-check. |
 | AniDB | anime title index (daily dump) | No key. One download a day, identifiable user agent, cached | Allowed. Keep the weekly refresh and the Reel user agent. Blocked, re-check. |
-| Anime-Lists | AniDB to TMDB/TheTVDB mapping | No key. Public GitHub file, **no licence stated** | Low risk, credit it; ask the maintainers or vendor a copy with credit. |
+| Anime-Lists | AniDB to TMDB/TheTVDB mapping | No key. Public GitHub file, **no licence stated** (confirmed via the GitHub licence API, 26 Oct 2026) | Low risk, credit it; ask the maintainers or vendor a copy with credit. |
 
 ## TMDB (fetched: api-terms-of-use, developer FAQ)
 
