@@ -33,6 +33,7 @@ struct NativePlayerView: View {
     /// While set, a jump ahead in the first seconds (the receiver choosing a live copy's edge
     /// rather than its start) is undone; a seek of the viewer's own ends it.
     @State private var startGuardUntil: Date?
+    @State private var lastGuardTime: Double = -1
     @State private var audioOptions: [AVMediaSelectionOption] = []
     @State private var subtitleOptions: [AVMediaSelectionOption] = []
     @State private var selectedAudio: AVMediaSelectionOption?
@@ -221,6 +222,7 @@ struct NativePlayerView: View {
                     if !sought, playback.startAt > 0 || playback.timeOffset > 0 {
                         sought = true
                         startGuardUntil = Date().addingTimeInterval(20)
+                        lastGuardTime = -1
                         // Over AirPlay "ready" can come ten seconds into playback, so being a little past
                         // the start is normal; only a receiver well ahead (a live copy's edge) or behind
                         // (a kept copy opened at zero for a resume) is moved.
@@ -240,13 +242,17 @@ struct NativePlayerView: View {
             guard t.seconds.isFinite else { return }
             let now = t.seconds + playback.timeOffset
             if let until = startGuardUntil {
+                // A jump between two ticks (half a second apart) of more than ten seconds, with no
+                // seek of the viewer's own, is the receiver moving to the live copy's edge. Steady
+                // playback, however far it has got, is not.
                 if Date() > until { startGuardUntil = nil }
-                else if scrubTime == nil, t.seconds > playback.startAt + 15 {
+                else if scrubTime == nil, lastGuardTime >= 0, t.seconds - lastGuardTime > 10 {
                     startGuardUntil = nil
-                    Diagnostics.log("player", "native playback began \(Int(t.seconds - playback.startAt))s past the start; seeking back")
+                    Diagnostics.log("player", "native playback jumped from \(Int(lastGuardTime))s to \(Int(t.seconds))s into the copy; seeking back to the start")
                     p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
                     return
                 }
+                lastGuardTime = t.seconds
             }
             player.nativeTime = now
             clock.set(time: now, duration: duration)
