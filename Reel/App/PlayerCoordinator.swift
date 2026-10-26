@@ -431,12 +431,13 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
-    /// A minute into a play, make the scrubber's preview frames if this title has none yet. Each frame
+    /// Soon into a play, make the scrubber's preview frames this title lacks. Each frame
     /// is another open of the stream, so none are made on cellular, in Low Power Mode or on a hot device.
     private func scheduleScrubThumbnails(key: String, url: URL) {
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(60))
-            guard let self, self.current?.itemKey == key, self.engine.status == .playing else { return }
+            // Soon after the start, not a minute in: a short visit should still leave frames behind.
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, self.current?.itemKey == key, [.playing, .paused, .buffering].contains(self.engine.status) else { return }
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
             }

@@ -34,14 +34,19 @@ final class ScrubThumbnails: ObservableObject {
     private static var root: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         // Earlier caches: identical frames (before the start-time fix), then nine per title.
-        for old in ["scrub", "scrub-v2", "scrub-v3"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
+        for old in ["scrub", "scrub-v2"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
         let dir = caches.appendingPathComponent("scrub-v4", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
-    private static func folder(_ key: String) -> URL {
-        root.appendingPathComponent(String((key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key).prefix(180)), isDirectory: true)
+    private static func folderName(_ key: String) -> String { String((key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key).prefix(180)) }
+    private static func folder(_ key: String) -> URL { root.appendingPathComponent(folderName(key), isDirectory: true) }
+    /// The one-a-minute cache from before: its frames stand in until the denser set is made.
+    private static func legacyFolder(_ key: String) -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("scrub-v3", isDirectory: true).appendingPathComponent(folderName(key), isDirectory: true)
     }
+    /// Titles whose frames in memory are the old coarse set: shown, but every index is still to be made.
+    private var legacy: Set<String> = []
 
     /// The cached frame nearest to `fraction` (0…1), or nil while none exist yet.
     func image(for key: String, fraction: Double) -> UIImage? {
@@ -59,9 +64,17 @@ final class ScrubThumbnails: ObservableObject {
     func ensure(key: String, url: URL, duration: TimeInterval) {
         guard duration > 0, !inProgress.contains(key) else { return }
         if memory[key] == nil { load(key) }
-        let n = counts[key] ?? Self.frameCount(for: duration)
+        var n = counts[key] ?? Self.frameCount(for: duration)
+        if legacy.contains(key), let old = memory[key], let oldN = counts[key], oldN > 0 {
+            // Spread the coarse frames over the new index space so they keep showing while the
+            // real ones replace them one by one.
+            n = Self.frameCount(for: duration)
+            var spread: [Int: UIImage] = [:]
+            for i in 0..<n { let fraction = (Double(i) + 0.5) / Double(n); let oldIndex = min(oldN - 1, max(0, Int(fraction * Double(oldN)))); if let img = old[oldIndex] { spread[i] = img } }
+            memory[key] = spread
+        }
         counts[key] = n
-        let have = Set(memory[key]?.keys ?? [:].keys)
+        let have = legacy.contains(key) ? Set<Int>() : Set(memory[key]?.keys ?? [:].keys)
         let missing = Self.order(n).filter { !have.contains($0) }
         guard !missing.isEmpty else { return }
         inProgress.insert(key)
@@ -82,20 +95,24 @@ final class ScrubThumbnails: ObservableObject {
                 made += 1
                 version += 1
             }
+            if made == missing.count { legacy.remove(key) }
             Diagnostics.log("player", "scrub thumbnails for \(key.prefix(40)): \(made) of \(missing.count) made (\(n) per title)")
         }
     }
 
     private func load(_ key: String) {
-        let dir = Self.folder(key)
-        let n = Int((try? String(contentsOf: dir.appendingPathComponent("count.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
-        var out: [Int: UIImage] = [:]
-        if n > 0 {
-            for i in 0..<n {
-                if let img = UIImage(contentsOfFile: dir.appendingPathComponent("\(i).jpg").path) { out[i] = img }
-            }
-            counts[key] = n
+        func read(_ dir: URL) -> (Int, [Int: UIImage]) {
+            let n = Int((try? String(contentsOf: dir.appendingPathComponent("count.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+            var out: [Int: UIImage] = [:]
+            for i in 0..<max(0, n) { if let img = UIImage(contentsOfFile: dir.appendingPathComponent("\(i).jpg").path) { out[i] = img } }
+            return (n, out)
         }
+        var (n, out) = read(Self.folder(key))
+        if out.isEmpty {
+            let (oldN, old) = read(Self.legacyFolder(key))
+            if !old.isEmpty { n = oldN; out = old; legacy.insert(key) }
+        }
+        if n > 0 { counts[key] = n }
         memory[key] = out
     }
 
