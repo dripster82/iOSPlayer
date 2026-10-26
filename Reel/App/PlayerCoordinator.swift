@@ -385,7 +385,8 @@ final class PlayerCoordinator: ObservableObject {
                     if let (target, offset) = await prepareForAirPlay(file: file, url: url, item: item, startAt: resume) {
                         let known = file.duration ?? TimeInterval((item.runtimeMinutes ?? 0) * 60)
                         let (t, s) = Self.titles(for: item)
-                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: 0, timeOffset: offset, knownDuration: known, title: t, subtitle: s, chapters: nativeChapters(for: file)))
+                        // A kept copy starts at zero and is seeked; a fresh one begins near the resume point itself.
+                        await presentNative(NativePlayback(itemKey: item.itemKey, url: target, startAt: offset > 0 ? 0 : resume, timeOffset: offset, knownDuration: known, title: t, subtitle: s, chapters: nativeChapters(for: file)))
                         return
                     }
                     guard current?.itemKey == item.itemKey else { return }   // backed out while preparing
@@ -588,7 +589,15 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     /// Writes the current position now (the app is about to be suspended, or the user asked).
-    func flushProgress() { saveProgress() }
+    /// The position now (the app is about to be suspended, or sync asked). During AirPlay the
+    /// native view keeps `nativeTime` current, so that is what gets written.
+    func flushProgress() {
+        if let playback = nativePlayback, nativeTime > 0 {
+            library.recordProgress(itemKey: playback.itemKey, position: nativeTime, duration: max(playback.knownDuration, nativeTime + 1))
+            return
+        }
+        saveProgress()
+    }
 
     private func saveProgress(markWatched: Bool = false) {
         if let f = currentFile, !engine.chapters.isEmpty { library.recordChapters(fileID: f.id, chapters: engine.chapters) }

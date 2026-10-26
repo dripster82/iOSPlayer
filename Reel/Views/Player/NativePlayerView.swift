@@ -53,6 +53,9 @@ struct NativePlayerView: View {
         .onAppear { start() }
         .onDisappear { saveProgress(); tearDown() }
         .onChange(of: player.sleepFired) { _, _ in avPlayer?.pause(); saveProgress() }
+        // Every 30 s during playback, as the device player does, so the other devices (and a crash)
+        // see where this one got to.
+        .task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(30)); if playing { saveProgress() } } }
     }
 
     // MARK: - Controls (the VLC player's layout, in the file's own time)
