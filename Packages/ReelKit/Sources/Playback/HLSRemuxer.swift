@@ -119,7 +119,9 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         let dir = Self.directory.appendingPathComponent(Self.folderName(key) + (startAt > 0 || adjustments.changesStream ? "-partial" : ""), isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let pipe = dir.appendingPathComponent("pipe")
+        // Its own name: the reader of a refused copy removes its pipe as it exits, which would take
+        // the conversion's pipe with it if the retry had made one at the same path.
+        let pipe = dir.appendingPathComponent("pipe-" + String(UInt32.random(in: 1..<UInt32.max), radix: 36))
         guard mkfifo(pipe.path, 0o600) == 0 else { throw RemuxError.failed("couldn't make a pipe") }
         currentDirectory = dir
         outcome = nil
@@ -142,7 +144,15 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         // instance), so a conversion runs on a player with its own instance started with --codec.
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
-        if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
+        if startAt > 0 {
+            media.addOption(":start-time=\(Int(startAt))")
+            // A start part-way is a seek just after the chain has begun. VLC's own AVI/MKV demuxers
+            // hand the transcoder a batch of frames from the file's start first, and its PCR
+            // bookkeeping then trips over the jump (an abort in the simulator, a copy that stops
+            // after its first fragments on a device). libavformat's demuxers seek cleanly.
+            if !plan.chain.isEmpty { media.addOption(":demux=avformat") }
+        }
+        for opt in Self.debugMediaOptions { media.addOption(opt); Diagnostics.log("airplay", "debug option \(opt)") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
         if adjustments.audioDelay != 0 { media.addOption(":audio-desync=\(Int(adjustments.audioDelay * 1000))") }
         if plan.boost {
@@ -213,7 +223,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
                 parts.append("vcodec=h264,venc=avcodec{codec=h264_videotoolbox,options{realtime=1}},vb=\(kbps)")
             }
             if !audio.isEmpty || boost { parts.append("acodec=mp4a,ab=192,channels=2,samplerate=48000" + (boost ? ",afilter=compressor" : "")) }
-            return parts.isEmpty ? "" : "transcode{\(parts.joined(separator: ","))}:"
+            guard !parts.isEmpty else { return "" }
+            return "transcode{\(parts.joined(separator: ","))}:"
         }
         var description: String? {
             var bits: [String] = []
@@ -228,6 +239,8 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// cannot be read in time is copied as is; the segmenter still checks what arrives.
     /// Debug builds: skip the probe to exercise the copy-then-convert fallback.
     public static var debugSkipProbe = false
+    /// Extra VLC options for the copy (debug links), e.g. ":demux=avformat".
+    public static var debugMediaOptions: [String] = []
 
     /// Sends VLC's own log to a file (debug builds; truncated each launch). Its messages say why a
     /// frame was dropped or a stream output stalled, which Reel's log cannot.

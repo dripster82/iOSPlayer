@@ -194,7 +194,7 @@ struct NativePlayerView: View {
         clock.set(time: playback.startAt + playback.timeOffset, duration: max(playback.knownDuration, 1))
         endWatcher = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { _ in
             // The copy's end is the file's end only when the copy ran to the end.
-            if playback.timeOffset == 0 || HLSRemuxer.completed(for: playback.itemKey) != nil { close(markWatched: true) } else { close() }
+            if playback.timeOffset == 0 || HLSRemuxer.completed(for: playback.itemKey) != nil { close(markWatched: true, continuing: true) } else { close() }
         }
         // Why a black screen, when it is one: the item's status and error go to the log. The start
         // position is applied once the item is ready; before that a seek is clamped to zero.
@@ -344,10 +344,10 @@ struct NativePlayerView: View {
         library.recordProgress(itemKey: playback.itemKey, position: markWatched ? total : pos, duration: total)
     }
 
-    private func close(markWatched: Bool = false) {
+    private func close(markWatched: Bool = false, continuing: Bool = false) {
         saveProgress(markWatched: markWatched)
         tearDown()
-        player.endNativePlayback()
+        player.endNativePlayback(atFileEnd: continuing, settings: settings)
     }
 
     private func tearDown() {

@@ -86,7 +86,12 @@ enum DeepLinks {
             guard let item = find() else { return false }
             PlayerCoordinator.debugForceAirPlay = true
             HLSRemuxer.debugSkipProbe = q["noprobe"] == "1"
+            HLSRemuxer.debugMediaOptions = (q["opts"] ?? "").split(separator: ",").map { ":" + $0 }
             let target = item.kind == .show ? library.nextEpisode(of: item) ?? item.episodes.first : item
+            // `start=<seconds>` tests a copy that begins part-way through, the way a resume does.
+            if let target, let start = q["start"].flatMap(Double.init), start > 0 {
+                library.recordProgress(itemKey: target.itemKey, position: start, duration: start * 4)
+            }
             if let target { player.play(target, fromStart: q["fromStart"] == "1", settings: settings) }
             return true
             #else

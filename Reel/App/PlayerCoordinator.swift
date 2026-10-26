@@ -237,9 +237,17 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     /// Apple's player closed: release the stream and leave the player.
-    func endNativePlayback() {
+    /// At the file's end the next episode follows, as it does in VLC's player, unless the sleep
+    /// timer wanted this to be the last one.
+    func endNativePlayback(atFileEnd: Bool = false, settings: AppSettings? = nil) {
         guard nativePlayback != nil || bridgeLive else { return }
         releaseNative()
+        if atFileEnd, sleepTimer == .endOfEpisode { setSleepTimer(nil); Diagnostics.log("player", "sleep timer: stopping at the end of the episode"); dismiss(); return }
+        if atFileEnd, let next = upNext, let settings, settings.autoPlayNext {
+            Diagnostics.log("player", "AirPlay: on to the next episode, \(next.episodeCode ?? next.title)")
+            play(next, settings: settings)
+            return
+        }
         dismiss()
     }
     /// Stops the copy and the bridge, and takes Apple's player off the screen (the cover stays).
