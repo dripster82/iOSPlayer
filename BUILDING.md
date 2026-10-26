@@ -103,6 +103,16 @@ signed Debug build installs on a device. The device smoke test (HANDOVER.md §4)
 The first compile (Xcode 26.6, 24 Oct 2026) needed only small fixes, listed in `HANDOVER.md` §3.1.
 The device build is warning-free.
 
+## Xcode Cloud
+
+The repository carries no Xcode project, no VLCKit and no keys, so a bare clone cannot archive.
+`ci_scripts/ci_post_clone.sh` puts them back on every Xcode Cloud build: it installs XcodeGen,
+writes `Secrets.xcconfig` from the workflow's environment variables (`REEL_TMDB_KEY`,
+`REEL_FANART_KEY`, `REEL_OPENSUBTITLES_KEY`; add them under Workflow → Environment → Environment
+Variables and mark them secret), fetches VLCKit, and runs `xcodegen generate`. Point the workflow
+at the Reel scheme; the Archive action then finds `Reel.xcodeproj` at the root. A local archive
+needs none of this beyond the normal first-build steps above.
+
 ## Shipped API keys
 
 Reel ships with its own TMDB, fanart.tv and OpenSubtitles keys so a fresh install gets artwork
