@@ -193,13 +193,12 @@ final class FTPControl: @unchecked Sendable {
     static func ready(_ connection: NWConnection, timeout: TimeInterval) async throws {
         try await withTimeout(timeout, onTimeout: { connection.cancel() }) {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                var resumed = false
+                let once = OnceGate()
                 connection.stateUpdateHandler = { state in
-                    guard !resumed else { return }
                     switch state {
-                    case .ready: resumed = true; cont.resume()
-                    case .failed(let e): resumed = true; cont.resume(throwing: e)
-                    case .cancelled: resumed = true; cont.resume(throwing: Failure.closed)
+                    case .ready: once.run { cont.resume() }
+                    case .failed(let e): once.run { cont.resume(throwing: e) }
+                    case .cancelled: once.run { cont.resume(throwing: Failure.closed) }
                     default: break
                     }
                 }
@@ -327,27 +326,28 @@ func withTimeout<T: Sendable>(_ seconds: TimeInterval, onTimeout: @escaping @Sen
     let gate = TimeoutGate()
     return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
         let work = Task {
-            do { let value = try await body(); gate.finish { cont.resume(returning: value) } }
-            catch { gate.finish { cont.resume(throwing: error) } }
+            do { let value = try await body(); gate.run { cont.resume(returning: value) } }
+            catch { gate.run { cont.resume(throwing: error) } }
         }
         Task {
             try? await Task.sleep(for: .seconds(seconds))
-            gate.finish { cont.resume(throwing: FTPControl.Failure.timeout); onTimeout(); work.cancel() }
+            gate.run { cont.resume(throwing: FTPControl.Failure.timeout); onTimeout(); work.cancel() }
         }
     }
 }
 
-/// Lets exactly one of two racing tasks resume a continuation.
-private final class TimeoutGate: @unchecked Sendable {
+/// Lets exactly one of several racing callbacks run its body (resume a continuation, say).
+final class OnceGate: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
-    func finish(_ body: () -> Void) {
+    func run(_ body: () -> Void) {
         lock.lock(); defer { lock.unlock() }
         guard !done else { return }
         done = true
         body()
     }
 }
+private typealias TimeoutGate = OnceGate
 
 // MARK: - Listing formats
 

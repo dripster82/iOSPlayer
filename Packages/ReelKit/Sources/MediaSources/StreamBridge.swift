@@ -127,13 +127,12 @@ public actor StreamBridge {
             Task { await self.accept(connection) }
         }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            var resumed = false
+            let once = OnceGate()
             l.stateUpdateHandler = { state in
-                guard !resumed else { return }
                 switch state {
-                case .ready: resumed = true; cont.resume()
-                case .failed(let e): resumed = true; cont.resume(throwing: e)
-                case .cancelled: resumed = true; cont.resume(throwing: SourceError.unsupported("bridge cancelled"))
+                case .ready: once.run { cont.resume() }
+                case .failed(let e): once.run { cont.resume(throwing: e) }
+                case .cancelled: once.run { cont.resume(throwing: SourceError.unsupported("bridge cancelled")) }
                 default: break
                 }
             }

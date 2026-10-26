@@ -12,7 +12,7 @@ import Library
 @MainActor
 enum DemoLibrary {
     static let sourceName = "Sample library"
-    static let folder = "Demo"
+    nonisolated static let folder = "Demo"
     private static let sourceID = UUID(uuidString: "7D3B2A10-5E1F-4C8A-9B2D-0A6F5E4C3D21")!
 
     nonisolated static func artURL(_ file: String) -> URL? {

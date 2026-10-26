@@ -172,8 +172,8 @@ public final class LibraryStore: ObservableObject {
         Diagnostics.log("scan", "start \(record.name)")
         scanTasks[id] = Task { [weak self] in
             do {
-                let dropped = try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { p in
-                    Task { @MainActor [weak self] in self?.publishProgress(p) }
+                let dropped = try await scanner.scan(sourceID: id, credentials: creds, providers: providers) { [weak self] p in
+                    Task { @MainActor in self?.publishProgress(p) }
                 }
                 if !dropped.isEmpty { await MainActor.run { [weak self] in self?.syncHooks?.deleted(dropped) } }
             } catch is CancellationError {
@@ -571,8 +571,9 @@ public final class LibraryStore: ObservableObject {
 
     /// Everything the Collections screen needs in one pass over the films: universes and TMDb series
     /// with two or more films, each with its films (oldest first) and, for a universe, a studio logo.
-    public struct GroupIndex: Sendable {
-        public struct Group: Sendable {
+    public struct GroupIndex {
+        /// Main-actor only (it holds model objects); not shared across threads.
+        public struct Group {
             public var name: String; public var films: [MediaItem]; public var logoPath: String?; public var posterPath: String?
             /// Every distinct studio logo among the group's films (for the artwork picker).
             public var logoPaths: [String] = []
@@ -1035,7 +1036,7 @@ public final class LibraryStore: ObservableObject {
         guard let record = file.source else { throw SourceError.notFound(file.relativePath) }
         let source = SourceFactory.make(record.config)
         try await source.connect(credentials: CredentialStore.shared.load(for: record.id))
-        let size = file.size > 0 ? file.size : ((try? await source.stat(file.relativePath).size) ?? 0) ?? 0
+        let size = file.size > 0 ? file.size : ((try? await source.stat(file.relativePath).size) ?? nil) ?? 0
         return (source, file.relativePath, size)
     }
 

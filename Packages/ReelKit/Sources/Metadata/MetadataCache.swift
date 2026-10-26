@@ -13,10 +13,10 @@ public actor MetadataCache {
     private let fm = FileManager.default
 
     public init(directory: URL? = nil, ttl: TimeInterval = MetadataCache.defaultTTL) {
-        let base = directory ?? fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("metadata", isDirectory: true)
+        let base = directory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("metadata", isDirectory: true)
         self.directory = base
         self.ttl = ttl
-        try? fm.createDirectory(at: base, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     }
 
     public struct Entry: Sendable { public var data: Data; public var isFresh: Bool }
