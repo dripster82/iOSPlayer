@@ -144,14 +144,11 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         // instance), so a conversion runs on a player with its own instance started with --codec.
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
-        if startAt > 0 {
-            media.addOption(":start-time=\(Int(startAt))")
-            // A start part-way is a seek just after the chain has begun. VLC's own AVI/MKV demuxers
-            // hand the transcoder a batch of frames from the file's start first, and its PCR
-            // bookkeeping then trips over the jump (an abort in the simulator, a copy that stops
-            // after its first fragments on a device). libavformat's demuxers seek cleanly.
-            if !plan.chain.isEmpty { media.addOption(":demux=avformat") }
-        }
+        if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
+        // VLC's transcoder keeps PCR bookkeeping that asserts on a packet without a DTS, which its
+        // own AVI demuxer produces (an abort in the simulator; on a device a copy that stops after
+        // its first fragments). libavformat's demuxers stamp every packet.
+        if plan.video != nil { media.addOption(":demux=avformat") }
         for opt in Self.debugMediaOptions { media.addOption(opt); Diagnostics.log("airplay", "debug option \(opt)") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
         if adjustments.audioDelay != 0 { media.addOption(":audio-desync=\(Int(adjustments.audioDelay * 1000))") }
@@ -216,15 +213,19 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         var boost = false
         init(video: String? = nil, audio: [String] = [], width: Int = 0, height: Int = 0) { self.video = video; self.audio = audio; self.width = width; self.height = height }
         var chain: String {
-            var parts: [String] = []
+            // One converted track per transcode stage, audio then video. The same PCR bookkeeping
+            // sizes its records by the tracks it knows of, and a second converted track that
+            // registers after the first record exists asserts when its first frame comes out;
+            // with a single converted track per stage that cannot happen.
+            var stages: [String] = []
+            if !audio.isEmpty || boost { stages.append("transcode{acodec=mp4a,ab=192,channels=2,samplerate=48000" + (boost ? ",afilter=compressor" : "") + "}") }
             if video != nil {
                 // Bit rate by picture size; the VideoToolbox encoder in real-time mode keeps up with playback.
                 let kbps = height <= 480 ? 2500 : height <= 720 ? 5000 : height <= 1080 ? 8000 : 14000
-                parts.append("vcodec=h264,venc=avcodec{codec=h264_videotoolbox,options{realtime=1}},vb=\(kbps)")
+                stages.append("transcode{vcodec=h264,venc=avcodec{codec=h264_videotoolbox,options{realtime=1}},vb=\(kbps)}")
             }
-            if !audio.isEmpty || boost { parts.append("acodec=mp4a,ab=192,channels=2,samplerate=48000" + (boost ? ",afilter=compressor" : "")) }
-            guard !parts.isEmpty else { return "" }
-            return "transcode{\(parts.joined(separator: ","))}:"
+            guard !stages.isEmpty else { return "" }
+            return stages.joined(separator: ":") + ":"
         }
         var description: String? {
             var bits: [String] = []
