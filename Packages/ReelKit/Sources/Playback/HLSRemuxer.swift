@@ -106,9 +106,12 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         plan.boost = adjustments.dialogueBoost
         do {
             return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: plan, adjustments: adjustments, status: status)
-        } catch RemuxError.needsConversion(var found) where plan.chain.isEmpty {
+        } catch RemuxError.needsConversion(var found) where plan.video == nil {
+            // The probe had not seen the video (or an audio-only plan, dialogue boost say, left it
+            // to the copy): convert what the segmenter found refused, with the boost kept.
             Diagnostics.log("airplay", "copy refused; converting instead")
             found.boost = adjustments.dialogueBoost
+            if found.audio.isEmpty { found.audio = plan.audio }
             return try await attempt(source: source, key: key, startAt: startAt, subtitles: subtitles, preferredAudio: preferredAudio, preferredLanguage: preferredLanguage, plan: found, adjustments: adjustments, status: status)
         } catch RemuxError.needsConversion(let found) {
             throw RemuxError.failed("the conversion still produced \(found.video.map { MP4Boxes.describe(codec: $0) } ?? found.audio.map { MP4Boxes.describe(codec: $0) }.joined(separator: ", ")), which AirPlay cannot carry")
@@ -153,13 +156,12 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         for opt in Self.debugMediaOptions { media.addOption(opt); Diagnostics.log("airplay", "debug option \(opt)") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
         if adjustments.audioDelay != 0 { media.addOption(":audio-desync=\(Int(adjustments.audioDelay * 1000))") }
-        if plan.boost {
-            // The same "night mode" compressor the device player uses, applied while converting the audio.
-            for o in [":compressor-rms-peak=0.0", ":compressor-attack=25", ":compressor-release=100", ":compressor-threshold=-20", ":compressor-ratio=8", ":compressor-knee=2.5", ":compressor-makeup-gain=12"] { media.addOption(o) }
-        }
         let p: VLCMediaPlayer
-        if plan.video != nil {
-            let lib = VLCLibrary(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
+        if plan.video != nil || plan.boost {
+            var options: [String] = []
+            if plan.video != nil { options += ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"] }
+            if plan.boost { options += Plan.compressorOptions }
+            let lib = VLCLibrary(options: options)
             if let logURL = Self.conversionLogURL {
                 // One run per file; the run before it is kept, since a stall is usually noticed after the retry.
                 let previous = logURL.deletingPathExtension().appendingPathExtension("prev.log")
@@ -213,12 +215,17 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         /// Dialogue boost: the audio is converted even when it could be copied, through VLC's compressor.
         var boost = false
         init(video: String? = nil, audio: [String] = [], width: Int = 0, height: Int = 0) { self.video = video; self.audio = audio; self.width = width; self.height = height }
+        /// The same "night mode" compressor the device player uses: lifts quiet dialogue, holds the loud parts.
+        static let compressorOptions = ["--compressor-rms-peak=0.0", "--compressor-attack=25", "--compressor-release=100", "--compressor-threshold=-20", "--compressor-ratio=8", "--compressor-knee=2.5", "--compressor-makeup-gain=12"]
         var chain: String {
             // One converted track per transcode stage, audio then video. The same PCR bookkeeping
             // sizes its records by the tracks it knows of, and a second converted track that
             // registers after the first record exists asserts when its first frame comes out;
             // with a single converted track per stage that cannot happen.
             var stages: [String] = []
+            // The compressor's settings are options of the libvlc instance the conversion runs on:
+            // the chain takes only the filter's name, and media options do not reach a filter inside
+            // the stream output (the codec option did not either).
             if !audio.isEmpty || boost { stages.append("transcode{acodec=mp4a,ab=192,channels=2,samplerate=48000" + (boost ? ",afilter=compressor" : "") + "}") }
             if video != nil {
                 // Bit rate by picture size; the VideoToolbox encoder in real-time mode keeps up with playback.

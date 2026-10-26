@@ -234,7 +234,10 @@ final class PlayerCoordinator: ObservableObject {
     /// A seek beyond the part of the file copied so far: start the copy again from there. Apple's
     /// player gets a fresh stream whose clock starts at the new offset; the view rebuilds for the new URL.
     func restartNativeStream(at fileTime: TimeInterval, adjustments: HLSRemuxer.Adjustments? = nil) {
-        guard let playback = nativePlayback, let item = current, let url = engine.currentURL ?? lastPlaybackURL else { return }
+        guard let playback = nativePlayback, let item = current, let url = engine.currentURL ?? lastPlaybackURL else {
+            Diagnostics.log("player", "native stream restart dropped: playback=\(nativePlayback != nil) current=\(current != nil) url=\(engine.currentURL != nil || lastPlaybackURL != nil)")
+            return
+        }
         let file = currentFile
         let adjustments = adjustments ?? playback.adjustments
         Task {
@@ -449,7 +452,7 @@ final class PlayerCoordinator: ObservableObject {
     private func scheduleScrubThumbnails(key: String, url: URL) {
         Task { [weak self] in
             // Soon after the start, not a minute in: a short visit should still leave frames behind.
-            try? await Task.sleep(for: .seconds(15))
+            try? await Task.sleep(for: .seconds(3))
             guard let self, self.current?.itemKey == key, [.playing, .paused, .buffering].contains(self.engine.status) else { return }
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return

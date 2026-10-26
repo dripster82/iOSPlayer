@@ -157,6 +157,7 @@ struct NativePlayerView: View {
 
     private func restart(with adjustments: HLSRemuxer.Adjustments) {
         guard adjustments != playback.adjustments else { return }
+        Diagnostics.log("player", "native stream restart asked: boost=\(adjustments.dialogueBoost) audioDelay=\(adjustments.audioDelay) subtitleDelay=\(adjustments.subtitleDelay) at \(Int(fileTime))s")
         saveProgress()
         player.restartNativeStream(at: fileTime, adjustments: adjustments)
     }
