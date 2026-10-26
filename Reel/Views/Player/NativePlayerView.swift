@@ -221,8 +221,11 @@ struct NativePlayerView: View {
                     if !sought, playback.startAt > 0 || playback.timeOffset > 0 {
                         sought = true
                         startGuardUntil = Date().addingTimeInterval(20)
+                        // Over AirPlay "ready" can come ten seconds into playback, so being a little past
+                        // the start is normal; only a receiver well ahead (a live copy's edge) or behind
+                        // (a kept copy opened at zero for a resume) is moved.
                         let now = p.currentTime().seconds
-                        if !now.isFinite || abs(now - playback.startAt) > 3 {
+                        if !now.isFinite || now < playback.startAt - 3 || now > playback.startAt + 15 {
                             p.seek(to: CMTime(seconds: playback.startAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
                         }
                     }
