@@ -22,7 +22,9 @@ struct NativePlayerView: View {
     @State private var rateWatcher: NSKeyValueObservation?
     @State private var timeObserver: Any?
     @State private var heartbeat: Task<Void, Never>?
-    @StateObject private var clock = PlaybackClock()
+    /// Held, not observed: the clock ticks twice a second, and a view that redraws on each tick
+    /// drops taps on its menus and makes them flicker. The timeline bar observes it on its own.
+    @State private var clock = PlaybackClock()
     @State private var scrubTime: TimeInterval?
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
