@@ -119,7 +119,7 @@ struct NativePlayerView: View {
             Spacer()
             VStack(spacing: 6) {
                 // The live preview opens the file in its own small player, so it works over AirPlay too.
-                TimelineBar(clock: clock, chapters: playback.chapters, scrubTime: $scrubTime, itemKey: playback.itemKey, liveURL: player.lastPlaybackURL, hardwareDecoding: player.previewHardwareDecoding) { seek(to: $0) }
+                TimelineBar(clock: clock, chapters: playback.chapters, scrubTime: $scrubTime, itemKey: playback.itemKey, liveURL: player.previewURL(player.lastPlaybackURL), hardwareDecoding: player.previewHardwareDecoding) { seek(to: $0) }
                 HStack(spacing: 8) {
                     Menu {
                         ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in

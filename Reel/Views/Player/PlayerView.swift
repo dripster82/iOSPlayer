@@ -196,7 +196,7 @@ struct PlayerContentView: View {
             }
             Spacer()
             VStack(spacing: 6) {
-                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime, itemKey: player.current?.itemKey, liveURL: engine.currentURL, hardwareDecoding: player.previewHardwareDecoding) { engine.seek(to: $0) }
+                TimelineBar(clock: engine.clock, chapters: engine.chapters, scrubTime: $scrubTime, itemKey: player.current?.itemKey, liveURL: player.previewURL(engine.currentURL), hardwareDecoding: player.previewHardwareDecoding) { engine.seek(to: $0) }
                 HStack(spacing: 8) {
                     tag("\(engine.rate.formatted())×", on: engine.rate != 1) { sheet = .speed }
                     if !engine.chapters.isEmpty {

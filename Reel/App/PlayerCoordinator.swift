@@ -50,6 +50,9 @@ final class PlayerCoordinator: ObservableObject {
     }
     /// Whether the scrubber's live preview may use the hardware decoder for the current file.
     var previewHardwareDecoding: Bool { AppSettings.current.hardwareDecoding && !Self.needsSoftwareDecoding(currentVideoCodec) }
+    /// The stream the scrubber's live preview opens, or nil for a codec whose preview the iPad
+    /// cannot show (MPEG-4 Part 2 comes out black or green); the thumbnails serve then.
+    func previewURL(_ url: URL?) -> URL? { Self.needsSoftwareDecoding(currentVideoCodec) ? nil : url }
 
     private static func titles(for item: MediaItem) -> (String, String) {
         if item.kind == .episode { return (item.show?.title ?? item.title, [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ")) }

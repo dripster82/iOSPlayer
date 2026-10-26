@@ -160,7 +160,9 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     nonisolated public func mediaPlayerTimeChanged(_ aNotification: Notification) {
         Task { @MainActor in
             let t = TimeInterval(self.player.time.intValue) / 1000
-            if !self.hasPicture { self.hasPicture = true }
+            // A tick alone is not a picture: only once VLC has a video output does the canvas
+            // cover the strip frame, else a black canvas would hide it.
+            if !self.hasPicture, self.player.hasVideoOut { self.hasPicture = true }
             if abs(t - self.shownTime) >= 0.5 { self.shownTime = t }
             // A seek issued while the player was still opening is applied on the first tick.
             if self.target != nil, self.seeking == nil { self.applyTarget() }
