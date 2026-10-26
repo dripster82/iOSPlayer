@@ -118,12 +118,15 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
         // Converting video: decode in software. The iPad's VideoToolbox decoder rejects some
         // MPEG-4 Part 2 streams ("codecBadDataErr") and restarts over and over, dropping frames each
         // time; libavcodec reads them all, and at these sizes it is far faster than real time.
-        if plan.video != nil { media.addOption(":codec=avcodec"); media.addOption(":avcodec-threads=0") }
+        // A media option does not reach the stream output's decoders (they inherit from the libvlc
+        // instance), so a conversion runs on a player with its own instance started with --codec.
         media.addOption(":sout-mux-caching=300")
         media.addOption(":network-caching=3000")
         if startAt > 0 { media.addOption(":start-time=\(Int(startAt))") }
         media.addOption(":sout-all")   // every audio track, not just the one VLC would play
-        let p = VLCMediaPlayer()
+        let p = plan.video != nil
+            ? VLCMediaPlayer(options: ["--codec=avcodec", "--avcodec-threads=0", "--no-drop-late-frames", "--no-skip-frames"])
+            : VLCMediaPlayer()
         p.delegate = self
         player = p
         p.media = media
