@@ -118,7 +118,7 @@ final class ScrubThumbnails: ObservableObject {
     }
 
     /// One frame at `seconds`, through VLCMediaThumbnailer and its delegate.
-    private static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool) async -> CGImage? {
+    static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool) async -> CGImage? {
         guard let media = VLCMedia(url: url) else { return nil }
         media.addOption(":start-time=\(Int(seconds))")
         media.addOption(":no-audio")

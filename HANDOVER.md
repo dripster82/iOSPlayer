@@ -381,3 +381,17 @@ Phase 5
 `PLAN.md` §6 (decided vs open), §9 (open questions still unanswered: visual style preference, Dolby Vision/Atmos as v1),
 §10 (licensing, free sources, sync design). If you need a decision the plan doesn't give, ask the owner; don't guess on anything
 that touches licensing, money, or what syncs.
+
+## End credits and Up Next
+
+The Up Next card appears, and its countdown starts, where the end credits begin when that is known,
+else at the countdown length plus ten seconds before the end. Two signals, in `PlayerCoordinator.resolveCredits`:
+chapters first (`[Chapter].creditsStart(fileDuration:)` in MediaCore: a chapter named Credits/End Credits/
+Outro/Ending/ED in the last 15 minutes, or, among unnamed chapters, a final chapter under four minutes in the
+last tenth of the file); then a scan of the last stretch of the file (`CreditsMemory.scan`): a frame every 5 s
+over the last tenth of the runtime (2–8 min), classified by `CreditsFrame` in Playback (at least three quarters
+dark, with two or more rows of light text-like dashes), and `CreditsScan.start` takes the first run of three
+credits-like frames after which they stay in the majority. The scan starts 45 s into a play, after the scrub
+thumbnails, uses the same thumbnailer, backs off when the device is hot or in Low Power Mode, and its result
+(a time or "none") is kept per title in UserDefaults (`reel.creditsMemory`), per device. Episodes only.
+Tests: `CreditsDetectionTests`.

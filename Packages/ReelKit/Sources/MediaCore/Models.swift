@@ -147,6 +147,16 @@ public struct Chapter: Identifiable, Hashable, Sendable {
     /// Names the tools write for the opening; "op"/"ed" are the anime convention (opening/ending).
     static let introWords: Set<String> = ["intro", "opening", "titles", "op", "theme", "credits", "recap", "cold open"]
 
+    /// A chapter named like the end credits, in the last 15 minutes: "Credits", "End Credits",
+    /// "Closing Credits", "Outro", "Ending", the anime "ED". "Opening Credits" early in the file is
+    /// the intro's business, which `start >= end - 900` keeps out.
+    public func looksLikeCredits(fileDuration: TimeInterval) -> Bool {
+        guard fileDuration > 0, start >= fileDuration - 900 else { return false }
+        let words = Self.words(in: title)
+        return Self.creditsWords.contains { words.contains($0) }
+    }
+    static let creditsWords: Set<String> = ["credits", "end credits", "closing credits", "outro", "ending", "ed", "end titles"]
+
     static func words(in title: String) -> Set<String> {
         let lower = title.lowercased()
         let tokens = lower.split { !$0.isLetter && !$0.isNumber }.map(String.init)
@@ -175,6 +185,18 @@ public extension Array where Element == Chapter {
     /// in the first five minutes and are not the last, a title-length chapter that follows another
     /// chapter is preferred over the first chapter; the first is used only when nothing else fits.
     /// Only when every chapter is unnamed; films with a handful of long chapters match nothing.
+    /// Where the end credits begin, by chapters, or nil. A named credits chapter wins; failing that,
+    /// among unnamed chapters only, a short final chapter (under four minutes, in the last tenth of the
+    /// file) is taken as the credits, since that is how most TV rips are cut. Films with a handful of
+    /// long chapters match nothing, and so does a last chapter that is a whole scene.
+    public func creditsStart(fileDuration: TimeInterval) -> TimeInterval? {
+        if let named = first(where: { $0.looksLikeCredits(fileDuration: fileDuration) }) { return named.start }
+        guard fileDuration > 0, count >= 3, allSatisfy(\.hasGenericTitle), let last = self.last else { return nil }
+        let endsAtFileEnd = fileDuration - (last.start + last.duration) < 15
+        guard endsAtFileEnd, last.duration >= 15, last.duration <= 240, last.start >= fileDuration * 0.9 else { return nil }
+        return last.start
+    }
+
     var intro: Chapter? {
         if let named = first(where: \.looksLikeIntro) { return named }
         guard count >= 3, allSatisfy(\.hasGenericTitle) else { return nil }

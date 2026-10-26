@@ -97,6 +97,9 @@ final class PlayerCoordinator: ObservableObject {
     private var pendingRate: Float?
     /// Intro window learned from the viewer's own skips, for shows whose chapters do not say.
     @Published private(set) var learnedIntro: IntroMemory.Window?
+    /// Where the end credits start, once known: a named or short final chapter first, else the
+    /// dark-frame scan's result (kept per title). The Up Next card appears and counts down from here.
+    @Published private(set) var creditsStart: TimeInterval?
 
     enum SleepTimer: Hashable { case minutes(Int), endOfEpisode }
     @Published private(set) var sleepTimer: SleepTimer?
@@ -433,6 +436,7 @@ final class PlayerCoordinator: ObservableObject {
                 preferredFill = memory?.fill
                 pendingRate = memory?.rate.flatMap { $0 == 1 ? nil : $0 }
                 learnedIntro = item.kind == .episode ? item.show.flatMap { IntroMemory.window(showKey: $0.itemKey) } : nil
+                creditsStart = nil
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
@@ -458,6 +462,33 @@ final class PlayerCoordinator: ObservableObject {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
             }
             ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec))
+            self.resolveCredits(key: key, url: url)
+        }
+    }
+
+    /// Chapters first; then the scan's stored result; else the scan, after the thumbnails have had a
+    /// head start so the scrubber fills in first. Episodes only: a film's credits are not followed by
+    /// anything, and its length makes the scan dear.
+    private func resolveCredits(key: String, url: URL) {
+        guard let current, current.kind == .episode, engine.duration > 0 else { return }
+        if let byChapter = engine.chapters.creditsStart(fileDuration: engine.duration) {
+            creditsStart = byChapter
+            Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
+            return
+        }
+        if let stored = CreditsMemory.start(for: key) {
+            creditsStart = stored
+            if let stored { Diagnostics.log("player", "credits known at \(Int(stored))s") }
+            return
+        }
+        let duration = engine.duration, software = Self.needsSoftwareDecoding(currentVideoCodec)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(45))
+            guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
+            CreditsMemory.scan(itemKey: key, url: url, duration: duration, softwareDecoding: software) { [weak self] start in
+                guard let self, self.current?.itemKey == key else { return }
+                self.creditsStart = start
+            }
         }
     }
 
@@ -558,7 +589,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.dialogueBoost = settings.dialogueBoost
         opts.allowFrameDrops = ExternalDisplay.shared.isConnected
         Self.applySubtitleStyle(&opts, settings)
-        preferredFill = nil; pendingRate = nil; learnedIntro = nil
+        preferredFill = nil; pendingRate = nil; learnedIntro = nil; creditsStart = nil
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
         scheduleScrubThumbnails(key: key, url: url)
         nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
@@ -613,6 +644,7 @@ final class PlayerCoordinator: ObservableObject {
         currentVideoCodec = nil
         externalURL = nil
         learnedIntro = nil
+        creditsStart = nil
         if case .minutes = sleepTimer { } else { setSleepTimer(nil) }
     }
 

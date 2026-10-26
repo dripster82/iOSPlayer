@@ -382,14 +382,14 @@ struct TimedOverlays: View {
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
             }
-            if let next = player.upNext, duration > 0, duration - now < upNextLead || engine.status == .ended { upNextCard(next) }
+            if let next = player.upNext, duration > 0, now >= upNextAt || engine.status == .ended { upNextCard(next) }
         }
         .onChange(of: now) { _, t in
             if duration > 0, duration - t < 60, duration - t > 0, player.upNext != nil { player.prepareNext() }
             // The countdown runs from the moment the card shows, so the next episode starts
             // before the credits are over, not after them.
-            if duration > 0, duration - t < upNextLead, duration - t > 0, upNextCountdown == nil, !countdownCancelled { startCountdown() }
-            if duration > 0, duration - t > upNextLead + 5 { countdownCancelled = false }
+            if duration > 0, t >= upNextAt, t < duration, upNextCountdown == nil, !countdownCancelled { startCountdown() }
+            if duration > 0, t < upNextAt - 5 { countdownCancelled = false }
         }
         .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
             let rounded = t.rounded()
@@ -399,8 +399,12 @@ struct TimedOverlays: View {
         .onChange(of: engine.status) { _, s in if s == .ended, upNextCountdown == nil, !countdownCancelled { startCountdown() } }
     }
 
-    /// How long before the end the Up Next card appears: the countdown plus a few seconds to read it.
+    /// How long before the end the Up Next card appears when nothing better is known: the countdown
+    /// plus a few seconds to read it.
     private var upNextLead: TimeInterval { TimeInterval(max(3, settings.autoPlayCountdown)) + 10 }
+    /// When the card appears: where the credits start, if a chapter or the frame scan found them,
+    /// else the lead before the end.
+    private var upNextAt: TimeInterval { player.creditsStart ?? (duration - upNextLead) }
 
     /// Chapters first (a named intro, or the unnamed-chapter shape rule); otherwise what the viewer's
     /// own skips have taught the app about this show.
