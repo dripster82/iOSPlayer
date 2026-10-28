@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var unmatchedCount = 0
     @State private var reviewCount = 0
     @State private var hiddenCount = 0
+    @State private var confirmReset = false
 
     var body: some View {
         Form {
@@ -129,7 +130,18 @@ struct SettingsView: View {
                 Link(destination: URL(string: "https://dripster82.github.io/iOSPlayer/privacy.html")!) { Label("Privacy policy", systemImage: "hand.raised") }
                 Link(destination: URL(string: "https://dripster82.github.io/iOSPlayer/terms.html")!) { Label("Terms of use", systemImage: "doc.text") }
             }
+
+            Section {
+                Button(role: .destructive) { confirmReset = true } label: {
+                    Label("Reset Reel", systemImage: "arrow.counterclockwise").foregroundStyle(.red)
+                }
+            } footer: {
+                Text("Removes the library, settings, downloads, caches and sync state from this device, as if the app had just been installed. Nothing in iCloud is touched, and source passwords stay in iCloud Keychain. The app quits; open it again to start over.")
+            }
         }
+        .confirmationDialog("Reset Reel on this device?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Reset and quit", role: .destructive) { AppReset.performAndQuit() }
+        } message: { Text("Everything stored on this device is removed. Other devices and iCloud are unaffected.") }
         .navigationTitle("Settings")
         .refreshFromLibrary {
             unmatchedCount = library.unmatchedFileCount()
