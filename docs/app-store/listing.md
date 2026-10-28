@@ -6,8 +6,8 @@ Everything here is ready to paste. Fields are in App Store Connect order.
 
 | Field | Value |
 |---|---|
-| Name | Reel |
-| Subtitle (30) | Your films and shows, from your NAS |
+| Name | Reel - Media Player |
+| Subtitle (30) | Films and shows from your NAS |
 | Bundle ID | uk.co.ketelle.reel |
 | SKU | reel-ios |
 | Primary category | Entertainment |
@@ -28,7 +28,7 @@ Everything here is ready to paste. Fields are in App Store Connect order.
 
 ## Promotional text (170)
 
-Plays your own films and shows straight from a NAS share or the device, with artwork, episode names, Continue Watching and AirPlay to the TV. No account, no server, nothing uploaded.
+Plays your own films and shows from a NAS share or the device, with artwork, episode names, Continue Watching and AirPlay. No account, no server, nothing uploaded.
 
 ## Description (4000)
 
@@ -110,7 +110,9 @@ for 4+. App previews (video) and the product-page header art are optional and sk
 ## Before submitting
 
 - [ ] Secrets.xcconfig filled (TMDB, fanart.tv, OpenSubtitles) and `Scripts/ensure-secrets.sh` passing
-- [ ] Apple ID signed in to Xcode; app record created in App Store Connect
+- [x] App record created in App Store Connect (Apple ID 6827021270); App Information, age rating, pricing (free), App Privacy published, version text and review notes entered on 28 Oct 2026
+- [ ] Apple ID signed in to Xcode
+- [ ] Account Holder accepts the updated Developer Program License Agreement (banner in App Store Connect)
 - [ ] CloudKit schema deployed to Production; `aps-environment` production in the archive's entitlements
 - [ ] Build number bumped (CURRENT_PROJECT_VERSION) for each upload
 - [ ] Archive with the Release configuration; debug links, the command poller and VLC's log are compiled out
