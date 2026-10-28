@@ -190,6 +190,12 @@ What changed:
   `.background` as a belt-and-braces and `stopPictureInPicture()` on `.active`. There is a `pip.enter`
   button in the top controls and a row in the More sheet.
 - No new Info.plist keys were needed beyond the existing `UIBackgroundModes: [audio]`.
+- Paused, home gesture (or another app), back, play left the picture black (28 Oct 2026): iOS
+  interrupts the AVSampleBufferDisplayLayer VLC paints through while the app is in the background and
+  nothing enqueued shows until it is flushed, although VLC counts every frame as displayed. This VLCKit
+  build only handles that for its OpenGL view, so `VLCPlaybackEngine.flushDisplayLayerIfNeeded()` finds
+  the layer under the drawable and flushes it on `.active` (and on the first play after a paused
+  return), logging its state each time. The lock screen never caused the interruption.
 
 Verified:
 - Device build (`Scripts/build-device.sh`) compiles warning-free in our code and installs on the iPhone.
