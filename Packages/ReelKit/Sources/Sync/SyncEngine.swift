@@ -14,8 +14,35 @@ import Library
 /// - the scanned library itself: items and files, keyed deterministically so two devices scanning
 ///   the same share converge on the same records instead of duplicating them.
 /// Files-app (local) sources are device-specific and stay local.
+/// How a restore (the first fetch after sync is turned on) is going, for the restore screen. The
+/// totals come from the Summary record the other device keeps up to date; until it has arrived
+/// only the counts are known.
+public struct RestoreProgress: Equatable, Sendable {
+    public var sources = 0
+    public var items = 0
+    public var files = 0
+    public var expectedItems: Int?
+    public var expectedFiles: Int?
+    public var startedAt = Date()
+    public var fraction: Double? {
+        guard let ei = expectedItems, let ef = expectedFiles, ei + ef > 0 else { return nil }
+        return min(1, Double(items + files) / Double(ei + ef))
+    }
+}
+
+/// What applying one fetched batch produced, from the background context back to the engine.
+struct AppliedBatch: Sendable {
+    var toDelete: [String] = []
+    var sources = 0, items = 0, files = 0
+    var expectedItems: Int?, expectedFiles: Int?
+    var changed: Bool { sources + items + files > 0 }
+}
+
 @MainActor
 public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate {
+    /// Non-nil while a restore is running; the app shows a progress screen instead of the library so
+    /// nothing appears before its files have arrived and been linked.
+    @Published public private(set) var restore: RestoreProgress?
 
     @Published public private(set) var lastSyncedAt: Date?
     @Published public private(set) var lastError: String? { didSet { if let e = lastError { Self.log(e) } } }
@@ -248,6 +275,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         for c in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("collection|" + c.id.uuidString)) }
         for g in (try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.groupArt(g.groupID))) }
         for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.pendingSync }))) ?? [] where s.type != .local { ids.append(recordID(SyncKeys.source(s.id))) }
+        let libraryChanged = ((try? ctx.fetchCount(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? 0) > 0
+            || ((try? ctx.fetchCount(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? 0) > 0
+        if libraryChanged { ids.append(recordID(Self.summaryName)) }   // totals, so a restoring device can show a percentage
         for i in (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.item(i.itemKey))) }
         for f in (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? [] {
             guard let source = f.source, source.type != .local else { f.pendingSync = false; continue }
@@ -285,14 +315,24 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         return zones.contains { $0.zoneID.zoneName == zoneID.zoneName }
     }
 
-    /// Turn sync on and wait for the first fetch, so a device restoring from iCloud has its sources
-    /// and library before Home appears.
-    public func enableAndFetch(cloudContainerID: String) async {
+    /// Turn sync on and run the first fetch as a restore: `restore` reports progress until the fetch
+    /// completes (everything in iCloud is then local and linked) or fails, and clears itself after.
+    public func beginRestore(cloudContainerID: String) {
         setEnabled(true, cloudContainerID: cloudContainerID)
+        restore = RestoreProgress()
         isSyncing = true
-        await fetchNow()
-        isSyncing = false
+        Task { @MainActor in
+            await fetchNow()
+            // Fetch is complete: the trailing refresh may still be pending, so refresh now.
+            refreshTask?.cancel(); refreshTask = nil
+            onChangesApplied?()
+            isSyncing = false
+            restore = nil
+        }
     }
+
+    /// Carry on in the background: the library shows while the rest arrives.
+    public func dismissRestore() { restore = nil }
 
     public func fetchNow() async {
         do { try await engine?.fetchChanges() } catch { lastError = "Fetch failed: " + Self.describe(error) }
@@ -305,16 +345,22 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             // Applied on a background context: a restore of thousands of records must never stall the
             // UI. The main thread only learns that something changed, at most every couple of seconds.
             let mods = e.modifications.map(\.record), dels = e.deletions.map(\.recordID)
-            let toDelete = await applier.apply(modifications: mods, deletions: dels)
-            await MainActor.run { self.fetchedChangesApplied(changed: !mods.isEmpty || !dels.isEmpty, deleting: toDelete) }
+            let applied = await applier.apply(modifications: mods, deletions: dels)
+            await MainActor.run { self.fetchedChangesApplied(applied, changed: !mods.isEmpty || !dels.isEmpty) }
             return
         }
         await MainActor.run { self.handle(event) }
     }
 
-    private func fetchedChangesApplied(changed: Bool, deleting: [String]) {
+    private func fetchedChangesApplied(_ applied: AppliedBatch, changed: Bool) {
         lastSyncedAt = Date()
-        deleteRecords(named: deleting)
+        deleteRecords(named: applied.toDelete)
+        if var r = restore {
+            r.sources += applied.sources; r.items += applied.items; r.files += applied.files
+            if let n = applied.expectedItems { r.expectedItems = n }
+            if let n = applied.expectedFiles { r.expectedFiles = n }
+            restore = r
+        }
         if changed { scheduleRefresh() }
     }
 
@@ -344,7 +390,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             case .deleteRecord: return 0
             case .saveRecord(let id):
                 let type = id.recordName.split(separator: "|", maxSplits: 1).first.map(String.init) ?? ""
-                switch type { case "watch", "fav", "override", "collection", "source": return 1; case "item": return 2; default: return 3 }
+                switch type { case "summary": return 0; case "watch", "fav", "override", "collection", "source": return 1; case "item": return 2; default: return 3 }
             @unknown default: return 4
             }
         }
@@ -406,6 +452,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     // MARK: - Record building
 
     private func recordID(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: zoneID) }
+    /// One record per library with the item and file counts, for restore progress on another device.
+    nonisolated static let summaryName = "summary|library"
 
     /// CloudKit cannot type an empty list on first sight; an absent field reads back as [] anyway.
     private static func list(_ values: [String]) -> [String]? { values.isEmpty ? nil : values }
@@ -466,6 +514,14 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     private func record(for id: CKRecord.ID) -> CKRecord? {
         guard let (type, key) = Self.split(id) else { return nil }
         switch type {
+        case "summary":
+            let r = baseRecord("Summary", id)
+            let local = SourceType.local.rawValue
+            r["itemCount"] = (try? ctx.fetchCount(FetchDescriptor<MediaItem>())) ?? 0
+            r["fileCount"] = (try? ctx.fetchCount(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.source?.typeRaw != local }))) ?? 0
+            r["sourceCount"] = (try? ctx.fetchCount(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.typeRaw != local }))) ?? 0
+            r["updatedAt"] = Date()
+            return r
         case "watch":
             guard let ws = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
             let r = baseRecord("WatchState", id)
@@ -749,14 +805,27 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 @ModelActor
 actor SyncApplier {
     /// Returns the CloudKit record names that must now be deleted (a re-keyed source's old files).
-    func apply(modifications: [CKRecord], deletions: [CKRecord.ID]) -> [String] {
-        var toDelete: [String] = []
-        for r in modifications { SyncEngine.rememberSystemFields(r, in: modelContext); SyncEngine.apply(r, in: modelContext, deleting: &toDelete) }
+    func apply(modifications: [CKRecord], deletions: [CKRecord.ID]) -> AppliedBatch {
+        var out = AppliedBatch()
+        for r in modifications {
+            switch r.recordType {
+            case "Source": out.sources += 1
+            case "Item": out.items += 1
+            case "File": out.files += 1
+            case "Summary":
+                out.expectedItems = r["itemCount"] as? Int
+                out.expectedFiles = r["fileCount"] as? Int
+                continue   // nothing stored locally
+            default: break
+            }
+            SyncEngine.rememberSystemFields(r, in: modelContext)
+            SyncEngine.apply(r, in: modelContext, deleting: &out.toDelete)
+        }
         for id in deletions { SyncEngine.forgetSystemFields(id, in: modelContext); SyncEngine.applyDeletion(id, in: modelContext) }
         SyncEngine.reconcileLinks(in: modelContext)
         SyncEngine.dedupeSources(in: modelContext)
         try? modelContext.save()
-        return toDelete
+        return out
     }
 }
 #endif

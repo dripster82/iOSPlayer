@@ -38,10 +38,8 @@ struct OnboardingView: View {
                 Button {
                     if !key.isEmpty { settings.tmdbAPIKey = key }
                     restoring = true
-                    Task {
-                        await sync.enableAndFetch(cloudContainerID: AppSettings.cloudContainerID)
-                        settings.hasCompletedOnboarding = true
-                    }
+                    sync.beginRestore(cloudContainerID: AppSettings.cloudContainerID)
+                    settings.hasCompletedOnboarding = true   // RootView shows the restore screen until the fetch is done
                 } label: {
                     HStack {
                         if restoring { ProgressView().tint(.white) }

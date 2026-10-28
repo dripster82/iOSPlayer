@@ -1,4 +1,5 @@
 import SwiftUI
+import Sync
 import Library
 
 enum AppSection: String, CaseIterable, Identifiable {
@@ -38,11 +39,14 @@ struct RootView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var nav: AppNavigation
+    @EnvironmentObject private var sync: SyncEngine
 
     var body: some View {
         Group {
             if !settings.hasCompletedOnboarding && library.sources().isEmpty {
                 OnboardingView()
+            } else if let progress = sync.restore {
+                RestoreView(progress: progress)
             } else if sizeClass == .regular {
                 NavigationSplitView {
                     List(selection: $nav.section) {
