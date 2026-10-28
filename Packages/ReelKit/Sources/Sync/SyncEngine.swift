@@ -270,6 +270,27 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         do { try await engine?.sendChanges() } catch { lastError = "Send failed: " + Self.describe(error) }
     }
 
+    /// Whether this Apple ID already holds a Reel library: true when the private database has the
+    /// "Library" zone, which only a device with sync on ever creates. Cheap (one zone listing), and
+    /// safe to call with sync off: the first-run screen uses it to offer a restore before Add Source.
+    /// False when the build is not signed for iCloud, no account is signed in, or iCloud is unreachable.
+    public func cloudLibraryExists(cloudContainerID: String) async -> Bool {
+        guard Self.buildSupportsCloudKit(containerID: cloudContainerID) else { return false }
+        let container = CKContainer(identifier: cloudContainerID)
+        guard (try? await container.accountStatus()) == .available else { return false }
+        guard let zones = try? await container.privateCloudDatabase.allRecordZones() else { return false }
+        return zones.contains { $0.zoneID.zoneName == zoneID.zoneName }
+    }
+
+    /// Turn sync on and wait for the first fetch, so a device restoring from iCloud has its sources
+    /// and library before Home appears.
+    public func enableAndFetch(cloudContainerID: String) async {
+        setEnabled(true, cloudContainerID: cloudContainerID)
+        isSyncing = true
+        await fetchNow()
+        isSyncing = false
+    }
+
     public func fetchNow() async {
         do { try await engine?.fetchChanges() } catch { lastError = "Fetch failed: " + Self.describe(error) }
     }
