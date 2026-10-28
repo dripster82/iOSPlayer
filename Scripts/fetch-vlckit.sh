@@ -52,9 +52,10 @@ rm -rf "$DEST/MobileVLCKit.xcframework"
 cp -R "$SRC" "$DEST/"
 cp "$(dirname "$SRC")/COPYING.txt" "$DEST/" 2>/dev/null || true   # LGPL 2.1 text (shipped in Settings → Licences)
 
-# Keep only the iOS device + simulator slices and drop the debug symbols (hundreds of MB), then
-# rewrite Info.plist to match: Xcode refuses an xcframework whose plist points at missing paths
-# ("Missing path ... DebugSymbolsPath").
+# Keep only the iOS device + simulator slices. The device slice keeps its dSYM (about 170 MB) so
+# App Store uploads carry VLCKit's symbols and crash reports symbolicate VLC frames; the simulator
+# slice's symbols are dropped. Info.plist is rewritten to match: Xcode refuses an xcframework whose
+# plist points at missing paths ("Missing path ... DebugSymbolsPath").
 /usr/bin/python3 - "$DEST/$FRAMEWORK" <<'PY'
 import plistlib, shutil, sys, os
 root = sys.argv[1]
@@ -63,14 +64,15 @@ d = plistlib.load(open(plist, "rb"))
 keep = []
 for lib in d["AvailableLibraries"]:
     if lib["SupportedPlatform"] == "ios":
-        lib.pop("DebugSymbolsPath", None)
+        if lib.get("SupportedPlatformVariant") == "simulator":
+            lib.pop("DebugSymbolsPath", None)
+            shutil.rmtree(os.path.join(root, lib["LibraryIdentifier"], "dSYMs"), ignore_errors=True)
         keep.append(lib)
     else:
         shutil.rmtree(os.path.join(root, lib["LibraryIdentifier"]), ignore_errors=True)
 d["AvailableLibraries"] = keep
 plistlib.dump(d, open(plist, "wb"))
 PY
-find "$DEST/$FRAMEWORK" -name dSYMs -type d -prune -exec rm -rf {} +
 
 echo "==> installed $DEST/$FRAMEWORK"
 ls "$DEST/$FRAMEWORK"
