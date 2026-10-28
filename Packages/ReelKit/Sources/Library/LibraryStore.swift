@@ -235,8 +235,25 @@ public final class LibraryStore: ObservableObject {
 
     public func items(kind: MediaKind, includeHidden: Bool = false) -> [MediaItem] {
         let raw = kind.rawValue
-        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.kindRaw == raw && (includeHidden || !$0.hidden) }, sortBy: [SortDescriptor(\.sortTitle)])
+        // Films and episodes: the file check runs in the store rather than by faulting every item's
+        // files. Shows (a few hundred at most) are checked in memory; SwiftData cannot evaluate the
+        // nested episodes-with-files predicate and throws at fetch time.
+        if kind == .show {
+            let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.kindRaw == raw && (includeHidden || !$0.hidden) }, sortBy: [SortDescriptor(\.sortTitle)])
+            return ((try? context.fetch(d)) ?? []).filter(Self.playable)
+        }
+        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.kindRaw == raw && (includeHidden || !$0.hidden) && !$0.files.isEmpty }, sortBy: [SortDescriptor(\.sortTitle)])
         return (try? context.fetch(d)) ?? []
+    }
+
+    /// A title is shown only once it has something to play: a film or episode needs a linked file,
+    /// a show needs an episode with one. During a restore from iCloud titles arrive before their
+    /// files, and a card that cannot play reads as a failed sync.
+    public static func playable(_ item: MediaItem) -> Bool {
+        switch item.kind {
+        case .show: return item.episodes.contains { !$0.files.isEmpty }
+        default: return !item.files.isEmpty
+        }
     }
 
     public func item(_ key: String) -> MediaItem? {
@@ -248,7 +265,7 @@ public final class LibraryStore: ObservableObject {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return [] }
         let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.title.localizedStandardContains(q) && !$0.hidden }, sortBy: [SortDescriptor(\.sortTitle)])
-        return (try? context.fetch(d)) ?? []
+        return ((try? context.fetch(d)) ?? []).filter(Self.playable)
     }
 
     /// Files the classifier accepted that still have no TMDb item: scanned without a key, or the matcher failed.
@@ -829,14 +846,14 @@ public final class LibraryStore: ObservableObject {
 
     /// Episodes in progress plus films in progress, most recent first.
     public func continueWatching(limit: Int = 12) -> [(MediaItem, WatchState)] {
-        watchStates().filter(\.isInProgress).compactMap { ws in item(ws.itemKey).map { ($0, ws) } }.prefix(limit).map { $0 }
+        watchStates().filter(\.isInProgress).compactMap { ws in item(ws.itemKey).map { ($0, ws) } }.filter { Self.playable($0.0) }.prefix(limit).map { $0 }
     }
 
     /// Episodes in viewing order. Specials (season 0) only take part when `includingSpecials`,
     /// i.e. when the viewer is already inside season 0.
     private func orderedEpisodes(of show: MediaItem, includingSpecials: Bool) -> [MediaItem] {
         show.episodes
-            .filter { includingSpecials || ($0.seasonNumber ?? 0) > 0 }
+            .filter { !$0.files.isEmpty && (includingSpecials || ($0.seasonNumber ?? 0) > 0) }
             .sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
     }
 
@@ -882,8 +899,8 @@ public final class LibraryStore: ObservableObject {
     public func recentlyAdded(limit: Int = 12) -> [MediaItem] {
         let film = MediaKind.film.rawValue, show = MediaKind.show.rawValue
         var d = FetchDescriptor<MediaItem>(predicate: #Predicate { ($0.kindRaw == film || $0.kindRaw == show) && !$0.hidden }, sortBy: [SortDescriptor(\.addedAt, order: .reverse)])
-        d.fetchLimit = limit
-        return (try? context.fetch(d)) ?? []
+        d.fetchLimit = limit * 3   // some of the newest may still be waiting for their files
+        return ((try? context.fetch(d)) ?? []).filter(Self.playable).prefix(limit).map { $0 }
     }
 
     /// Files with no match plus titles matched on a weak signal: both wait in Needs Review.

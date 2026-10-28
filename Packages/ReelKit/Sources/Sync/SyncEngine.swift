@@ -24,9 +24,12 @@ public struct RestoreProgress: Equatable, Sendable {
     public var expectedItems: Int?
     public var expectedFiles: Int?
     public var startedAt = Date()
+    /// Capped below 100%: the totals are the other device's local counts, and iCloud can hold a few
+    /// more records than that (older uploads it has since dropped), so the count can pass the total
+    /// before the fetch is done. Completion is when the restore screen goes away, not this number.
     public var fraction: Double? {
         guard let ei = expectedItems, let ef = expectedFiles, ei + ef > 0 else { return nil }
-        return min(1, Double(items + files) / Double(ei + ef))
+        return min(0.99, Double(items + files) / Double(ei + ef))
     }
 }
 

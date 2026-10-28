@@ -284,7 +284,7 @@ struct ShowDetailView: View {
     private var episodes: [MediaItem] { episodesBySeason[selected] ?? [] }
 
     private func refresh() {
-        let eps = show.episodes
+        let eps = show.episodes.filter { !$0.files.isEmpty }
         seasons = Array(Set(eps.compactMap(\.seasonNumber))).sorted()
         episodesBySeason = Dictionary(grouping: eps, by: { $0.seasonNumber ?? 0 }).mapValues { $0.sorted { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) } }
         states = library.watchStates(for: eps.map(\.itemKey))

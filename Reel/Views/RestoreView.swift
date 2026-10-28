@@ -46,7 +46,7 @@ struct RestoreView: View {
         HStack {
             Text(label).foregroundStyle(.secondary)
             Spacer()
-            Text(total.map { "\(n.formatted()) of \($0.formatted())" } ?? n.formatted())
+            Text(total.map { n < $0 ? "\(n.formatted()) of \($0.formatted())" : n.formatted() } ?? n.formatted())
         }
         .frame(maxWidth: 320)
     }
