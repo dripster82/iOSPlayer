@@ -51,7 +51,9 @@ public actor LibraryScanner {
         try modelContext.save()
 
         // Roots: tagged folders that are included, or the source root when none are tagged.
-        let roots = record.folderRules.filter(\.includeInScan).map(\.folderPath)
+        // A folder ticked inside another ticked folder is walked once, as part of its parent.
+        let included = record.folderRules.filter(\.includeInScan).map(\.folderPath)
+        let roots = included.filter { r in !included.contains { o in o != r && (o.isEmpty || r.hasPrefix(o.hasSuffix("/") ? o : o + "/")) } }
         var queue = scope.map { [$0] } ?? (roots.isEmpty ? [""] : roots)
         var seenPaths = Set<String>()
         /// Every folder that listed without error, with the names it contained. A file is only treated

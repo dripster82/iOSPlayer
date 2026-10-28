@@ -5,6 +5,8 @@ import MediaSources
 import Library
 
 /// Type → (discovered | manual form) → Test Connection → folders → scan. Also used to edit credentials.
+/// The form can list a server's SMB shares, or browse another server's folders, to fill the path;
+/// the folders step walks into sub-folders so a library folder can sit at any depth.
 struct AddSourceView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
@@ -30,15 +32,26 @@ struct AddSourceView: View {
     @State private var picked: [String: FolderTag] = [:]
     @State private var showPicker = false
     @State private var localBookmark: String?
+    /// Connected through Test Connection and kept for the folders step, so each level can list itself.
+    @State private var folderSource: (any MediaSource)?
+    @State private var nav: [BrowseFolder] = []
+    /// The server's SMB shares, offered when the share name is blank or Choose is tapped.
+    @State private var shares: [String]?
+    /// A connection to a non-SMB server's top level, for browsing to the folder that becomes the path.
+    @State private var browsing: BrowseSession?
+    private struct BrowseSession: Identifiable { let id = UUID(); let source: any MediaSource }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $nav) {
             Group {
                 switch step {
                 case .type: typeStep
                 case .form: formStep
                 case .folders: foldersStep
                 }
+            }
+            .navigationDestination(for: BrowseFolder.self) { fp in
+                if let folderSource { FolderBrowser(source: folderSource, path: fp.path, mode: .tick($picked, done: save), nav: $nav) }
             }
             .navigationTitle(editing == nil ? "Add Source" : "Edit Source")
             .navigationBarTitleDisplayMode(.inline)
@@ -55,7 +68,38 @@ struct AddSourceView: View {
                 step = .form
             } else { discovery.start() }
         }
-        .onDisappear { discovery.stop() }
+        .onDisappear { discovery.stop(); let s = folderSource; folderSource = nil; Task { await s?.disconnect() } }
+        .sheet(item: $browsing) { session in
+            NavigationStack(path: $nav) {
+                FolderBrowser(source: session.source, path: "", mode: .chooseOne { chosen in
+                    path = chosen.isEmpty ? (type == .webdav ? "/" : "/") : "/" + chosen
+                    browsing = nil; nav = []
+                    Task { await session.source.disconnect() }
+                }, nav: $nav)
+                .navigationDestination(for: BrowseFolder.self) { fp in
+                    FolderBrowser(source: session.source, path: fp.path, mode: .chooseOne { chosen in
+                        path = "/" + chosen
+                        browsing = nil; nav = []
+                        Task { await session.source.disconnect() }
+                    }, nav: $nav)
+                }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { browsing = nil; nav = []; Task { await session.source.disconnect() } } } }
+            }
+        }
+        .sheet(isPresented: Binding(get: { shares != nil }, set: { if !$0 { shares = nil } })) {
+            NavigationStack {
+                List {
+                    Section {
+                        ForEach(shares ?? [], id: \.self) { share in
+                            Button { path = share; shares = nil; Task { await test() } } label: { Label(share, systemImage: "externaldrive.connected.to.line.below").foregroundStyle(.primary) }
+                        }
+                        if shares?.isEmpty == true { Text("The server lists no shares for this sign-in.").font(.footnote).foregroundStyle(.secondary) }
+                    } header: { Text("Shares on \(host)") } footer: { Text("Pick the share that holds your films and shows. The folders inside it come next.") }
+                }
+                .navigationTitle("Choose a share").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { shares = nil } } }
+            }
+        }
         .fileImporter(isPresented: $showPicker, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result, let data = try? LocalSource.bookmarkData(for: url) {
                 type = .local; name = url.lastPathComponent; host = ""; path = data.base64EncodedString()
@@ -101,7 +145,12 @@ struct AddSourceView: View {
             Section {
                 TextField("Name", text: $name, prompt: Text("Living room NAS"))
                 TextField("Host or IP", text: $host, prompt: Text("192.168.1.20 or nas.local")).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField(type.pathLabel, text: $path, prompt: Text(type.pathPrompt)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                HStack {
+                    TextField(type.pathLabel, text: $path, prompt: Text(type.pathPrompt)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if type != .dlna && type != .local {
+                        Button(type == .smb ? "Shares…" : "Browse…") { Task { await browseForPath() } }.disabled(testing || host.isEmpty).font(.callout)
+                    }
+                }
                 TextField("Port (optional)", text: $port, prompt: Text(type.defaultPort.map { "\($0)" } ?? "")).keyboardType(.numberPad)
                 if type == .webdav { Toggle("Use HTTPS", isOn: $useTLS) }
             } footer: { if let note = type.formNote { Text(note) } }
@@ -123,44 +172,36 @@ struct AddSourceView: View {
     }
 
     private var foldersStep: some View {
-        List {
-            Section {
-                Banner(colour: .green, text: "Connected to \(host.isEmpty ? name : host) · \(type.displayName)") { EmptyView() }
-            }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
-            Section {
-                ForEach(rootEntries.filter { $0.isDirectory && !DirectoryEntry.isSystemFolder($0.name) }, id: \.relativePath) { e in
-                    HStack {
-                        Button { toggle(e.relativePath) } label: { Image(systemName: picked[e.relativePath] != nil ? "checkmark.square.fill" : "square").foregroundStyle(picked[e.relativePath] != nil ? Color.accentColor : .secondary) }.buttonStyle(.plain)
-                        Text(e.name)
-                        Spacer()
-                        if picked[e.relativePath] != nil {
-                            Picker("", selection: Binding(get: { picked[e.relativePath] ?? .mixed }, set: { picked[e.relativePath] = $0 })) {
-                                Text("TV").tag(FolderTag.tv); Text("Films").tag(FolderTag.films); Text("Mixed").tag(FolderTag.mixed)
-                            }.pickerStyle(.segmented).frame(width: 190)
-                        }
+        Group {
+            if let folderSource {
+                FolderBrowser(source: folderSource, path: "", mode: .tick($picked, done: save), nav: $nav, preloaded: rootEntries)
+                    .safeAreaInset(edge: .top) {
+                        Banner(colour: .green, text: "Connected to \(host.isEmpty ? name : host) · \(type.displayName)") { EmptyView() }
                     }
-                }
-                if !rootEntries.contains(where: { $0.isDirectory && !DirectoryEntry.isSystemFolder($0.name) }) {
-                    Text("No sub-folders. The whole share will be scanned.").font(.footnote).foregroundStyle(.secondary)
-                }
-            } header: { Text("Tick the folders to scan and say what's in each") } footer: { Text("Untagged folders are classified from file names. You can change tags later from the source page.") }
-            Section {
-                Button { save() } label: { HStack { Spacer(); Text("Start scanning"); Spacer() } }
+            } else {
+                ContentUnavailableView("Not connected", systemImage: "wifi.slash", description: Text("Go back and test the connection again."))
             }
         }
     }
 
     // MARK: Actions
 
-    private func guessTag(_ name: String) -> FolderTag? {
-        let n = name.lowercased()
-        if ["tv", "tv shows", "shows", "series"].contains(n) { return .tv }
-        if ["films", "movies", "film", "movie", "cinema"].contains(n) { return .films }
-        return nil
-    }
-
-    private func toggle(_ p: String) {
-        if picked[p] != nil { picked[p] = nil } else { picked[p] = guessTag((p as NSString).lastPathComponent) ?? .mixed }
+    /// Shares… lists the server's SMB shares; Browse… connects to another server's top level and
+    /// walks its folders. Either fills the path field.
+    private func browseForPath() async {
+        testing = true; error = nil
+        do {
+            if type == .smb {
+                shares = try await SMBSource.shares(host: host, port: Int(port), credentials: credentials)
+            } else {
+                var top = config; top.path = "/"
+                let src = SourceFactory.make(top)
+                try await src.connect(credentials: credentials)
+                nav = []
+                browsing = BrowseSession(source: src)
+            }
+        } catch { self.error = error.localizedDescription }
+        testing = false
     }
 
     private var config: SourceConfig {
@@ -171,6 +212,8 @@ struct AddSourceView: View {
     private func test() async {
         testing = true; error = nil
         if !macAddress.isEmpty, WakeOnLAN.normalise(macAddress) == nil { error = WakeOnLAN.WakeError.badAddress.errorDescription; testing = false; return }
+        // A blank SMB share name: offer the server's shares rather than fail.
+        if type == .smb, editing == nil, path.trimmingCharacters(in: .whitespaces).isEmpty { await browseForPath(); return }
         let src = SourceFactory.make(config)
         do {
             try await src.connect(credentials: credentials)
@@ -183,8 +226,8 @@ struct AddSourceView: View {
                 dismiss()
             } else {
                 rootEntries = try await src.list("")
-                await src.disconnect()
-                for e in rootEntries where e.isDirectory && !DirectoryEntry.isSystemFolder(e.name) { if let t = guessTag(e.name) { picked[e.relativePath] = t } }
+                for e in rootEntries where e.isDirectory && !DirectoryEntry.isSystemFolder(e.name) { if let t = FolderBrowser.guessTag(e.name) { picked[e.relativePath] = t } }
+                folderSource = src
                 step = .folders
             }
         } catch {
@@ -199,7 +242,7 @@ struct AddSourceView: View {
         do {
             try await src.connect(credentials: nil)
             rootEntries = try await src.list("")
-            await src.disconnect()
+            folderSource = src
             step = .folders
         } catch { self.error = error.localizedDescription; step = .form }
         testing = false
@@ -208,6 +251,7 @@ struct AddSourceView: View {
     private func save() {
         do {
             let record = try library.addSource(config, credentials: credentials, folderRules: picked.map { ($0.key, $0.value) })
+            let s = folderSource; folderSource = nil; Task { await s?.disconnect() }
             library.scan(record, providers: settings.providers)
             onComplete?()
             dismiss()

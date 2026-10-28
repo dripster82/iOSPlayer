@@ -20,6 +20,22 @@ public actor SMBSource: MediaSource {
         return c.url!
     }
 
+    /// The shares a server offers, for the add-source form: the user picks one instead of typing its
+    /// name. Administrative shares (`C$`, `IPC$`) are left out.
+    public static func shares(host: String, port: Int?, credentials: Credentials?) async throws -> [String] {
+        var c = URLComponents(); c.scheme = "smb"; c.host = host; c.port = port
+        let cred = credentials.map { URLCredential(user: $0.username, password: $0.password, persistence: .forSession) }
+        guard let url = c.url, let manager = SMB2Manager(url: url, credential: cred) else { throw SourceError.unreachable(host) }
+        manager.timeout = 10
+        do {
+            return try await manager.listShares().map(\.name).filter { !$0.hasSuffix("$") }.sorted { $0.lowercased() < $1.lowercased() }
+        } catch let e as NSError {
+            Diagnostics.log("source", "smb \(host) shares: \(e.domain) \(e.code) \(e.localizedDescription)")
+            if e.code == Int(EACCES) || e.code == Int(EPERM) || e.localizedDescription.localizedCaseInsensitiveContains("logon") { throw SourceError.authFailed }
+            throw SourceError.unreachable(host)
+        }
+    }
+
     public func connect(credentials: Credentials?) async throws {
         self.credentials = credentials
         let cred: URLCredential? = credentials.map { URLCredential(user: $0.username, password: $0.password, persistence: .forSession) }
