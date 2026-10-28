@@ -215,14 +215,19 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             UserDefaults.standard.set(true, forKey: resendKey)
         }
         pushPendingChanges()
-        sendSummary()
+        sendSummary(onlyIfMissing: true)
     }
 
-    /// The totals a restoring device shows a percentage against. Sent on every start and with any
-    /// library change; a device whose library is empty (one mid-restore) keeps quiet so it never
-    /// overwrites the real totals with zeros.
-    private func sendSummary() {
+    /// The totals a restoring device shows a percentage against. Sent with any library change, and on
+    /// start only when iCloud has no Summary yet (none seen fetched or saved). A device whose library
+    /// is empty (one mid-restore) keeps quiet so it never overwrites the real totals with zeros.
+    private func sendSummary(onlyIfMissing: Bool = false) {
         guard let engine, ((try? ctx.fetchCount(FetchDescriptor<MediaItem>())) ?? 0) > 0 else { return }
+        if onlyIfMissing {
+            let name = Self.summaryName
+            let seen = ((try? ctx.fetchCount(FetchDescriptor<SyncRecordMeta>(predicate: #Predicate { $0.recordName == name }))) ?? 0) > 0
+            if seen { return }
+        }
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID(Self.summaryName))])
     }
 
@@ -829,7 +834,8 @@ actor SyncApplier {
             case "Summary":
                 out.expectedItems = r["itemCount"] as? Int
                 out.expectedFiles = r["fileCount"] as? Int
-                continue   // nothing stored locally
+                SyncEngine.rememberSystemFields(r, in: modelContext)   // marks it as seen; nothing else is stored
+                continue
             default: break
             }
             SyncEngine.rememberSystemFields(r, in: modelContext)
