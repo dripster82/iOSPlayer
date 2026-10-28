@@ -53,6 +53,8 @@ targets:
       path: Reel/Info.plist
       properties:
         CFBundleDisplayName: Reel
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # Built-in keys from Secrets.xcconfig; empty when the file has none.
         REEL_TMDB_KEY: $(REEL_TMDB_KEY)
         REEL_FANART_KEY: $(REEL_FANART_KEY)
