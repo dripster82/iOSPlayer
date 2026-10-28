@@ -5,6 +5,7 @@ import MediaCore
 import VLCKit
 #if canImport(UIKit)
 import UIKit
+import AVFoundation
 #endif
 
 /// VLCKit 4 wrapper. Owns one `VLCMediaPlayer` and republishes its state for SwiftUI.
@@ -260,6 +261,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func play() {
+        if verifyOnNextPlay { flushDisplayLayerIfNeeded() }
         player.play()
         if verifyOnNextPlay { verifyOnNextPlay = false; verifyOutput() }
     }
@@ -302,12 +304,41 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
     /// Reconnect now rather than leaving the viewer to wait for the stall watchdog.
     public func verifyPlaybackAfterForeground() {
+        flushDisplayLayerIfNeeded()
         // Paused while away: the check runs once play resumes, when the output would show.
         if status == .paused { verifyOnNextPlay = true; return }
         guard status == .playing else { return }
         verifyOutput()
     }
     private var verifyOnNextPlay = false
+
+    /// VLC paints through an AVSampleBufferDisplayLayer. When the app goes to the background (the home
+    /// gesture or another app; the lock screen is kinder) iOS interrupts that layer and marks it as
+    /// needing a flush; until it gets one nothing enqueued shows, so the picture stays black while VLC
+    /// counts every frame as displayed. This VLCKit build only handles the interruption for its OpenGL
+    /// view, not this one, so the flush is done here on the way back to the foreground.
+    private func flushDisplayLayerIfNeeded() {
+        #if canImport(UIKit)
+        guard let root = player.drawable as? UIView else { return }
+        let layers = Self.displayLayers(in: root)
+        log("display layers on return: \(layers.map { "status \($0.status.rawValue) flush \($0.requiresFlushToResumeDecoding) ready \($0.isReadyForMoreMediaData)" }.joined(separator: "; "))")
+        for layer in layers {
+            let failed = layer.status == .failed
+            guard failed || layer.requiresFlushToResumeDecoding else { continue }
+            log("display layer \(failed ? "failed (\(layer.error?.localizedDescription ?? "no error"))" : "needs a flush") after the background; flushing")
+            layer.flush()
+        }
+        #endif
+    }
+
+    #if canImport(UIKit)
+    private static func displayLayers(in view: UIView) -> [AVSampleBufferDisplayLayer] {
+        var found: [AVSampleBufferDisplayLayer] = []
+        if let l = view.layer as? AVSampleBufferDisplayLayer { found.append(l) }
+        for sub in view.subviews { found += displayLayers(in: sub) }
+        return found
+    }
+    #endif
 
     /// Four seconds from now, playback must have put pictures on screen (sound alone is not enough:
     /// a video output that died in the background leaves the picture black while the audio runs on).
