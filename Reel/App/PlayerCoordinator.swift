@@ -378,7 +378,7 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     func play(_ item: MediaItem, file: MediaFile? = nil, fromStart: Bool = false, settings: AppSettings) {
-        guard let file = file ?? library.preferredFile(item) else { loadError = "No file for \(item.title)."; return }
+        guard let file = file ?? library.preferredFile(item) else { loadError = "No file for \(item.title) yet. If the library is still syncing from iCloud, try again in a moment."; return }
         if nativePlayback != nil {
             // A Siri intent or a tap while Apple's player is up: one playback at a time.
             Diagnostics.log("player", "play requested while Apple's player was up; replacing it")

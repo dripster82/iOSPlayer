@@ -115,6 +115,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     }
 
     private let container: ModelContainer
+    /// Background context for fetched changes; see `handleEvent`.
+    private let applier: SyncApplier
     private var engine: CKSyncEngine?
     private let zoneID = CKRecordZone.ID(zoneName: "Library", ownerName: CKCurrentUserDefaultName)
     private let stateKey = "reel.cksync.state"
@@ -123,6 +125,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     public init(container: ModelContainer, cloudContainerID: String) {
         self.container = container
+        applier = SyncApplier(modelContainer: container)
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
         super.init()
         if isEnabled { start(cloudContainerID: cloudContainerID) }
@@ -164,7 +167,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         let config = CKSyncEngine.Configuration(database: CKContainer(identifier: cloudContainerID).privateCloudDatabase, stateSerialization: serialization, delegate: self)
         engine = CKSyncEngine(config)
         engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-        dedupeSources()
+        Self.dedupeSources(in: ctx)
         // Devices that enabled sync before library sync existed have a library that never went up.
         let backfillKey = "reel.sync.libraryBackfill.v1"
         if !UserDefaults.standard.bool(forKey: backfillKey) {
@@ -188,7 +191,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     /// Two devices that each added the same share before sync existed hold it under different ids. The
     /// remote copy is recognised by type + host + share and never instantiated locally; this also removes
     /// any duplicate that slipped in earlier (locally only: the other device keeps its own record).
-    private func dedupeSources() {
+    nonisolated static func dedupeSources(in ctx: ModelContext) {
         let all = (try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []
         var seen: [String: SourceRecord] = [:]
         for s in all.sorted(by: { $0.files.count > $1.files.count }) {
@@ -200,7 +203,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     /// Moves a local source (and its files) to the id the other device uses. The files' old CloudKit
     /// records are deleted and they are re-uploaded under names derived from the new id.
-    private func rekey(_ source: SourceRecord, to newID: UUID) -> SourceRecord {
+    nonisolated static func rekey(_ source: SourceRecord, to newID: UUID, in ctx: ModelContext, deleting: inout [String]) -> SourceRecord {
         let oldID = source.id
         if let creds = CredentialStore.shared.load(for: oldID) {
             try? CredentialStore.shared.save(creds, for: newID)
@@ -217,11 +220,11 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         source.id = newID
         source.pendingSync = false
         try? ctx.save()
-        deleteRecords(named: oldNames)
+        deleting += oldNames
         return source
     }
 
-    private static func identity(type: SourceType, host: String, path: String) -> String {
+    nonisolated private static func identity(type: SourceType, host: String, path: String) -> String {
         "\(type.rawValue)|\(host.trimmingCharacters(in: .whitespaces).lowercased())|\(path.trimmingCharacters(in: CharacterSet(charactersIn: " /")).lowercased())"
     }
 
@@ -298,7 +301,38 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     // MARK: - CKSyncEngineDelegate
 
     nonisolated public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
+        if case .fetchedRecordZoneChanges(let e) = event {
+            // Applied on a background context: a restore of thousands of records must never stall the
+            // UI. The main thread only learns that something changed, at most every couple of seconds.
+            let mods = e.modifications.map(\.record), dels = e.deletions.map(\.recordID)
+            let toDelete = await applier.apply(modifications: mods, deletions: dels)
+            await MainActor.run { self.fetchedChangesApplied(changed: !mods.isEmpty || !dels.isEmpty, deleting: toDelete) }
+            return
+        }
         await MainActor.run { self.handle(event) }
+    }
+
+    private func fetchedChangesApplied(changed: Bool, deleting: [String]) {
+        lastSyncedAt = Date()
+        deleteRecords(named: deleting)
+        if changed { scheduleRefresh() }
+    }
+
+    /// Every screen rebuilds on `onChangesApplied`; during a restore batches arrive several times a
+    /// second, so refreshes are coalesced to one every two seconds plus a trailing one.
+    private var refreshTask: Task<Void, Never>?
+    private var lastRefreshAt = Date.distantPast
+    private func scheduleRefresh() {
+        let since = Date().timeIntervalSince(lastRefreshAt)
+        if since >= 2 { lastRefreshAt = Date(); onChangesApplied?(); return }
+        guard refreshTask == nil else { return }
+        refreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0.1, 2 - since)))
+            guard let self else { return }
+            self.refreshTask = nil
+            self.lastRefreshAt = Date()
+            self.onChangesApplied?()
+        }
     }
 
     nonisolated public func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext, syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
@@ -329,38 +363,34 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             case .signOut, .switchAccounts: UserDefaults.standard.removeObject(forKey: stateKey)
             default: break
             }
-        case .fetchedRecordZoneChanges(let e):
-            for mod in e.modifications { rememberSystemFields(mod.record); apply(mod.record) }
-            for del in e.deletions { forgetSystemFields(del.recordID); applyDeletion(del.recordID) }
-            reconcileLinks()
-            dedupeSources()
-            try? ctx.save()
-            lastSyncedAt = Date()
-            if !e.modifications.isEmpty || !e.deletions.isEmpty { onChangesApplied?() }
+        case .fetchedRecordZoneChanges:
+            break   // handled in handleEvent, off the main thread
         case .sentRecordZoneChanges(let e):
-            for saved in e.savedRecords { rememberSystemFields(saved); clearPending(saved.recordID) }
+            for saved in e.savedRecords { Self.rememberSystemFields(saved, in: ctx); clearPending(saved.recordID) }
             for failed in e.failedRecordSaves {
                 let id = failed.record.recordID
                 if failed.error.code == .serverRecordChanged, let server = failed.error.serverRecord {
                     // Our save lacked the server's change tag, or someone else wrote first. Keep the
                     // server's tag; if their copy is newer take it, otherwise send ours again on top.
-                    rememberSystemFields(server)
+                    Self.rememberSystemFields(server, in: ctx)
                     let remote = (server["updatedAt"] as? Date) ?? .distantPast
                     if let local = localUpdatedAt(id), local > remote {
                         engine?.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
                     } else {
-                        apply(server); clearPending(id)
+                        var toDelete: [String] = []
+                        Self.apply(server, in: ctx, deleting: &toDelete); clearPending(id)
+                        deleteRecords(named: toDelete)
                     }
                 } else if failed.error.code == .unknownItem {
-                    forgetSystemFields(id)
+                    Self.forgetSystemFields(id, in: ctx)
                     engine?.state.add(pendingRecordZoneChanges: [.saveRecord(id)])   // stale tag for a record that is gone: recreate
                 } else {
                     lastError = "\(failed.record.recordType) \(id.recordName.prefix(40)): " + Self.describe(failed.error)
                 }
             }
-            for (id, _) in e.failedRecordDeletes { forgetSystemFields(id) }
+            for (id, _) in e.failedRecordDeletes { Self.forgetSystemFields(id, in: ctx) }
             // A delete for something already gone is success as far as we are concerned.
-            reconcileLinks()
+            Self.reconcileLinks(in: ctx)
             try? ctx.save()
             lastSyncedAt = Date()
         case .didFetchRecordZoneChanges(let e):
@@ -380,7 +410,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     /// CloudKit cannot type an empty list on first sight; an absent field reads back as [] anyway.
     private static func list(_ values: [String]) -> [String]? { values.isEmpty ? nil : values }
 
-    private func split(_ id: CKRecord.ID) -> (String, String)? {
+    nonisolated static func split(_ id: CKRecord.ID) -> (String, String)? {
         let parts = id.recordName.split(separator: "|", maxSplits: 1).map(String.init)
         return parts.count == 2 ? (parts[0], parts[1]) : nil
     }
@@ -398,7 +428,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         return CKRecord(recordType: type, recordID: id)
     }
 
-    private func rememberSystemFields(_ r: CKRecord) {
+    nonisolated static func rememberSystemFields(_ r: CKRecord, in ctx: ModelContext) {
         let coder = NSKeyedArchiver(requiringSecureCoding: true)
         r.encodeSystemFields(with: coder)
         coder.finishEncoding()
@@ -410,14 +440,14 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         }
     }
 
-    private func forgetSystemFields(_ id: CKRecord.ID) {
+    nonisolated static func forgetSystemFields(_ id: CKRecord.ID, in ctx: ModelContext) {
         let name = id.recordName
         if let meta = try? ctx.fetch(FetchDescriptor<SyncRecordMeta>(predicate: #Predicate { $0.recordName == name })).first { ctx.delete(meta) }
     }
 
     /// The local row's `updatedAt` for a record name, to decide conflicts.
     private func localUpdatedAt(_ id: CKRecord.ID) -> Date? {
-        guard let (type, key) = split(id) else { return nil }
+        guard let (type, key) = Self.split(id) else { return nil }
         switch type {
         case "watch": return (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first)?.updatedAt
         case "fav": return (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first)?.updatedAt
@@ -434,7 +464,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     }
 
     private func record(for id: CKRecord.ID) -> CKRecord? {
-        guard let (type, key) = split(id) else { return nil }
+        guard let (type, key) = Self.split(id) else { return nil }
         switch type {
         case "watch":
             guard let ws = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
@@ -505,7 +535,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     // MARK: - Applying remote records
 
-    private func apply(_ r: CKRecord) {
+    /// Applies one fetched record to `ctx`. Record names of CloudKit records that must be deleted as a
+    /// consequence (a re-keyed source's old files) are appended to `deleting` for the caller to send.
+    nonisolated static func apply(_ r: CKRecord, in ctx: ModelContext, deleting: inout [String]) {
         let remoteUpdated = (r["updatedAt"] as? Date) ?? .distantPast
         switch r.recordType {
         case "WatchState":
@@ -544,7 +576,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             o.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             o.updatedAt = remoteUpdated; o.pendingSync = false
         case "Collection":
-            guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key) else { return }
+            guard let (_, key) = Self.split(r.recordID), let uuid = UUID(uuidString: key) else { return }
             let c = (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first) ?? { let x = MediaCollection(name: ""); x.id = uuid; x.updatedAt = .distantPast; x.pendingSync = false; ctx.insert(x); return x }()
             guard remoteUpdated > c.updatedAt else { return }
             c.name = (r["name"] as? String) ?? c.name
@@ -553,7 +585,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             c.collageURLs = (r["collageURLs"] as? [String]) ?? []
             c.updatedAt = remoteUpdated; c.pendingSync = false
         case "Source":
-            guard let (_, key) = split(r.recordID), let uuid = UUID(uuidString: key),
+            guard let (_, key) = Self.split(r.recordID), let uuid = UUID(uuidString: key),
                   let typeRaw = r["type"] as? String, let type = SourceType(rawValue: typeRaw), type != .local else { return }
             let existing = try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.id == uuid })).first
             if let existing, let local = existing.updatedAt, local >= remoteUpdated { return }
@@ -566,7 +598,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             var adopted: SourceRecord? = existing
             if existing == nil, let twin = ((try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []).first(where: { $0.id != uuid && Self.identity(type: $0.type, host: $0.host, path: $0.path) == identity }) {
                 guard uuid.uuidString < twin.id.uuidString else { return }
-                adopted = rekey(twin, to: uuid)
+                adopted = Self.rekey(twin, to: uuid, in: ctx, deleting: &deleting)
             }
             let config = SourceConfig(id: uuid, name: (r["name"] as? String) ?? "Source", type: type, host: (r["host"] as? String) ?? "",
                                       port: r["port"] as? Int, path: (r["path"] as? String) ?? "", useTLS: ((r["useTLS"] as? Int) ?? 1) == 1, username: r["username"] as? String)
@@ -652,6 +684,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             f.reviewed = f.reviewed || ((r["reviewed"] as? Int) ?? 0) == 1; f.ignored = f.ignored || ((r["ignored"] as? Int) ?? 0) == 1
             f.addedAt = (r["addedAt"] as? Date) ?? f.addedAt; f.lastSeenAt = (r["lastSeenAt"] as? Date) ?? f.lastSeenAt
             f.itemKeyHint = r["itemKey"] as? String
+            // Link now when the item is already here, so a tap during a restore finds the file.
+            if f.item == nil, let key = f.itemKeyHint, let item = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first { f.item = item }
             f.syncKey = r.recordID.recordName
             f.updatedAt = remoteUpdated; f.pendingSync = false
         default: break
@@ -660,7 +694,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     /// Records arrive in no particular order, so relationships are resolved from the key hints once
     /// both sides exist. Cheap: only rows whose link is still missing are fetched.
-    private func reconcileLinks() {
+    nonisolated static func reconcileLinks(in ctx: ModelContext) {
         let orphanFiles = (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.itemKeyHint != nil && $0.item == nil }))) ?? []
         for f in orphanFiles {
             guard let key = f.itemKeyHint, let item = try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first else { continue }
@@ -673,8 +707,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         }
     }
 
-    private func applyDeletion(_ id: CKRecord.ID) {
-        guard let (type, key) = split(id) else { return }
+    nonisolated static func applyDeletion(_ id: CKRecord.ID, in ctx: ModelContext) {
+        guard let (type, key) = Self.split(id) else { return }
         switch type {
         case "collection":
             if let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { ctx.delete(c) }
@@ -693,7 +727,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     }
 
     private func clearPending(_ id: CKRecord.ID) {
-        guard let (type, key) = split(id) else { return }
+        guard let (type, key) = Self.split(id) else { return }
         switch type {
         case "watch": if let x = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "fav": if let x = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
@@ -707,6 +741,22 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let x = try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.syncKey == name })).first { x.pendingSync = false }
         default: break
         }
+    }
+}
+
+/// Applies fetched CloudKit changes on its own context, off the main thread. The main context picks
+/// the rows up through the container, and `SyncEngine.onChangesApplied` tells the screens to refresh.
+@ModelActor
+actor SyncApplier {
+    /// Returns the CloudKit record names that must now be deleted (a re-keyed source's old files).
+    func apply(modifications: [CKRecord], deletions: [CKRecord.ID]) -> [String] {
+        var toDelete: [String] = []
+        for r in modifications { SyncEngine.rememberSystemFields(r, in: modelContext); SyncEngine.apply(r, in: modelContext, deleting: &toDelete) }
+        for id in deletions { SyncEngine.forgetSystemFields(id, in: modelContext); SyncEngine.applyDeletion(id, in: modelContext) }
+        SyncEngine.reconcileLinks(in: modelContext)
+        SyncEngine.dedupeSources(in: modelContext)
+        try? modelContext.save()
+        return toDelete
     }
 }
 #endif
