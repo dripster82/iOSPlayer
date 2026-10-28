@@ -338,6 +338,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         restore = RestoreProgress()
         restoreHidden = false
         isSyncing = true
+        fetchSummaryDirectly(cloudContainerID: cloudContainerID)
         Task { @MainActor in
             await fetchNow()
             // Fetch is complete: the trailing refresh may still be pending, so refresh now.
@@ -346,6 +347,25 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             isSyncing = false
             restore = nil
             restoreHidden = false
+        }
+    }
+
+    /// The change stream delivers records in server order, and the Summary was written after every
+    /// item and file, so waiting for it there means a percentage only at the very end. Fetch it by
+    /// id instead, retrying for a while in case the other device has not sent it yet.
+    private func fetchSummaryDirectly(cloudContainerID: String) {
+        let db = CKContainer(identifier: cloudContainerID).privateCloudDatabase
+        let id = CKRecord.ID(recordName: Self.summaryName, zoneID: zoneID)
+        Task { @MainActor [weak self] in
+            for attempt in 0..<10 {
+                guard let self, self.restore != nil, self.restore?.expectedItems == nil else { return }
+                if attempt > 0 { try? await Task.sleep(for: .seconds(15)) }
+                guard let r = try? await db.record(for: id), var p = self.restore else { continue }
+                p.expectedItems = r["itemCount"] as? Int
+                p.expectedFiles = r["fileCount"] as? Int
+                self.restore = p
+                return
+            }
         }
     }
 
