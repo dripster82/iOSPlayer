@@ -27,7 +27,9 @@ final class AppSettings: ObservableObject {
         static let fanart = value("REEL_FANART_KEY")
         static let openSubtitles = value("REEL_OPENSUBTITLES_KEY")
         private static func value(_ key: String) -> String {
-            let v = (Bundle.main.infoDictionary?[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var v = (Bundle.main.infoDictionary?[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // xcconfig keeps quotes written round a value, and a quoted key is refused by every service.
+            while v.count >= 2, let f = v.first, f == "\"" || f == "'", v.last == f { v = String(v.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines) }
             return v.hasPrefix("$(") ? "" : v   // an unexpanded placeholder means no key was configured
         }
     }

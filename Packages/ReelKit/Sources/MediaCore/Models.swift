@@ -75,6 +75,11 @@ public struct DirectoryEntry: Hashable, Sendable {
     public var name: String
     public var relativePath: String
     public var isDirectory: Bool
+    /// Housekeeping folders a NAS shows but nobody films in: dotfiles, Synology's `@eaDir`, `#recycle`
+    /// and `#snapshot`, QNAP's `.@__thumb`. Never offered as a library folder, never walked.
+    public static func isSystemFolder(_ name: String) -> Bool {
+        name.hasPrefix(".") || name.hasPrefix("@") || name.hasPrefix("#") || name.lowercased() == "$recycle.bin" || name.lowercased() == "system volume information"
+    }
     public var size: Int64?
     public var modified: Date?
 

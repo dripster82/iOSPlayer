@@ -71,7 +71,7 @@ public actor LibraryScanner {
 
             let videos = entries.filter { !$0.isDirectory && $0.isVideo }
             let subs = entries.filter { !$0.isDirectory && $0.isSubtitle }
-            for e in entries where e.isDirectory && !e.name.hasPrefix(".") && !e.name.hasPrefix("@") { queue.append(e.relativePath) }
+            for e in entries where e.isDirectory && !DirectoryEntry.isSystemFolder(e.name) { queue.append(e.relativePath) }
 
             for v in videos {
                 seenPaths.insert(v.relativePath)

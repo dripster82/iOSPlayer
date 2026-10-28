@@ -697,6 +697,10 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if existing == nil, let twin = ((try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? []).first(where: { $0.id != uuid && Self.identity(type: $0.type, host: $0.host, path: $0.path) == identity }) {
                 guard uuid.uuidString < twin.id.uuidString else { return }
                 adopted = Self.rekey(twin, to: uuid, in: ctx, deleting: &deleting)
+                // The share was just added here, after the cloud copy was last changed: the folders the user
+                // ticked a moment ago are the choice that counts. Keep them, and push them so the other
+                // device follows, instead of merging the older cloud rules on top.
+                if let local = twin.updatedAt, local > remoteUpdated { twin.pendingSync = true; return }
             }
             let config = SourceConfig(id: uuid, name: (r["name"] as? String) ?? "Source", type: type, host: (r["host"] as? String) ?? "",
                                       port: r["port"] as? Int, path: (r["path"] as? String) ?? "", useTLS: ((r["useTLS"] as? Int) ?? 1) == 1, username: r["username"] as? String)

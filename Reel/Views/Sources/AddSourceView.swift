@@ -128,7 +128,7 @@ struct AddSourceView: View {
                 Banner(colour: .green, text: "Connected to \(host.isEmpty ? name : host) · \(type.displayName)") { EmptyView() }
             }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             Section {
-                ForEach(rootEntries.filter(\.isDirectory), id: \.relativePath) { e in
+                ForEach(rootEntries.filter { $0.isDirectory && !DirectoryEntry.isSystemFolder($0.name) }, id: \.relativePath) { e in
                     HStack {
                         Button { toggle(e.relativePath) } label: { Image(systemName: picked[e.relativePath] != nil ? "checkmark.square.fill" : "square").foregroundStyle(picked[e.relativePath] != nil ? Color.accentColor : .secondary) }.buttonStyle(.plain)
                         Text(e.name)
@@ -140,7 +140,7 @@ struct AddSourceView: View {
                         }
                     }
                 }
-                if rootEntries.filter(\.isDirectory).isEmpty {
+                if !rootEntries.contains(where: { $0.isDirectory && !DirectoryEntry.isSystemFolder($0.name) }) {
                     Text("No sub-folders. The whole share will be scanned.").font(.footnote).foregroundStyle(.secondary)
                 }
             } header: { Text("Tick the folders to scan and say what's in each") } footer: { Text("Untagged folders are classified from file names. You can change tags later from the source page.") }
@@ -184,7 +184,7 @@ struct AddSourceView: View {
             } else {
                 rootEntries = try await src.list("")
                 await src.disconnect()
-                for e in rootEntries where e.isDirectory { if let t = guessTag(e.name) { picked[e.relativePath] = t } }
+                for e in rootEntries where e.isDirectory && !DirectoryEntry.isSystemFolder(e.name) { if let t = guessTag(e.name) { picked[e.relativePath] = t } }
                 step = .folders
             }
         } catch {
