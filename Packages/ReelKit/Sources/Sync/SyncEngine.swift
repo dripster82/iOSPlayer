@@ -43,6 +43,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     /// Non-nil while a restore is running; the app shows a progress screen instead of the library so
     /// nothing appears before its files have arrived and been linked.
     @Published public private(set) var restore: RestoreProgress?
+    /// The viewer chose to carry on in the background: Home shows a banner instead, with a way back.
+    @Published public private(set) var restoreHidden = false
 
     @Published public private(set) var lastSyncedAt: Date?
     @Published public private(set) var lastError: String? { didSet { if let e = lastError { Self.log(e) } } }
@@ -213,6 +215,15 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             UserDefaults.standard.set(true, forKey: resendKey)
         }
         pushPendingChanges()
+        sendSummary()
+    }
+
+    /// The totals a restoring device shows a percentage against. Sent on every start and with any
+    /// library change; a device whose library is empty (one mid-restore) keeps quiet so it never
+    /// overwrites the real totals with zeros.
+    private func sendSummary() {
+        guard let engine, ((try? ctx.fetchCount(FetchDescriptor<MediaItem>())) ?? 0) > 0 else { return }
+        engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID(Self.summaryName))])
     }
 
     /// Two devices that each added the same share before sync existed hold it under different ids. The
@@ -277,7 +288,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>(predicate: #Predicate { $0.pendingSync }))) ?? [] where s.type != .local { ids.append(recordID(SyncKeys.source(s.id))) }
         let libraryChanged = ((try? ctx.fetchCount(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? 0) > 0
             || ((try? ctx.fetchCount(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? 0) > 0
-        if libraryChanged { ids.append(recordID(Self.summaryName)) }   // totals, so a restoring device can show a percentage
+        if libraryChanged { sendSummary() }   // totals, so a restoring device can show a percentage
         for i in (try? ctx.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID(SyncKeys.item(i.itemKey))) }
         for f in (try? ctx.fetch(FetchDescriptor<MediaFile>(predicate: #Predicate { $0.pendingSync }))) ?? [] {
             guard let source = f.source, source.type != .local else { f.pendingSync = false; continue }
@@ -320,6 +331,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     public func beginRestore(cloudContainerID: String) {
         setEnabled(true, cloudContainerID: cloudContainerID)
         restore = RestoreProgress()
+        restoreHidden = false
         isSyncing = true
         Task { @MainActor in
             await fetchNow()
@@ -328,11 +340,13 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             onChangesApplied?()
             isSyncing = false
             restore = nil
+            restoreHidden = false
         }
     }
 
     /// Carry on in the background: the library shows while the rest arrives.
-    public func dismissRestore() { restore = nil }
+    public func dismissRestore() { restoreHidden = true }
+    public func showRestore() { restoreHidden = false }
 
     public func fetchNow() async {
         do { try await engine?.fetchChanges() } catch { lastError = "Fetch failed: " + Self.describe(error) }

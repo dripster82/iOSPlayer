@@ -45,7 +45,7 @@ struct RootView: View {
         Group {
             if !settings.hasCompletedOnboarding && library.sources().isEmpty {
                 OnboardingView()
-            } else if let progress = sync.restore {
+            } else if let progress = sync.restore, !sync.restoreHidden {
                 RestoreView(progress: progress)
             } else if sizeClass == .regular {
                 NavigationSplitView {

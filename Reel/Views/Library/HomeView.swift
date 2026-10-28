@@ -146,7 +146,12 @@ struct HomeView: View {
     /// CloudKit code, not "Failed to send changes") and links to Settings, where Sync now retries it.
     @ViewBuilder private var syncStatus: some View {
         if sync.isEnabled {
-            if let e = sync.lastError {
+            if let r = sync.restore {
+                let pct = r.fraction.map { " · \(Int($0 * 100))%" } ?? ""
+                Banner(colour: .blue, text: "Restoring from iCloud: \(r.items.formatted()) titles, \(r.files.formatted()) files\(pct)") {
+                    Button("Show") { sync.showRestore() }
+                }
+            } else if let e = sync.lastError {
                 Banner(colour: .orange, text: "Sync problem: \(e)") { NavigationLink("Details") { SettingsView() } }
             } else if let at = sync.lastSyncedAt {
                 Label(sync.isSyncing ? "Syncing…" : "Synced \(at.formatted(.relative(presentation: .named)))", systemImage: sync.isSyncing ? "arrow.triangle.2.circlepath.icloud" : "checkmark.icloud")
