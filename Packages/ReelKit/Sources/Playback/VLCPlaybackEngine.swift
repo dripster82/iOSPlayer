@@ -198,6 +198,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         log("load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
         self.item = item
         self.options = options
+        verifyOnNextPlay = false
         tracksLoaded = false
         probed = false
         appliedStart = false
@@ -258,9 +259,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         startStallWatchdog()
     }
 
-    public func play() { player.play() }
+    public func play() {
+        player.play()
+        if verifyOnNextPlay { verifyOnNextPlay = false; verifyOutput() }
+    }
     public func pause() { player.pause() }
-    public func togglePlayPause() { player.isPlaying ? player.pause() : player.play() }
+    public func togglePlayPause() { player.isPlaying ? pause() : play() }
 
     public func seek(to seconds: TimeInterval) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
@@ -298,15 +302,27 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
     /// Reconnect now rather than leaving the viewer to wait for the stall watchdog.
     public func verifyPlaybackAfterForeground() {
-        guard status == .playing, let stats = player.media?.statistics else { return }
-        let before = Int(stats.displayedPictures) + Int(stats.playedAudioBuffers)
+        // Paused while away: the check runs once play resumes, when the output would show.
+        if status == .paused { verifyOnNextPlay = true; return }
+        guard status == .playing else { return }
+        verifyOutput()
+    }
+    private var verifyOnNextPlay = false
+
+    /// Four seconds from now, playback must have put pictures on screen (sound alone is not enough:
+    /// a video output that died in the background leaves the picture black while the audio runs on).
+    /// If not, the item is reopened at the current position.
+    private func verifyOutput() {
+        guard let stats = player.media?.statistics else { return }
+        let hasVideo = !player.videoTracks.isEmpty
+        let pictures = Int(stats.displayedPictures), audio = Int(stats.playedAudioBuffers)
         let position = clock.time
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, self.status == .playing, let now = self.player.media?.statistics else { return }
-            let after = Int(now.displayedPictures) + Int(now.playedAudioBuffers)
-            if after == before {
-                log("no output since returning to the foreground; reconnecting at \(Int(position))s")
+            let stuck = hasVideo ? Int(now.displayedPictures) == pictures : Int(now.playedAudioBuffers) == audio
+            if stuck {
+                log("no \(hasVideo ? "picture" : "sound") since returning to the foreground; reconnecting at \(Int(position))s")
                 self.reconnect(at: position)
             }
         }
