@@ -94,7 +94,7 @@ struct AddSourceView: View {
                             Button { path = share; shares = nil; Task { await test() } } label: { Label(share, systemImage: "externaldrive.connected.to.line.below").foregroundStyle(.primary) }
                         }
                         if shares?.isEmpty == true { Text("The server lists no shares for this sign-in.").font(.footnote).foregroundStyle(.secondary) }
-                    } header: { Text("Shares on \(host)") } footer: { Text("Pick the share that holds your films and shows. The folders inside it come next.") }
+                    } header: { Text("\(type == .nfs ? "Exports" : "Shares") on \(host)") } footer: { Text(type == .nfs ? "Exports this device could mount. Pick the one that holds your films and shows; the folders inside it come next." : "Pick the share that holds your films and shows. The folders inside it come next.") }
                 }
                 .navigationTitle("Choose a share").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { shares = nil } } }
@@ -148,10 +148,10 @@ struct AddSourceView: View {
                 HStack {
                     TextField(type.pathLabel, text: $path, prompt: Text(type.pathPrompt)).textInputAutocapitalization(.never).autocorrectionDisabled()
                     if type != .dlna && type != .local {
-                        Button(type == .smb ? "Shares…" : "Browse…") { Task { await browseForPath() } }.disabled(testing || host.isEmpty).font(.callout)
+                        Button(type == .smb ? "Shares…" : type == .nfs ? "Exports…" : "Browse…") { Task { await browseForPath() } }.disabled(testing || host.isEmpty).font(.callout)
                     }
                 }
-                TextField("Port (optional)", text: $port, prompt: Text(type.defaultPort.map { "\($0)" } ?? "")).keyboardType(.numberPad)
+                TextField("Port (optional)", text: $port, prompt: Text(type.defaultPort.map { String($0) } ?? "")).keyboardType(.numberPad)
                 if type == .webdav { Toggle("Use HTTPS", isOn: $useTLS) }
             } footer: { if let note = type.formNote { Text(note) } }
             Section {
@@ -186,17 +186,61 @@ struct AddSourceView: View {
 
     // MARK: Actions
 
-    /// Shares… lists the server's SMB shares; Browse… connects to another server's top level and
-    /// walks its folders. Either fills the path field.
+    private struct BrowseError: LocalizedError { let text: String; var errorDescription: String? { text } }
+
+    /// The export paths NAS makers use, tried eight at a time (a refused mount fails fast); the ones
+    /// that mount are offered as a list.
+    private func probeNFSExports() async -> [String] {
+        let shareNames = ["video", "videos", "media", "movies", "films", "tv", "Multimedia", "Public", "share"]
+        var candidates: [String] = []
+        for volume in ["/volume1", "/volume2", "/share", "/export", "/mnt", "/srv", "/data", "/media"] {
+            candidates.append(volume)
+            for name in shareNames { candidates.append("\(volume)/\(name)") }
+        }
+        let base = config
+        var found: [String] = []
+        for chunk in stride(from: 0, to: candidates.count, by: 8).map({ Array(candidates[$0..<min($0 + 8, candidates.count)]) }) {
+            let hits = await withTaskGroup(of: String?.self) { group -> [String] in
+                for path in chunk {
+                    group.addTask {
+                        var c = base; c.path = path
+                        return (try? await SourceFactory.make(c).connect(credentials: nil)) != nil ? path : nil
+                    }
+                }
+                var out: [String] = []
+                for await p in group { if let p { out.append(p) } }
+                return out
+            }
+            found += hits
+            if found.count >= 3 { break }
+        }
+        return found.sorted()
+    }
+
+    /// Shares… lists the server's SMB shares; Exports… lists or probes an NFS server's exports; Browse…
+    /// connects to another server's top level and walks its folders. Each fills the path field.
     private func browseForPath() async {
         testing = true; error = nil
         do {
             if type == .smb {
                 shares = try await SMBSource.shares(host: host, port: Int(port), credentials: credentials)
+            } else if type == .nfs {
+                // A server that lists its exports (nfs://host/) is browsed from there; one that refuses
+                // (Synology among them) is probed at the usual export paths instead.
+                var top = config; top.path = "/"
+                let src = SourceFactory.make(top)
+                if (try? await src.connect(credentials: nil)) != nil {
+                    nav = []; browsing = BrowseSession(source: src)
+                } else {
+                    let found = await probeNFSExports()
+                    if found.isEmpty { self.error = "\(host) doesn't list its exports, and none of the usual paths answered. Type the export as the server shares it: on a Synology, /volume1/<shared folder>." }
+                    else { shares = found }
+                }
             } else {
                 var top = config; top.path = "/"
                 let src = SourceFactory.make(top)
-                try await src.connect(credentials: credentials)
+                do { try await src.connect(credentials: credentials) }
+                catch { throw BrowseError(text: "Couldn't list the top level of \(host) over \(type.displayName). Check the username and password, then try again; if the server only allows its own folders, type the path instead.") }
                 nav = []
                 browsing = BrowseSession(source: src)
             }

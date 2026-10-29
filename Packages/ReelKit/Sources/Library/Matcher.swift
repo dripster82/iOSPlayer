@@ -67,6 +67,7 @@ struct Matcher {
                 let showID: Int
                 var season = s, episode = e
                 var confidence: MatchConfidence = .autoHigh
+                var pickedTitle: String? = nil
                 if let aid = override?.forcedAniDBID, let animeLists, let entry = await animeLists.entry(forAniDB: aid),
                    let target = entry.resolve(anidbSeason: s == 0 ? 0 : 1, episode: e) {
                     // The viewer named the AniDB entry; Anime-Lists says which TMDb season and episode that is.
@@ -78,9 +79,9 @@ struct Matcher {
                     showID = anime.tmdbShow; season = anime.season; episode = anime.episode
                 }
                 else {
-                    if let found = try await findShow(parsed, folderTitle: folderTitle, strict: isReview) { showID = found.0; confidence = found.1 }
+                    if let found = try await findShow(parsed, folderTitle: folderTitle, strict: isReview) { showID = found.0; confidence = found.1; pickedTitle = found.2 }
                     else if let viaTVDB = try await resolveShowViaTVDB(parsed) { showID = viaTVDB; confidence = .autoLow }
-                    else if let alone = await secondOpinionShow(parsed, file: file, picked: nil) { showID = alone; confidence = .autoHigh }
+                    else if let alone = await secondOpinionShow(parsed, file: file, picked: nil, pickedTitle: nil) { showID = alone; confidence = .autoHigh }
                     else if decided {
                         let show = try upsertLocalShow(parsed, confidence: .manual)
                         file.item = try upsertLocalEpisode(show: show, parsed: parsed, season: s, episode: e)
@@ -90,7 +91,7 @@ struct Matcher {
                     }
                     else { return markReview(file) }
                 }
-                if confidence == .autoLow, await secondOpinionShow(parsed, file: file, picked: showID) == showID { confidence = .autoHigh }
+                if confidence == .autoLow, await secondOpinionShow(parsed, file: file, picked: showID, pickedTitle: pickedTitle) == showID { confidence = .autoHigh }
                 let show = try await upsertShow(id: showID, confidence: confidence)
                 let episodeItem = try await upsertEpisode(show: show, season: season, episode: episode)
                 let placeholder = file.item
@@ -109,8 +110,8 @@ struct Matcher {
                     if let found = try await findMovie(parsed, folderTitle: folderTitle, strict: isReview) {
                         movieID = found.0
                         confidence = found.1
-                        if confidence == .autoLow, await secondOpinionFilm(parsed, file: file, picked: movieID) == movieID { confidence = .autoHigh }
-                    } else if let alone = await secondOpinionFilm(parsed, file: file, picked: nil) {
+                        if confidence == .autoLow, await secondOpinionFilm(parsed, file: file, picked: movieID, pickedTitle: found.2) == movieID { confidence = .autoHigh }
+                    } else if let alone = await secondOpinionFilm(parsed, file: file, picked: nil, pickedTitle: nil) {
                         movieID = alone; confidence = .autoHigh
                     } else {
                         guard decided else { return markReview(file) }
@@ -147,7 +148,7 @@ struct Matcher {
     /// Each query form in turn (as given, trailing words dropped, leading words dropped; with the
     /// year, then without) until TMDb returns something the scorer will stand behind. Stopping at the
     /// first non-empty answer was not enough: a shortened query often returns the wrong film first.
-    private func findMovie(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence)? {
+    private func findMovie(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence, String)? {
         for title in titlesToTry(parsed, folderTitle: folderTitle) {
             let wanted = ParsedName(title: title, year: parsed.year)
             for query in TMDbClient.queries(for: title) {
@@ -155,14 +156,14 @@ struct Matcher {
                     let results = try await tmdb.searchMovies(query: query, year: year)
                     guard !results.isEmpty else { continue }
                     let d = MatchScorer.decideMovie(results, parsed: wanted, yearFiltered: year != nil)
-                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence) }
+                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence, pick.title) }
                 }
             }
         }
         return nil
     }
 
-    private func findShow(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence)? {
+    private func findShow(_ parsed: ParsedName, folderTitle: String?, strict: Bool) async throws -> (Int, MatchConfidence, String)? {
         for title in titlesToTry(parsed, folderTitle: folderTitle) {
             let wanted = ParsedName(title: title, year: parsed.year)
             for query in TMDbClient.queries(for: title) {
@@ -170,7 +171,7 @@ struct Matcher {
                     let results = try await tmdb.searchShows(query: query, year: year)
                     guard !results.isEmpty else { continue }
                     let d = MatchScorer.decideShow(results, parsed: wanted, yearFiltered: year != nil)
-                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence) }
+                    if let pick = d.pick, !strict || d.confidence == .autoHigh { return (pick.id, d.confidence, pick.name) }
                 }
             }
         }
@@ -248,19 +249,28 @@ struct Matcher {
     /// entity becomes the file's suggestion. Without `picked` (TMDb drew a blank): returns the TMDb id
     /// of the one entity with exactly this title and year, enough to match on; a title without a year
     /// is only ever a suggestion.
-    private func secondOpinionFilm(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
+    private func secondOpinionFilm(_ parsed: ParsedName, file: MediaFile, picked: Int?, pickedTitle: String?) async -> Int? {
         let cacheKey = "film|\(parsed.title)|\(parsed.year ?? 0)|\(picked ?? 0)"
         if let known = opinions.answers[cacheKey] { return known }
-        let answer = await secondOpinionFilmUncached(parsed, file: file, picked: picked)
+        let answer = await secondOpinionFilmUncached(parsed, file: file, picked: picked, pickedTitle: pickedTitle)
         opinions.answers[cacheKey] = answer
         return answer
     }
-    private func secondOpinionFilmUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
+    private func secondOpinionFilmUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?, pickedTitle: String?) async -> Int? {
         guard let wikidata, !parsed.title.isEmpty, let hits = try? await wikidata.searchFilms(title: parsed.title) else { return nil }
         let consistent = hits.filter { $0.tmdbID != nil && sameYear($0, parsed) }
         if let picked {
             if consistent.contains(where: { $0.tmdbID == picked }) {
                 Diagnostics.log("match", "Wikidata agrees: \(parsed.title) → tmdb \(picked)")
+                return picked
+            }
+            // The file carries another name for the same film (the US "Sorcerer's Stone", a franchise
+            // prefix): ask Wikidata by TMDb's own title and accept it if that entity is the pick, from
+            // the file's year, since the year is what TMDb's regional dates kept getting wrong.
+            if let pickedTitle, opinionNormalise(pickedTitle) != opinionNormalise(parsed.title),
+               let byPick = try? await wikidata.searchFilms(title: pickedTitle),
+               byPick.contains(where: { $0.tmdbID == picked && sameYear($0, parsed) && $0.year != nil }) {
+                Diagnostics.log("match", "Wikidata agrees (by TMDb's title \(pickedTitle)): \(parsed.title) → tmdb \(picked)")
                 return picked
             }
             if let other = consistent.first(where: { sameTitle($0, parsed) }), let id = other.tmdbID, id != picked {
@@ -282,15 +292,19 @@ struct Matcher {
 
     /// TVmaze's view of a show, with the same contract as `secondOpinionFilm`. TVmaze gives IMDb and
     /// TheTVDB ids, which TMDb's find endpoint maps to a TMDb show; at most three hits are mapped.
-    private func secondOpinionShow(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
+    private func secondOpinionShow(_ parsed: ParsedName, file: MediaFile, picked: Int?, pickedTitle: String?) async -> Int? {
         let cacheKey = "show|\(parsed.title)|\(parsed.year ?? 0)|\(picked ?? 0)"
         if let known = opinions.answers[cacheKey] { return known }
-        let answer = await secondOpinionShowUncached(parsed, file: file, picked: picked)
+        let answer = await secondOpinionShowUncached(parsed, file: file, picked: picked, pickedTitle: pickedTitle)
         opinions.answers[cacheKey] = answer
         return answer
     }
-    private func secondOpinionShowUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
-        guard let tvmaze, !parsed.title.isEmpty, let hits = try? await tvmaze.searchShows(title: parsed.title) else { return nil }
+    private func secondOpinionShowUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?, pickedTitle: String?) async -> Int? {
+        guard let tvmaze, !parsed.title.isEmpty, var hits = try? await tvmaze.searchShows(title: parsed.title) else { return nil }
+        // Also what TVmaze has under TMDb's own name, when the file calls the show something else.
+        if let pickedTitle, opinionNormalise(pickedTitle) != opinionNormalise(parsed.title), let more = try? await tvmaze.searchShows(title: pickedTitle) {
+            hits += more.filter { m in !hits.contains(m) }
+        }
         let consistent = hits.filter { sameYear($0, parsed) && ($0.imdbID != nil || $0.tvdbID != nil) }
         func tmdbID(_ hit: SecondOpinionHit) async -> Int? {
             if let imdb = hit.imdbID, let found = try? await tmdb.findShow(imdbID: imdb) { return found.id }
