@@ -63,6 +63,7 @@ struct SourceDetailView: View {
     let source: SourceRecord
     @State private var confirmRemove = false
     @State private var tagging: FolderPath?
+    @State private var choosingFolders = false
     @State private var editing = false
     @State private var woke = false
 
@@ -109,7 +110,7 @@ struct SourceDetailView: View {
                         Button(role: .destructive) { try? library.removeFolder(rule.folderPath, from: source) } label: { Label("Remove", systemImage: "trash") }
                     }
                 }
-                NavigationLink { FileBrowserView(source: source, path: "", tagging: true) } label: { Label("Add a folder…", systemImage: "plus") }
+                Button { choosingFolders = true } label: { Label("Choose folders…", systemImage: "checklist") }
             } header: { Text("Folders · tap to tag, swipe to remove") }
             Section("Browse") {
                 NavigationLink { FileBrowserView(source: source, path: "") } label: {
@@ -139,6 +140,53 @@ struct SourceDetailView: View {
         } message: { Text("Watch history and favourites are kept. Files on the drive are not touched.") }
         .sheet(item: $tagging) { folder in TagSheet(source: source, folder: folder.path) }
         .sheet(isPresented: $editing) { AddSourceView(editing: source) }
+        .sheet(isPresented: $choosingFolders) { FolderPickerSheet(source: source) }
+    }
+}
+
+/// The same tick-the-folders screen the add flow uses, for a source that already exists: seeded with
+/// its rules, and on Done the rules follow the ticks (new ones added, unticked ones removed with
+/// their files) and the source is rescanned.
+struct FolderPickerSheet: View {
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+    let source: SourceRecord
+    @State private var picked: [String: FolderTag] = [:]
+    @State private var nav: [BrowseFolder] = []
+    @State private var connected: (any MediaSource)?
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack(path: $nav) {
+            Group {
+                if let connected {
+                    FolderBrowser(source: connected, path: "", mode: .tick($picked, done: apply), nav: $nav, doneTitle: "Done")
+                } else if let error {
+                    ContentUnavailableView("Can't reach \(source.host.isEmpty ? source.name : source.host)", systemImage: "wifi.exclamationmark", description: Text(error))
+                } else { ProgressView("Connecting…") }
+            }
+            .navigationDestination(for: BrowseFolder.self) { fp in
+                if let connected { FolderBrowser(source: connected, path: fp.path, mode: .tick($picked, done: apply), nav: $nav, doneTitle: "Done") }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .task {
+            picked = Dictionary(uniqueKeysWithValues: source.folderRules.map { ($0.folderPath, $0.tag) })
+            let src = SourceFactory.make(source.config)
+            do { try await src.connect(credentials: CredentialStore.shared.load(for: source.id)); connected = src }
+            catch { self.error = error.localizedDescription }
+        }
+        .onDisappear { let s = connected; connected = nil; Task { await s?.disconnect() } }
+    }
+
+    private func apply() {
+        let before = Dictionary(uniqueKeysWithValues: source.folderRules.map { ($0.folderPath, $0.tag) })
+        for (path, tag) in picked where before[path] != tag { try? library.setTag(tag, folder: path, on: source) }
+        for path in before.keys where picked[path] == nil { try? library.removeFolder(path, from: source) }
+        library.scan(source, providers: settings.providers)
+        dismiss()
     }
 }
 
@@ -186,30 +234,24 @@ struct TagSheet: View {
     }
 }
 
-/// Plain directory listing for a source. Plays files directly, and doubles as the folder picker when `tagging`.
+/// Plain directory listing for a source. Plays files directly.
 struct FileBrowserView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var player: PlayerCoordinator
     let source: SourceRecord
     let path: String
-    var tagging = false
     @State private var entries: [DirectoryEntry] = []
     @State private var loading = true
     @State private var error: String?
-    @State private var tagTarget: FolderPath?
 
     var body: some View {
         List {
-            if tagging {
-                Button { tagTarget = FolderPath(path) } label: { Label("Tag this folder (\(path.isEmpty ? "/" : path))", systemImage: "tag") }
-            }
             ForEach(entries, id: \.relativePath) { e in
                 if e.isDirectory {
-                    NavigationLink { FileBrowserView(source: source, path: e.relativePath, tagging: tagging) } label: {
+                    NavigationLink { FileBrowserView(source: source, path: e.relativePath) } label: {
                         Label(e.name, systemImage: "folder").foregroundStyle(.primary)
                     }
-                    .swipeActions { Button("Tag") { tagTarget = FolderPath(e.relativePath) }.tint(.accentColor) }
                 } else {
                     Button { play(e) } label: {
                         HStack {
@@ -233,7 +275,6 @@ struct FileBrowserView: View {
         .navigationTitle(path.isEmpty ? source.path.isEmpty ? source.name : (source.path as NSString).lastPathComponent : (path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .sheet(item: $tagTarget) { TagSheet(source: source, folder: $0.path) }
     }
 
     private func load() async {

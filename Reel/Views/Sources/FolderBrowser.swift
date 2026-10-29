@@ -18,6 +18,8 @@ struct FolderBrowser: View {
     let mode: Mode
     @Binding var nav: [BrowseFolder]
     var preloaded: [DirectoryEntry]? = nil
+    /// The toolbar button that finishes ticking: "Start scanning" when adding, "Done" on a source page.
+    var doneTitle = "Start scanning"
     @State private var entries: [DirectoryEntry]?
     @State private var error: String?
 
@@ -39,7 +41,7 @@ struct FolderBrowser: View {
             } header: {
                 if case .tick = mode { Text(path.isEmpty ? "Tick the folders to scan and say what's in each" : "Inside \(name)") }
             } footer: {
-                if case .tick = mode, path.isEmpty { Text("Open a folder to tick something inside it. Untagged folders are classified from file names. You can change tags later from the source page.") }
+                if case .tick = mode, path.isEmpty { Text("Open a folder to tick something inside it. Skip keeps a folder out of the library. Untagged folders are classified from file names.") }
             }
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.footnote) } }
         }
@@ -47,7 +49,7 @@ struct FolderBrowser: View {
         .navigationTitle(path.isEmpty ? (isTick ? "Folders" : "Choose a folder") : name)
         .toolbar {
             if case .tick(let picked, let done) = mode {
-                ToolbarItem(placement: .confirmationAction) { Button("Start scanning") { done() }.disabled(picked.wrappedValue.isEmpty && !path.isEmpty) }
+                ToolbarItem(placement: .confirmationAction) { Button(doneTitle) { done() }.disabled(picked.wrappedValue.isEmpty && !path.isEmpty) }
             }
         }
         .task { await load() }
@@ -70,8 +72,8 @@ struct FolderBrowser: View {
                 }.buttonStyle(.plain)
                 if on {
                     Picker("", selection: Binding(get: { picked.wrappedValue[e.relativePath] ?? .mixed }, set: { picked.wrappedValue[e.relativePath] = $0 })) {
-                        Text("TV").tag(FolderTag.tv); Text("Films").tag(FolderTag.films); Text("Mixed").tag(FolderTag.mixed)
-                    }.pickerStyle(.segmented).frame(width: 170)
+                        Text("TV").tag(FolderTag.tv); Text("Films").tag(FolderTag.films); Text("Mixed").tag(FolderTag.mixed); Text("Skip").tag(FolderTag.excluded)
+                    }.pickerStyle(.segmented).frame(width: 220)
                 }
                 Button { nav.append(BrowseFolder(path: e.relativePath)) } label: { Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary).padding(.leading, 4) }.buttonStyle(.plain)
             }
