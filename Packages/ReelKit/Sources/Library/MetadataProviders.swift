@@ -9,12 +9,20 @@ public struct MetadataProviders: Sendable {
     public var tvdb: TVDBClient?
     public var anidb: AniDBTitles?
     public var animeLists: AnimeLists?
+    /// Keyless second opinions for weak matches: Wikidata (films and shows), TVmaze (shows), Kitsu (anime).
+    public var wikidata: WikidataClient?
+    public var tvmaze: TVmazeClient?
+    public var kitsu: KitsuClient?
 
-    public init(tmdb: TMDbClient? = nil, tvdb: TVDBClient? = nil, anidb: AniDBTitles? = nil, animeLists: AnimeLists? = nil) {
+    public init(tmdb: TMDbClient? = nil, tvdb: TVDBClient? = nil, anidb: AniDBTitles? = nil, animeLists: AnimeLists? = nil,
+                wikidata: WikidataClient? = nil, tvmaze: TVmazeClient? = nil, kitsu: KitsuClient? = nil) {
         self.tmdb = tmdb
         self.tvdb = tvdb
         self.anidb = anidb
         self.animeLists = animeLists
+        self.wikidata = wikidata
+        self.tvmaze = tvmaze
+        self.kitsu = kitsu
     }
 
     public static let none = MetadataProviders()

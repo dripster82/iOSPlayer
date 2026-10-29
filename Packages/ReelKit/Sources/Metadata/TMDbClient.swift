@@ -79,6 +79,18 @@ public actor TMDbClient {
         return found.tvResults.first
     }
 
+    /// The TMDb show carrying a given IMDb id ("tt1234567"), if TMDb knows it.
+    public func findShow(imdbID: String) async throws -> TMDbShowSummary? {
+        let found: TMDbFindResult = try await get("find/\(imdbID)", [URLQueryItem(name: "external_source", value: "imdb_id")], label: "find")
+        return found.tvResults.first
+    }
+
+    /// The TMDb film carrying a given IMDb id, if TMDb knows it.
+    public func findMovie(imdbID: String) async throws -> TMDbMovieSummary? {
+        let found: TMDbFindResult = try await get("find/\(imdbID)", [URLQueryItem(name: "external_source", value: "imdb_id")], label: "find")
+        return found.movieResults.first
+    }
+
     // MARK: - Details
 
     /// Every poster, backdrop and logo TMDb holds for a film or show, in the user's language and

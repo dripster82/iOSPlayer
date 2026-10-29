@@ -108,6 +108,10 @@ public final class MediaFile {
     public var ignored: Bool
     public var addedAt: Date
     public var lastSeenAt: Date
+    /// What a second database (Wikidata, TVmaze, Kitsu) thinks this file is, when it differs from or
+    /// adds to TMDb's weak answer: shown first in Needs Review. Local to this device.
+    public var suggestedTMDbID: Int? = nil
+    public var suggestionSource: String? = nil
     /// Chapter starts (seconds) and titles, recorded the first time the file plays through VLC, so
     /// Apple's player (AirPlay) can offer the same chapter list.
     public var chapterStarts: [Double] = []

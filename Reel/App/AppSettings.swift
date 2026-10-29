@@ -149,10 +149,14 @@ final class AppSettings: ObservableObject {
     /// Shared so the AniDB and Anime-Lists indexes load once per launch, not once per scan.
     private static let anidb = AniDBTitles()
     private static let animeLists = AnimeLists()
+    private static let wikidata = WikidataClient()
+    private static let tvmaze = TVmazeClient()
+    private static let kitsu = KitsuClient()
 
     /// What the matcher may consult: TMDb (required for anything), TheTVDB if keyed, AniDB + Anime-Lists if enabled.
     var providers: MetadataProviders {
-        MetadataProviders(tmdb: tmdb, tvdb: tvdb, anidb: animeMatching ? Self.anidb : nil, animeLists: animeMatching ? Self.animeLists : nil)
+        MetadataProviders(tmdb: tmdb, tvdb: tvdb, anidb: animeMatching ? Self.anidb : nil, animeLists: animeMatching ? Self.animeLists : nil,
+                          wikidata: Self.wikidata, tvmaze: Self.tvmaze, kitsu: animeMatching ? Self.kitsu : nil)
     }
 
     static let languages: [(code: String, name: String)] = [

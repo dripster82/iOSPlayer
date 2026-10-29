@@ -177,7 +177,7 @@ struct NeedsReviewView: View {
         @EnvironmentObject private var settings: AppSettings
         let file: MediaFile
         @Binding var selected: Candidate?
-        struct Candidate: Identifiable, Equatable { var id: Int; var title: String; var year: Int?; var poster: String?; var kind: MediaKind }
+        struct Candidate: Identifiable, Equatable { var id: Int; var title: String; var year: Int?; var poster: String?; var kind: MediaKind; var endorsedBy: String? = nil }
         @State private var candidates: [Candidate]?
         @State private var preview: Candidate?
 
@@ -199,6 +199,7 @@ struct NeedsReviewView: View {
                                             }
                                         Text(c.title).font(.caption2.weight(on ? .semibold : .regular)).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(.primary)
                                         if let y = c.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
+                                        if let by = c.endorsedBy { Label("\(by) agrees", systemImage: "checkmark.seal.fill").font(.caption2).foregroundStyle(.green).lineLimit(1) }
                                     }
                                     .frame(width: 84)
                                     .contentShape(Rectangle())
@@ -221,11 +222,23 @@ struct NeedsReviewView: View {
             let seed = FixMatchView.seed(for: file)
             let kind: MediaKind = seed.season != nil ? .show : .film
             do {
+                var found: [Candidate]
                 if kind == .show {
-                    candidates = try await tmdb.searchShowsForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath, kind: kind) }
+                    found = try await tmdb.searchShowsForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath, kind: kind) }
                 } else {
-                    candidates = try await tmdb.searchMoviesForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath, kind: kind) }
+                    found = try await tmdb.searchMoviesForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath, kind: kind) }
                 }
+                // A second database's pick goes first, labelled; fetched from TMDb when the search didn't list it.
+                if let id = file.suggestedTMDbID, let by = file.suggestionSource {
+                    if let i = found.firstIndex(where: { $0.id == id }) {
+                        var c = found.remove(at: i); c.endorsedBy = by; found.insert(c, at: 0)
+                    } else if kind == .show, let d = try? await tmdb.show(id: id) {
+                        found.insert(Candidate(id: id, title: d.name, year: d.year, poster: d.posterPath, kind: kind, endorsedBy: by), at: 0)
+                    } else if kind == .film, let d = try? await tmdb.movie(id: id) {
+                        found.insert(Candidate(id: id, title: d.title, year: d.year, poster: d.posterPath, kind: kind, endorsedBy: by), at: 0)
+                    }
+                }
+                candidates = found
             } catch { candidates = [] }
         }
     }
@@ -246,6 +259,7 @@ struct NeedsReviewView: View {
                         .padding(.horizontal, 24)
                     Text(candidate.title + (candidate.year.map { " (\($0))" } ?? "")).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                     Text(candidate.kind == .show ? "TV show" : "Film").font(.caption).foregroundStyle(.secondary)
+                    if let by = candidate.endorsedBy { Label("\(by) agrees this is the one", systemImage: "checkmark.seal.fill").font(.footnote).foregroundStyle(.green) }
                     Button(isSelected ? "Chosen" : "Choose this") { choose(); dismiss() }.buttonStyle(.borderedProminent).disabled(isSelected)
                     Spacer(minLength: 0)
                 }

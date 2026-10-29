@@ -338,6 +338,14 @@ Phase 3
 - [x] Film collections (24 Oct): `MediaItem.collectionID/Name` from TMDb `belongs_to_collection`;
       film page lists library films in the collection and names the missing ones.
 - [x] Needs Review groups by folder with apply-to-all (`resolveReview(_ files:)`, `ignoreFiles`).
+- [x] Second opinions (29 Oct): `Metadata/SecondOpinion.swift` has keyless `WikidataClient` (films and
+      shows, entities carry TMDb ids P4947/P4983, release P577/P580), `TVmazeClient` (shows, IMDb/TheTVDB
+      ids mapped through TMDb `/find`) and `KitsuClient` (anime, AniDB mapping). The matcher consults them
+      only for weak results: an autoLow pick that the second source also names becomes autoHigh; a blank
+      TMDb search is matched when the second source has exactly this title and year; otherwise the second
+      source's pick lands on the file as `suggestedTMDbID`/`suggestionSource` and Needs Review shows it
+      first, labelled "<source> agrees". Kitsu also breaks ties when two AniDB entries share a name.
+      `SecondOpinionTests` cover the parsers; the live shapes were checked on 29 Oct.
 - [x] Metadata providers (24 Oct): `MetadataProviders` bundles TMDb + optional TheTVDB + AniDB/Anime-Lists.
       Matcher order for episodes: forced override → AniDB exact title (incl. "2nd Season"/"II"/"Part 2"
       candidates) → Anime-Lists `tmdbtv`/`tmdbseason`/`tmdboffset` → TMDb search (shortening) → TheTVDB
