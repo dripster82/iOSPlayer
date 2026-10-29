@@ -161,7 +161,9 @@ struct HomeView: View {
     }
     @ViewBuilder private var scanBanner: some View {
         if let p = library.scanProgress.values.first(where: { $0.phase != .done && $0.phase != .failed }) {
-            Banner(colour: .yellow, text: "Scanning \(p.sourceName): \(p.filesSeen) files, \(p.matched) matched") { ProgressView() }
+            Banner(colour: .yellow, text: "\(p.sourceName): \(SourcesView.progressText(p).lowercased())\(p.phase == .matching && p.matched > 0 ? " · \(p.matched) matched" : "")") {
+                if p.phase == .matching, p.matchTotal > 0 { ProgressView(value: Double(p.matchDone), total: Double(p.matchTotal)).frame(width: 60) } else { ProgressView() }
+            }
         }
     }
     /// Files were scanned but never matched (no TMDb key at the time, or the matcher hit errors).

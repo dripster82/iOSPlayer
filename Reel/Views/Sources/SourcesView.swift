@@ -43,6 +43,18 @@ struct SourcesView: View {
         .sheet(isPresented: $adding) { AddSourceView() }
     }
 
+    /// What the scan is doing right now, in a few words: the phase, and how far through it is.
+    static func progressText(_ p: ScanProgress) -> String {
+        switch p.phase {
+        case .connecting: return "Connecting…"
+        case .listing: return "Listing \(p.filesSeen) files…"
+        case .classifying: return "Sorting \(p.filesSeen) files…"
+        case .matching: return p.matchTotal > 0 ? "Matching \(p.matchDone) of \(p.matchTotal)…" : "Matching…"
+        case .done: return "Scanned"
+        case .failed: return "Scan failed"
+        }
+    }
+
     private func colour(_ s: SourceStatus) -> Color {
         switch s { case .online: .green; case .offline, .authFailed: .red; case .scanning: .yellow; case .unknown: .gray }
     }
@@ -50,7 +62,7 @@ struct SourcesView: View {
         var parts = [s.type.displayName]
         if !s.host.isEmpty { parts.append(s.host) }
         parts.append("\(s.files.filter { !$0.ignored }.count) items")
-        if let p = library.scanProgress[s.id], p.phase != .done, p.phase != .failed { parts.append("Scanning \(p.filesSeen)…") }
+        if let p = library.scanProgress[s.id], p.phase != .done, p.phase != .failed { parts.append(SourcesView.progressText(p)) }
         else if let d = s.lastScan { parts.append("Scanned " + d.formatted(.relative(presentation: .named))) }
         return parts.joined(separator: " · ")
     }

@@ -188,11 +188,29 @@ public final class LibraryStore: ObservableObject {
                 self?.objectWillChange.send()
                 assertion.end()
                 self?.notifySync()
+                self?.retryIfLookupsFailed(record, providers: providers)
             }
         }
     }
 
     public func scanAll(providers: MetadataProviders) { sources().forEach { scan($0, providers: providers) } }
+
+    private var retries: [UUID: Int] = [:]
+    /// A pass that skipped files over network errors runs again a minute later, up to three times,
+    /// so a scan started before the connection was up still ends with the library matched.
+    private func retryIfLookupsFailed(_ record: SourceRecord, providers: MetadataProviders) {
+        let id = record.id
+        guard let p = scanProgress[id], p.phase == .done, p.skipped > 0, p.lastError != nil else { retries[id] = nil; return }
+        let n = retries[id] ?? 0
+        guard n < 3 else { Diagnostics.log("scan", "\(record.name): \(p.skipped) files still unmatched after \(n) retries"); retries[id] = nil; return }
+        retries[id] = n + 1
+        Diagnostics.log("scan", "\(record.name): \(p.skipped) lookups failed, retrying in 60s (\(n + 1) of 3)")
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard let self, !self.isScanning(id) else { return }
+            self.scan(record, providers: providers)
+        }
+    }
 
     /// Rescans just the folder(s) this title's files live in: new episodes, a replaced file, a deleted
     /// one. Seconds instead of the minutes a whole source takes. Waits for the result.

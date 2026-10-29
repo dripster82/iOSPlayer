@@ -18,6 +18,9 @@ public struct ScanProgress: Sendable, Equatable {
     public var skipped: Int = 0
     /// The last matcher error, so the UI can say why a library is still empty.
     public var lastError: String? = nil
+    /// Files the matching phase set out to resolve this pass, and how many it has dealt with so far.
+    public var matchTotal: Int = 0
+    public var matchDone: Int { matched + needsReview + skipped }
     public enum Phase: String, Sendable { case connecting, listing, classifying, matching, done, failed }
 }
 
@@ -174,20 +177,47 @@ public actor LibraryScanner {
             // Reviewed files without an item are tried again too: the viewer has said what they are.
             // A placeholder does not count as matched: TMDb is asked again each scan (answers are cached),
             // so a title it learns later, or a search that has since got more forgiving, takes over.
-            for file in record.files where inScope(file.relativePath) && !file.ignored
+            let toMatch = record.files.filter { file in inScope(file.relativePath) && !file.ignored
                 && (file.item == nil || file.item?.itemKey.hasPrefix("local-") == true)
-                && (file.reviewed || file.classificationRaw != "review" || file.guessKindRaw != nil) {
+                && (file.reviewed || file.classificationRaw != "review" || file.guessKindRaw != nil) }
+            report.matchTotal = toMatch.count
+            progress?(report)
+            var reasons: [String] = []
+            var consecutiveFailures = 0, pauses = 0
+            for file in toMatch {
                 try Task.checkCancellation()
                 let outcome = await matcher.match(file)
                 switch outcome {
-                case .matched: report.matched += 1
-                case .review: report.needsReview += 1
+                case .matched: report.matched += 1; consecutiveFailures = 0
+                case .review: report.needsReview += 1; consecutiveFailures = 0
                 case .skipped(let reason):
                     report.skipped += 1
-                    if let reason { report.lastError = reason }
+                    if let reason {
+                        report.lastError = reason
+                        if !reasons.contains(reason), reasons.count < 3 {
+                            reasons.append(reason)
+                            Diagnostics.log("scan", "\(record.name): \(file.fileName.prefix(60)) skipped: \(reason)")
+                        }
+                        consecutiveFailures += 1
+                    }
                 }
-                if (report.matched + report.needsReview) % 10 == 0 { progress?(report); try modelContext.save() }
+                // A burst of failures is the network, not the files: wait for it to come back rather
+                // than burn through every title with the same error, and give up this pass if it doesn't.
+                if consecutiveFailures >= 5 {
+                    guard pauses < 3 else {
+                        Diagnostics.log("scan", "\(record.name): matching stopped after repeated failures; \(toMatch.count - report.matchDone) files wait for the next pass")
+                        break
+                    }
+                    pauses += 1; consecutiveFailures = 0
+                    Diagnostics.log("scan", "\(record.name): \(report.skipped) lookups failed, pausing 10s (\(report.lastError ?? ""))")
+                    progress?(report)
+                    try await Task.sleep(for: .seconds(10))
+                }
+                if report.matchDone % 10 == 0 { progress?(report); try modelContext.save() }
             }
+            Diagnostics.log("scan", "\(record.name): matched \(report.matched), review \(report.needsReview), skipped \(report.skipped) of \(toMatch.count)\(report.lastError.map { " · last error: \($0)" } ?? "")")
+        } else {
+            Diagnostics.log("scan", "\(record.name): no TMDb client, matching skipped")
         }
         report.needsReview += record.files.filter(\.needsReview).count
         record.status = .online
