@@ -319,7 +319,21 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     /// where the engine's own scheduling may not get a turn before the app is suspended.
     public func sendNow() async {
         pushPendingChanges()
-        do { try await engine?.sendChanges() } catch { lastError = "Send failed: " + Self.describe(error) }
+        do { try await engine?.sendChanges() } catch {
+            if Self.isOnlyReconciledConflicts(error) {
+                // Every failure was a record the other device wrote first; the event handler has already
+                // taken theirs or queued ours on top. Normal after a reset, and nothing for the user.
+                Diagnostics.log("sync", "reconciling \((error as? CKError)?.partialErrorsByItemID?.count ?? 0) records the server changed")
+            } else {
+                lastError = "Send failed: " + Self.describe(error)
+            }
+        }
+    }
+
+    /// A partial failure made only of conflicts the sent-changes handler resolves itself.
+    static func isOnlyReconciledConflicts(_ error: Error) -> Bool {
+        guard let ck = error as? CKError, ck.code == .partialFailure, let per = ck.partialErrorsByItemID, !per.isEmpty else { return false }
+        return per.values.allSatisfy { ($0 as? CKError).map { $0.code == .serverRecordChanged || $0.code == .unknownItem } ?? false }
     }
 
     /// Whether this Apple ID already holds a Reel library: true when the private database has the
@@ -377,7 +391,10 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     public func showRestore() { restoreHidden = false }
 
     public func fetchNow() async {
-        do { try await engine?.fetchChanges() } catch { lastError = "Fetch failed: " + Self.describe(error) }
+        do { try await engine?.fetchChanges() } catch {
+            // A fetch cut short by the app going to the background resumes on the next turn; not an error.
+            if (error as? CKError)?.code != .operationCancelled { lastError = "Fetch failed: " + Self.describe(error) }
+        }
     }
 
     // MARK: - CKSyncEngineDelegate
@@ -482,7 +499,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             try? ctx.save()
             lastSyncedAt = Date()
         case .didFetchRecordZoneChanges(let e):
-            if let err = e.error { lastError = "Fetch failed: " + Self.describe(err) }
+            if let err = e.error, (err as? CKError)?.code != .operationCancelled { lastError = "Fetch failed: " + Self.describe(err) }
         case .sentDatabaseChanges(let e):
             for (_, err) in e.failedZoneSaves.map({ ($0.zone, $0.error) }) { lastError = "Zone save failed: " + Self.describe(err) }
         case .fetchedDatabaseChanges, .willFetchChanges, .didFetchChanges, .willSendChanges, .didSendChanges, .willFetchRecordZoneChanges:
