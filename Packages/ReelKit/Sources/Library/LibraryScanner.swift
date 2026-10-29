@@ -186,7 +186,14 @@ public actor LibraryScanner {
             var consecutiveFailures = 0, pauses = 0
             for file in toMatch {
                 try Task.checkCancellation()
-                let outcome = await matcher.match(file)
+                var outcome = await matcher.match(file)
+                // A lookup that failed on the network gets one more go a couple of seconds later: most
+                // blips are that short, and it saves the file waiting for the next pass.
+                if case .skipped(let reason) = outcome, reason != nil {
+                    try await Task.sleep(for: .seconds(2))
+                    outcome = await matcher.match(file)
+                    if case .skipped = outcome {} else { Diagnostics.log("scan", "\(record.name): \(file.fileName.prefix(60)) matched on the second try") }
+                }
                 switch outcome {
                 case .matched: report.matched += 1; consecutiveFailures = 0
                 case .review: report.needsReview += 1; consecutiveFailures = 0
