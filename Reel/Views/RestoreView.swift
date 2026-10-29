@@ -34,6 +34,8 @@ struct RestoreView: View {
                 Text(error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center).padding(.horizontal)
             }
             Spacer()
+            Label("Keep Reel open. If you switch away or lock the screen, the restore pauses after a short while and carries on when you come back.", systemImage: "iphone")
+                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.leading).padding(.horizontal)
             Button("Continue in the background") { sync.dismissRestore() }.font(.footnote)
             Text("Titles may appear before their files arrive; they become playable as the restore finishes.").font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
