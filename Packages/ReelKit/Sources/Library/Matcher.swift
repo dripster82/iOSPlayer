@@ -21,6 +21,9 @@ struct Matcher {
     var wikidata: WikidataClient? = nil
     var tvmaze: TVmazeClient? = nil
     var kitsu: KitsuClient? = nil
+    /// Second opinions already given this pass, by title and TMDb pick: a show's 200 episodes ask once.
+    private final class OpinionCache { var answers: [String: Int?] = [:] }
+    private let opinions = OpinionCache()
 
     init(context: ModelContext, tmdb: TMDbClient) {
         self.context = context
@@ -246,6 +249,13 @@ struct Matcher {
     /// of the one entity with exactly this title and year, enough to match on; a title without a year
     /// is only ever a suggestion.
     private func secondOpinionFilm(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
+        let cacheKey = "film|\(parsed.title)|\(parsed.year ?? 0)|\(picked ?? 0)"
+        if let known = opinions.answers[cacheKey] { return known }
+        let answer = await secondOpinionFilmUncached(parsed, file: file, picked: picked)
+        opinions.answers[cacheKey] = answer
+        return answer
+    }
+    private func secondOpinionFilmUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
         guard let wikidata, !parsed.title.isEmpty, let hits = try? await wikidata.searchFilms(title: parsed.title) else { return nil }
         let consistent = hits.filter { $0.tmdbID != nil && sameYear($0, parsed) }
         if let picked {
@@ -273,6 +283,13 @@ struct Matcher {
     /// TVmaze's view of a show, with the same contract as `secondOpinionFilm`. TVmaze gives IMDb and
     /// TheTVDB ids, which TMDb's find endpoint maps to a TMDb show; at most three hits are mapped.
     private func secondOpinionShow(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
+        let cacheKey = "show|\(parsed.title)|\(parsed.year ?? 0)|\(picked ?? 0)"
+        if let known = opinions.answers[cacheKey] { return known }
+        let answer = await secondOpinionShowUncached(parsed, file: file, picked: picked)
+        opinions.answers[cacheKey] = answer
+        return answer
+    }
+    private func secondOpinionShowUncached(_ parsed: ParsedName, file: MediaFile, picked: Int?) async -> Int? {
         guard let tvmaze, !parsed.title.isEmpty, let hits = try? await tvmaze.searchShows(title: parsed.title) else { return nil }
         let consistent = hits.filter { sameYear($0, parsed) && ($0.imdbID != nil || $0.tvdbID != nil) }
         func tmdbID(_ hit: SecondOpinionHit) async -> Int? {

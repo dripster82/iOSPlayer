@@ -59,17 +59,20 @@ public actor TMDbClient {
 
     // MARK: - Search
 
+    /// Searches go without the region: with one, TMDb reports each result's release date in that
+    /// region (Aladdin becomes 1993, Sing 2017 in the UK), and the scorer then prefers a same-named
+    /// obscurity from the year on the file. The primary release year is the one file names carry.
     public func searchMovies(query: String, year: Int? = nil) async throws -> [TMDbMovieSummary] {
         var items = [URLQueryItem(name: "query", value: query), URLQueryItem(name: "include_adult", value: "false")]
         if let year { items.append(URLQueryItem(name: "year", value: String(year))) }
-        let page: TMDbSearchPage<TMDbMovieSummary> = try await get("search/movie", items, label: "film search")
+        let page: TMDbSearchPage<TMDbMovieSummary> = try await get("search/movie", items, label: "film search", withRegion: false)
         return page.results
     }
 
     public func searchShows(query: String, year: Int? = nil) async throws -> [TMDbShowSummary] {
         var items = [URLQueryItem(name: "query", value: query), URLQueryItem(name: "include_adult", value: "false")]
         if let year { items.append(URLQueryItem(name: "first_air_date_year", value: String(year))) }
-        let page: TMDbSearchPage<TMDbShowSummary> = try await get("search/tv", items, label: "show search")
+        let page: TMDbSearchPage<TMDbShowSummary> = try await get("search/tv", items, label: "show search", withRegion: false)
         return page.results
     }
 
@@ -171,11 +174,11 @@ public actor TMDbClient {
 
     // MARK: - Plumbing
 
-    private func get<T: Decodable>(_ path: String, _ query: [URLQueryItem], label: String) async throws -> T {
+    private func get<T: Decodable>(_ path: String, _ query: [URLQueryItem], label: String, withRegion: Bool = true) async throws -> T {
         guard !apiKey.isEmpty else { throw TMDbError.missingAPIKey }
         var comps = URLComponents(url: Self.apiBase.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         var q = query + [URLQueryItem(name: "language", value: language)]
-        if let region { q.append(URLQueryItem(name: "region", value: region)) }
+        if withRegion, let region { q.append(URLQueryItem(name: "region", value: region)) }
         comps.queryItems = q
         let cacheKey = comps.url!.absoluteString
         comps.queryItems?.append(URLQueryItem(name: "api_key", value: apiKey))

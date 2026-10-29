@@ -25,38 +25,59 @@ public enum MatchScorer {
         guard !results.isEmpty else { return Decision(pick: nil, confidence: .unmatched, alternatives: []) }
         let wanted = normalise(parsed.title)
 
-        let scored = results.map { r -> (T, Double) in
-            var score = 0.0
+        let scored = results.map { r -> Scored<T> in
+            var s = Scored<T>(result: r, score: 0, popularity: r[keyPath: popularity] ?? 0)
             let t = normalise(r[keyPath: title]), alt = normalise(r[keyPath: altTitle] ?? "")
-            if t == wanted || alt == wanted { score += 10 }
-            else if t.hasPrefix(wanted) || wanted.hasPrefix(t) { score += 5 }
-            else if similarity(t, wanted) > 0.8 { score += 4 }
+            // "Super Heroes" and "Superheroes" are the same title; so are "Teeage" and "Teenage" (a typo).
+            let squashed = wanted.replacingOccurrences(of: " ", with: "")
+            if t == wanted || alt == wanted || t.replacingOccurrences(of: " ", with: "") == squashed || alt.replacingOccurrences(of: " ", with: "") == squashed { s.score += 10; s.exactTitle = true }
+            else if similarity(t, wanted) > 0.9 { s.score += 8 }
+            else if t.hasPrefix(wanted) || wanted.hasPrefix(t) || contained(t, in: wanted) { s.score += 5 }
+            else if similarity(t, wanted) > 0.8 { s.score += 4 }
             if let py = parsed.year, let ry = r[keyPath: year] {
                 // Premieres, festival runs and regional releases put a title's year a little either
                 // side of its primary date; only a gap of several years counts against it.
                 let gap = abs(py - ry)
-                if gap == 0 { score += 6 } else if gap == 1 { score += 3 } else if gap > 3 && !yearFiltered { score -= 4 }
+                if gap == 0 { s.score += 6; s.exactYear = true } else if gap == 1 { s.score += 3 } else if gap > 3 && !yearFiltered { s.score -= 4 }
                 // TMDb's one and only answer for the year: its own fuzzy search has already done the
                 // hard part ("South Park Post Covid Covid Returns" → "...: The Return of COVID").
-                if results.count == 1, yearFiltered || gap <= 1 { score += 3 }
+                if results.count == 1, yearFiltered || gap <= 1 { s.score += 3 }
             }
-            score += min(3, (r[keyPath: popularity] ?? 0) / 50) // tie-breaker only
-            return (r, score)
-        }.sorted { $0.1 > $1.1 }
+            s.score += min(3, s.popularity / 50) // tie-breaker only
+            return s
+        }.sorted { $0.score > $1.score }
 
         let best = scored[0]
-        let runnerUp = scored.count > 1 ? scored[1].1 : -100
-        let alternatives = scored.prefix(3).map(\.0)
+        let runnerUp = scored.count > 1 ? scored[1].score : -100
+        let alternatives = scored.prefix(3).map(\.result)
 
-        if best.1 >= 12 && best.1 - runnerUp >= 4 { return Decision(pick: best.0, confidence: .autoHigh, alternatives: alternatives) }
-        if best.1 >= 8 { return Decision(pick: best.0, confidence: .autoLow, alternatives: alternatives) }
+        if best.score >= 12 && best.score - runnerUp >= 4 { return Decision(pick: best.result, confidence: .autoHigh, alternatives: alternatives) }
+        // The exact title from the exact year, and the runner-up is either not that (same title a
+        // year off, a stage show, a short) or a same-named obscurity: Aladdin (1992) has three
+        // entries, and the one everyone means is far more popular than the others.
+        if best.exactTitle, best.exactYear, scored.count > 1 {
+            let second = scored[1]
+            if !(second.exactTitle && second.exactYear) || best.popularity >= 4 * second.popularity + 1 {
+                return Decision(pick: best.result, confidence: .autoHigh, alternatives: alternatives)
+            }
+        }
+        if best.score >= 8 { return Decision(pick: best.result, confidence: .autoLow, alternatives: alternatives) }
         // Weaker evidence still beats Needs Review, as long as it is flagged "?" and fixable:
         // any title relationship (prefix or similar, e.g. "Ninjago: Masters of Spinjitzu" for "LEGO Ninjago
         // Masters of Spinjitzu"), or TMDb's single hit for a query it understood through an alternative
         // title ("Shingeki no Kyojin" → Attack on Titan). A year that clearly disagrees still blocks it.
-        let yearClash = parsed.year.map { py in best.0[keyPath: year].map { abs(py - $0) > 1 } ?? false } ?? false
-        if !yearClash, best.1 >= 4 || results.count == 1 { return Decision(pick: best.0, confidence: .autoLow, alternatives: alternatives) }
+        let yearClash = parsed.year.map { py in best.result[keyPath: year].map { abs(py - $0) > 1 } ?? false } ?? false
+        if !yearClash, best.score >= 4 || results.count == 1 { return Decision(pick: best.result, confidence: .autoLow, alternatives: alternatives) }
         return Decision(pick: nil, confidence: .unmatched, alternatives: alternatives)
+    }
+
+    private struct Scored<T> { var result: T; var score: Double; var exactTitle = false; var exactYear = false; var popularity: Double }
+
+    /// The result's title sits whole inside the file's, as words: "A Close Shave" in
+    /// "Wallace and Gromit A Close Shave". Needs two or more words, so "Up" never matches everything.
+    static func contained(_ t: String, in wanted: String) -> Bool {
+        guard t.split(separator: " ").count >= 2 else { return false }
+        return (" " + wanted + " ").contains(" " + t + " ")
     }
 
     public static func normalise(_ s: String) -> String {
