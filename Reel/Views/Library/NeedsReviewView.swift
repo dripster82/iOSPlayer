@@ -51,10 +51,14 @@ struct NeedsReviewView: View {
                                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                                 }
                             }.buttonStyle(.plain)
-                            if let sample { CandidateRow(file: sample) { id, kind in refit(item, tmdbID: id, kind: kind) } }
+                            if let sample { CandidateRow(file: sample, selected: binding(for: item.itemKey)) }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
-                                    Button("Keep") { try? library.confirmMatch(item); refresh += 1 }.buttonStyle(.borderedProminent)
+                                    if let c = chosen[item.itemKey] {
+                                        Button("Use “\(c.title)”") { refit(item, tmdbID: c.id, kind: c.kind); chosen[item.itemKey] = nil }.buttonStyle(.borderedProminent)
+                                    } else {
+                                        Button("Keep") { try? library.confirmMatch(item); refresh += 1 }.buttonStyle(.borderedProminent)
+                                    }
                                     Button("Fix match") { fixingItem = item }.buttonStyle(.bordered)
                                     Button("Hide", role: .destructive) { try? library.hide(item); refresh += 1 }.buttonStyle(.bordered)
                                 }.controlSize(.small)
@@ -62,7 +66,7 @@ struct NeedsReviewView: View {
                         }
                         .opacity(busyItem == item.itemKey ? 0.5 : 1)
                     }
-                } header: { Text("Low confidence") } footer: { Text("Keep confirms the match; a poster above or Fix match changes it.") }
+                } header: { Text("Low confidence") } footer: { Text("Keep confirms the match. Tap a poster above to pick it, hold one to see it larger, then Use it; Fix match searches for something else.") }
             }
             if !files.isEmpty {
                 ForEach(folders(files)) { folder in
@@ -72,10 +76,14 @@ struct NeedsReviewView: View {
                             Text((f.relativePath as NSString).lastPathComponent).font(.footnote.weight(.semibold))
                             Text("Best guess: \(guess(f))").font(.caption).foregroundStyle(f.guessTitle == nil ? .red : .yellow)
                             // What TMDb has for the file name, so the usual answer is one tap away.
-                            CandidateRow(file: f) { id, kind in resolve(f, kind: kind, tmdbID: id) }
+                            CandidateRow(file: f, selected: binding(for: f.id.uuidString))
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
-                                    Button("Accept") { resolve(f, kind: f.guessSeason != nil ? .episode : .film) }.buttonStyle(.borderedProminent)
+                                    if let c = chosen[f.id.uuidString] {
+                                        Button("Use “\(c.title)”") { resolve(f, kind: c.kind, tmdbID: c.id); chosen[f.id.uuidString] = nil }.buttonStyle(.borderedProminent)
+                                    } else {
+                                        Button("Accept") { resolve(f, kind: f.guessSeason != nil ? .episode : .film) }.buttonStyle(.borderedProminent)
+                                    }
                                     Button("Fix match") { fixing = f }.buttonStyle(.bordered)
                                     Button("Treat as TV") { resolve(f, kind: .episode) }.buttonStyle(.bordered)
                                     Button("Treat as Film") { resolve(f, kind: .film) }.buttonStyle(.bordered)
@@ -115,6 +123,12 @@ struct NeedsReviewView: View {
 
     @State private var fixingItem: MediaItem?
     @State private var busyItem: String?
+    /// The poster picked under each file or title (keyed by file id or item key). Picking is not
+    /// confirming: only the Use button applies it, so a tap to look at a poster changes nothing.
+    @State private var chosen: [String: CandidateRow.Candidate] = [:]
+    private func binding(for key: String) -> Binding<CandidateRow.Candidate?> {
+        Binding(get: { chosen[key] }, set: { chosen[key] = $0 })
+    }
     /// Bumped after a change the store does not publish, so the lists are read again.
     @State private var refresh = 0
 
@@ -157,14 +171,15 @@ struct NeedsReviewView: View {
     }
 
     /// TMDb's top results for the file's name (films, or shows when the name carries an episode
-    /// number), as tappable posters. Loaded when the row appears; nothing is chosen on its own.
+    /// number), as posters. A tap picks one (highlighted), a long press shows it large; nothing is
+    /// applied until the row's Use button. Loaded when the row appears.
     struct CandidateRow: View {
         @EnvironmentObject private var settings: AppSettings
         let file: MediaFile
-        let choose: (Int, MediaKind) -> Void
-        struct Candidate: Identifiable { var id: Int; var title: String; var year: Int?; var poster: String? }
+        @Binding var selected: Candidate?
+        struct Candidate: Identifiable, Equatable { var id: Int; var title: String; var year: Int?; var poster: String?; var kind: MediaKind }
         @State private var candidates: [Candidate]?
-        @State private var kind: MediaKind = .film
+        @State private var preview: Candidate?
 
         var body: some View {
             Group {
@@ -175,13 +190,20 @@ struct NeedsReviewView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(alignment: .top, spacing: 10) {
                                 ForEach(candidates) { c in
-                                    Button { choose(c.id, kind) } label: {
-                                        VStack(spacing: 4) {
-                                            ArtworkImage(url: ArtworkURL.poster(c.poster), title: c.title, cornerRadius: 6).frame(width: 64, height: 96)
-                                            Text(c.title).font(.caption2).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(.primary)
-                                            if let y = c.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
-                                        }.frame(width: 84)
-                                    }.buttonStyle(.borderless)
+                                    let on = selected?.id == c.id
+                                    VStack(spacing: 4) {
+                                        ArtworkImage(url: ArtworkURL.poster(c.poster), title: c.title, cornerRadius: 6).frame(width: 64, height: 96)
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: on ? 3 : 0))
+                                            .overlay(alignment: .topTrailing) {
+                                                if on { Image(systemName: "checkmark.circle.fill").font(.body).foregroundStyle(.white, Color.accentColor).padding(3) }
+                                            }
+                                        Text(c.title).font(.caption2.weight(on ? .semibold : .regular)).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(.primary)
+                                        if let y = c.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
+                                    }
+                                    .frame(width: 84)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { selected = on ? nil : c }
+                                    .onLongPressGesture { preview = c }
                                 }
                             }
                         }
@@ -191,19 +213,45 @@ struct NeedsReviewView: View {
                 }
             }
             .task(id: file.id) { await load() }
+            .sheet(item: $preview) { c in PosterPreview(candidate: c, isSelected: selected?.id == c.id) { selected = c } }
         }
 
         private func load() async {
             guard let tmdb = settings.tmdb else { candidates = []; return }
             let seed = FixMatchView.seed(for: file)
-            kind = seed.season != nil ? .show : .film
+            let kind: MediaKind = seed.season != nil ? .show : .film
             do {
                 if kind == .show {
-                    candidates = try await tmdb.searchShowsForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath) }
+                    candidates = try await tmdb.searchShowsForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.name, year: $0.year, poster: $0.posterPath, kind: kind) }
                 } else {
-                    candidates = try await tmdb.searchMoviesForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath) }
+                    candidates = try await tmdb.searchMoviesForgiving(seed).prefix(6).map { Candidate(id: $0.id, title: $0.title, year: $0.year, poster: $0.posterPath, kind: kind) }
                 }
             } catch { candidates = [] }
+        }
+    }
+
+    /// The poster at detail size, to judge a candidate properly. Choose marks it as the pick; the
+    /// row's Use button still does the applying.
+    struct PosterPreview: View {
+        @Environment(\.dismiss) private var dismiss
+        let candidate: CandidateRow.Candidate
+        let isSelected: Bool
+        let choose: () -> Void
+        var body: some View {
+            NavigationStack {
+                VStack(spacing: 16) {
+                    ArtworkImage(url: ArtworkURL.poster(candidate.poster, size: .detail), title: candidate.title, cornerRadius: 12)
+                        .aspectRatio(2 / 3, contentMode: .fit)
+                        .frame(maxHeight: 520)
+                        .padding(.horizontal, 24)
+                    Text(candidate.title + (candidate.year.map { " (\($0))" } ?? "")).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                    Text(candidate.kind == .show ? "TV show" : "Film").font(.caption).foregroundStyle(.secondary)
+                    Button(isSelected ? "Chosen" : "Choose this") { choose(); dismiss() }.buttonStyle(.borderedProminent).disabled(isSelected)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            }
         }
     }
 }
