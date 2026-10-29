@@ -330,6 +330,15 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         }
     }
 
+    /// Errors that mean "later", not "wrong": suspension, no network, iCloud busy or rate limiting.
+    static func isTransient(_ error: Error) -> Bool {
+        guard let ck = error as? CKError else { return false }
+        switch ck.code {
+        case .operationCancelled, .networkUnavailable, .networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy: return true
+        default: return false
+        }
+    }
+
     /// A partial failure made only of conflicts the sent-changes handler resolves itself.
     static func isOnlyReconciledConflicts(_ error: Error) -> Bool {
         guard let ck = error as? CKError, ck.code == .partialFailure, let per = ck.partialErrorsByItemID, !per.isEmpty else { return false }
@@ -357,7 +366,13 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         isSyncing = true
         fetchSummaryDirectly(cloudContainerID: cloudContainerID)
         Task { @MainActor in
-            await fetchNow()
+            // A fetch is cut short when iOS suspends the app, or the network drops; the restore is
+            // not over until one runs to the end. Try again every few seconds, for up to an hour.
+            var attempts = 0
+            while await !fetchNow(), attempts < 1200 {
+                attempts += 1
+                try? await Task.sleep(for: .seconds(3))
+            }
             // Fetch is complete: the trailing refresh may still be pending, so refresh now.
             refreshTask?.cancel(); refreshTask = nil
             onChangesApplied?()
@@ -390,10 +405,17 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     public func dismissRestore() { restoreHidden = true }
     public func showRestore() { restoreHidden = false }
 
-    public func fetchNow() async {
-        do { try await engine?.fetchChanges() } catch {
-            // A fetch cut short by the app going to the background resumes on the next turn; not an error.
-            if (error as? CKError)?.code != .operationCancelled { lastError = "Fetch failed: " + Self.describe(error) }
+    /// Fetches what the server has. Returns false when the fetch was cut short (the app was suspended,
+    /// the network dropped, iCloud asked for a pause) and should be run again; those are not errors.
+    @discardableResult
+    public func fetchNow() async -> Bool {
+        do { try await engine?.fetchChanges(); return true } catch {
+            if Self.isTransient(error) {
+                if let retry = (error as? CKError)?.retryAfterSeconds { try? await Task.sleep(for: .seconds(min(retry, 60))) }
+                return false
+            }
+            lastError = "Fetch failed: " + Self.describe(error)
+            return true
         }
     }
 
@@ -499,7 +521,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             try? ctx.save()
             lastSyncedAt = Date()
         case .didFetchRecordZoneChanges(let e):
-            if let err = e.error, (err as? CKError)?.code != .operationCancelled { lastError = "Fetch failed: " + Self.describe(err) }
+            if let err = e.error, !Self.isTransient(err) { lastError = "Fetch failed: " + Self.describe(err) }
         case .sentDatabaseChanges(let e):
             for (_, err) in e.failedZoneSaves.map({ ($0.zone, $0.error) }) { lastError = "Zone save failed: " + Self.describe(err) }
         case .fetchedDatabaseChanges, .willFetchChanges, .didFetchChanges, .willSendChanges, .didSendChanges, .willFetchRecordZoneChanges:

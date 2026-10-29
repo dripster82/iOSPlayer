@@ -106,6 +106,12 @@ struct ReelApp: App {
     }
 
     @State private var hasActivated = false
+    @State private var restoreAssertion: UIBackgroundTaskIdentifier = .invalid
+    private func endRestoreAssertion() {
+        guard restoreAssertion != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(restoreAssertion)
+        restoreAssertion = .invalid
+    }
 
     private func scanForNewMediaIfDue() {
         guard settings.scanOnLaunch, settings.hasCompletedOnboarding, !library.isScanning,
@@ -179,6 +185,12 @@ struct ReelApp: App {
                         let assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel progress sync")
                         Task { await sync.sendNow(); UIApplication.shared.endBackgroundTask(assertion) }
                     }
+                    // A restore in progress keeps running for as long as iOS allows after the app is
+                    // minimised (typically half a minute), and picks up where it left off on return.
+                    if phase == .background, sync.restore != nil, restoreAssertion == .invalid {
+                        restoreAssertion = UIApplication.shared.beginBackgroundTask(withName: "Reel restore") { endRestoreAssertion() }
+                    }
+                    if phase == .active { endRestoreAssertion() }
                     if phase == .active {
                         // The first activation is launch: give the first frame a second before the fetch.
                         let delay: Duration = hasActivated ? .zero : .seconds(1.5)
