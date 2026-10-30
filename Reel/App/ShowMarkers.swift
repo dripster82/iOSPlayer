@@ -84,6 +84,37 @@ enum ShowMarkers {
     }
 
     private static var fingerprinting: Set<String> = []
+
+    /// One open of the file for a batch of frames: a run comes off the decoder at speed, single
+    /// frames by precise seeks. When the session cannot be made (no libvlc on this platform, a
+    /// stream that will not open) each frame falls back to a thumbnail of its own.
+    private final class Grab {
+        private let grabber: FrameGrabber?
+        private let url: URL, software: Bool
+        init(url: URL, softwareDecoding: Bool) { self.url = url; software = softwareDecoding; grabber = FrameGrabber(url: url, softwareDecoding: softwareDecoding) }
+        var isSession: Bool { grabber != nil }
+
+        func run(from: TimeInterval, count: Int, spacing: TimeInterval) async -> [FrameFingerprint] {
+            if let grabber {
+                let got = await grabber.frames(from: from, count: count, spacing: spacing)
+                if got.count >= count / 2 { return got.compactMap { FrameFingerprint($0.image) } }
+            }
+            var prints: [FrameFingerprint] = []
+            for i in 0..<count {
+                if let image = await ScrubThumbnails.frame(url: url, at: from + TimeInterval(i) * spacing, softwareDecoding: software, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
+            }
+            return prints
+        }
+
+        func frame(at seconds: TimeInterval) async -> FrameFingerprint? {
+            if let grabber, let image = await grabber.frame(at: seconds) { return FrameFingerprint(image) }
+            guard let image = await ScrubThumbnails.frame(url: url, at: seconds, softwareDecoding: software, precise: true) else { return nil }
+            return FrameFingerprint(image)
+        }
+
+        /// libvlc's teardown blocks, so it runs off the main thread.
+        func close() async { guard let grabber else { return }; await Task.detached(priority: .utility) { grabber.close() }.value }
+    }
     static let printsVersion = 2
 
     /// The marked episode whose intro still has no prints (the app was put away before they were
@@ -115,17 +146,15 @@ enum ShowMarkers {
                 fingerprinting.remove(showKey)
                 if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
             }
-            var prints: [FrameFingerprint] = []
-            for i in 0..<count {
-                let at = time + TimeInterval(i) * spacing
-                if let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
-            }
+            let grab = Grab(url: url, softwareDecoding: softwareDecoding)
+            let prints = await grab.run(from: time, count: count, spacing: spacing)
+            await grab.close()
             let usable = prints.filter { !$0.isFlat }.count
             guard prints.count >= count / 2, usable >= 3 else {
                 Diagnostics.log("player", "intro prints for \(showKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
                 return
             }
-            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s")
+            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.isSession ? "from one open" : "a frame at a time")")
             update(showKey: showKey) { $0.introPrints = prints; $0.printSpacing = spacing; $0.printsVersion = Self.printsVersion }
             // Episodes searched with the old prints are searched again with these.
             update(showKey: showKey) { s in for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false } }
@@ -158,10 +187,9 @@ enum ShowMarkers {
         update(showKey: showKey) { s in if duration > time { s.creditsLength = duration - time }; s.creditsPrints = [] }
         Diagnostics.log("player", "credits marked at \(Int(time))s for \(showKey.prefix(40)) (\(Int(duration - time))s long)")
         Task {
-            var prints: [FrameFingerprint] = []
-            for i in 0..<IntroLocator.count {
-                if let image = await ScrubThumbnails.frame(url: url, at: time + TimeInterval(i) * IntroLocator.provisionalSpacing, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
-            }
+            let grab = Grab(url: url, softwareDecoding: softwareDecoding)
+            let prints = await grab.run(from: time, count: IntroLocator.count, spacing: IntroLocator.provisionalSpacing)
+            await grab.close()
             Diagnostics.log("player", "credits prints for \(showKey.prefix(40)): \(prints.filter { !$0.isFlat }.count) usable of \(prints.count)")
             update(showKey: showKey) { $0.creditsPrints = prints }
         }
@@ -196,10 +224,12 @@ enum ShowMarkers {
             var waited = 0
             while searching.contains(itemKey), waited < 120 { try? await Task.sleep(for: .seconds(5)); waited += 1 }
             var samples: [IntroLocator.Sample] = []
+            let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             for dt in stride(from: -20.0, through: 20, by: 4) {
-                guard DeviceConditions.allowsBackgroundWork else { return }
-                if let image = await ScrubThumbnails.frame(url: url, at: max(0, estimate + dt), softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { samples.append(.init(time: max(0, estimate + dt), print: p)) }
+                guard DeviceConditions.allowsBackgroundWork else { await grab.close(); return }
+                if let p = await grab.frame(at: max(0, estimate + dt)) { samples.append(.init(time: max(0, estimate + dt), print: p)) }
             }
+            await grab.close()
             let exact = IntroLocator.estimateStart(samples: samples, targets: prints, spacing: IntroLocator.provisionalSpacing)
             Diagnostics.log("player", "credits prints in \(itemKey.prefix(40)): \(exact.map { "matched at \(Int($0))s" } ?? "no match"), estimate \(Int(estimate))s")
             found(exact)
@@ -270,14 +300,16 @@ enum ShowMarkers {
             }
             var estimate: TimeInterval?
             var looked = 0
+            let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             for t in times {
-                guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); return }
-                if let image = await ScrubThumbnails.frame(url: url, at: t, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) {
+                guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
+                if let p = await grab.frame(at: t) {
                     looked += 1
                     if let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) { estimate = start; break }
                 }
             }
             guard var start = estimate else {
+                await grab.close()
                 updateEpisode(showKey: showKey, itemKey: itemKey) { $0.introSearched = true }
                 Diagnostics.log("player", "intro not found in \(itemKey.prefix(40)) after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
                 found(nil)
@@ -288,14 +320,15 @@ enum ShowMarkers {
                 var best: (TimeInterval, Double)?
                 for dt in [-1.0, 0, 1] {
                     let at = max(0, start + dt)
-                    guard let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) else { continue }
+                    guard let p = await grab.frame(at: at) else { continue }
                     let d = p.distance(to: first)
                     if best == nil || d < best!.1 { best = (at, d) }
                 }
                 if let best, best.1 < IntroLocator.allowance(first, first) { start = best.0 }
             }
+            await grab.close()
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
-            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
+            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s \(grab.isSession ? "from one open" : "a frame at a time")")
             found(.init(start: start, end: start + length))
         }
     }

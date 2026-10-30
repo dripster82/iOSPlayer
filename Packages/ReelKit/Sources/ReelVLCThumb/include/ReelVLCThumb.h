@@ -25,3 +25,19 @@ void reel_thumb_finish(void *handle);
 bool reel_thumb_available(void);
 
 #endif
+
+/// A grab session: the file opened once, frames delivered as they are decoded. For a run of
+/// frames (the intro's prints) the session plays from a time at several times normal speed with
+/// the audio off; for single frames (the search) it seeks precisely and the next frame arrives.
+/// Frames come on libvlc's thread, RGBA at the size asked for, with the player's time.
+typedef void (*reel_grab_frame_cb)(void *context, const unsigned char *pixels, unsigned width, unsigned height, unsigned stride, long long time_ms);
+
+void *reel_grab_open(void *libvlc_instance, const char *mrl, const char *const *options, int option_count,
+                     unsigned width, unsigned height, reel_grab_frame_cb callback, void *context);
+/// Starts playing from `from_ms` at `rate` (1 is normal). Returns 0 on success.
+int reel_grab_play(void *session, long long from_ms, float rate);
+/// A precise seek while playing. Returns 0 on success.
+int reel_grab_seek(void *session, long long time_ms);
+void reel_grab_set_rate(void *session, float rate);
+/// Stops and releases the session. Blocks until libvlc has let go; call off the main thread.
+void reel_grab_close(void *session);
