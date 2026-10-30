@@ -121,6 +121,24 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
         ENABLE_PREVIEWS: true
+        ENABLE_USER_SCRIPT_SANDBOXING: false   # the build-info stamp writes into the built Info.plist
+    postBuildScripts:
+      # Settings → About shows which commit and build time an installed app came from. Runs after the
+      # bundle is assembled and before it is signed, so the stamped plist is what gets sealed.
+      - name: Stamp build info
+        basedOnDependencyAnalysis: false
+        script: |
+          PLIST="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          [ -f "$PLIST" ] || exit 0
+          COMMIT=$(git -C "$SRCROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+          if [ -n "$(git -C "$SRCROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then COMMIT="$COMMIT+"; fi
+          BRANCH=$(git -C "$SRCROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          for pair in "ReelGitCommit=$COMMIT" "ReelGitBranch=$BRANCH" "ReelBuildDate=$DATE" "ReelBuildConfiguration=$CONFIGURATION"; do
+            KEY="${pair%%=*}"; VALUE="${pair#*=}"
+            /usr/libexec/PlistBuddy -c "Delete :$KEY" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :$KEY string $VALUE" "$PLIST"
+          done
     scheme:
       testTargets:
         - package: ReelKit/MediaCoreTests

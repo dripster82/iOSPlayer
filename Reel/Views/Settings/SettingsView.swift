@@ -122,7 +122,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")
+                BuildInfoRow()
                 NavigationLink("Diagnostics") { DiagnosticsView() }
                 NavigationLink("Licences") { LicencesView() }
                 NavigationLink("Data providers") { AttributionView() }
@@ -282,5 +282,45 @@ struct AttributionView: View {
                 }
             }
         }.navigationTitle("Data providers")
+    }
+}
+
+/// Version, build number, and the commit and time the app was built from (stamped into Info.plist by
+/// the "Stamp build info" build phase), so a device can be matched to a commit. Tap to copy.
+struct BuildInfoRow: View {
+    @State private var copied = false
+    private var info: [String: Any] { Bundle.main.infoDictionary ?? [:] }
+    private var version: String { "\(info["CFBundleShortVersionString"] as? String ?? "0.1") (\(info["CFBundleVersion"] as? String ?? "0"))" }
+    private var commit: String? { info["ReelGitCommit"] as? String }
+    private var branch: String? { info["ReelGitBranch"] as? String }
+    private var configuration: String? { info["ReelBuildConfiguration"] as? String }
+    private var builtAt: Date? {
+        guard let s = info["ReelBuildDate"] as? String else { return nil }
+        return ISO8601DateFormatter().date(from: s)
+    }
+    private var detail: String {
+        var parts: [String] = []
+        if let commit { parts.append(commit + (commit.hasSuffix("+") ? " (uncommitted changes)" : "")) }
+        if let builtAt { parts.append("built " + builtAt.formatted(date: .abbreviated, time: .shortened)) }
+        if let configuration, configuration != "Release" { parts.append(configuration) }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = "Reel \(version) \(detail)" + (branch.map { " on \($0)" } ?? "")
+            copied = true
+            Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Build").foregroundStyle(.primary)
+                    if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                    if let branch, branch != "main" { Text(branch).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+                }
+                Spacer()
+                Text(copied ? "Copied" : version).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
     }
 }
