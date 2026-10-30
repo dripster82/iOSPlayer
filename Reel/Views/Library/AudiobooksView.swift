@@ -17,12 +17,18 @@ struct AudiobooksView: View {
             if books.isEmpty {
                 ContentUnavailableView("No audiobooks yet", systemImage: "headphones", description: Text("Tag a folder as Audiobooks on a source (Settings → Libraries → the source → its folders) and scan. One m4b per book, or a folder of parts, both work."))
             }
-            ForEach(groupedBySeries(books), id: \.name) { group in
+            ForEach(groupedByAuthor(books), id: \.name) { author in
                 Section {
-                    ForEach(group.books, id: \.itemKey) { book in
-                        NavigationLink(value: book.itemKey) { BookRow(book: book) }
+                    ForEach(author.series, id: \.name) { series in
+                        if let n = series.name {
+                            Text(n).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                                .listRowSeparator(.hidden, edges: .bottom)
+                        }
+                        ForEach(series.books, id: \.itemKey) { book in
+                            NavigationLink(value: book.itemKey) { BookRow(book: book) }
+                        }
                     }
-                } header: { if let n = group.name { Text(n) } }
+                } header: { Text(author.name) }
             }
         }
         .navigationTitle("Audiobooks")
@@ -31,19 +37,36 @@ struct AudiobooksView: View {
         .onReceive(library.objectWillChange) { _ in refresh += 1 }
     }
 
+    /// Authors in name order, each author's series in name order with the books by number, then
+    /// the author's standalone books by title. Books with no author come last.
     private struct SeriesGroup { let name: String?; let books: [MediaItem] }
-    private func groupedBySeries(_ books: [MediaItem]) -> [SeriesGroup] {
-        var order: [String?] = []
-        var byName: [String?: [MediaItem]] = [:]
-        for b in books {
-            let key = b.seriesName
-            if byName[key] == nil { order.append(key) }
-            byName[key, default: []].append(b)
+    private struct AuthorGroup { let name: String; let series: [SeriesGroup] }
+    private func groupedByAuthor(_ books: [MediaItem]) -> [AuthorGroup] {
+        let byAuthor = Dictionary(grouping: books) { $0.author?.trimmingCharacters(in: .whitespaces).ifEmpty(nil) }
+        func sorted(_ names: [String?]) -> [String?] {
+            names.sorted { a, b in
+                switch (a, b) {
+                case (nil, nil): return false
+                case (nil, _): return false
+                case (_, nil): return true
+                case let (x?, y?): return x.localizedStandardCompare(y) == .orderedAscending
+                }
+            }
         }
-        // Books without a series come last, under no header.
-        return order.filter { $0 != nil }.map { SeriesGroup(name: $0, books: byName[$0]!) } + (byName[nil].map { [SeriesGroup(name: nil, books: $0)] } ?? [])
+        return sorted(Array(byAuthor.keys)).map { author in
+            let bySeries = Dictionary(grouping: byAuthor[author]!) { $0.seriesName?.trimmingCharacters(in: .whitespaces).ifEmpty(nil) }
+            let series = sorted(Array(bySeries.keys)).map { name in
+                SeriesGroup(name: name, books: bySeries[name]!.sorted {
+                    name == nil ? $0.sortTitle.localizedStandardCompare($1.sortTitle) == .orderedAscending
+                        : ($0.seriesIndex ?? Int.max, $0.sortTitle) < ($1.seriesIndex ?? Int.max, $1.sortTitle)
+                })
+            }
+            return AuthorGroup(name: author ?? "Unknown author", series: series)
+        }
     }
 }
+
+private extension String { func ifEmpty(_ other: String?) -> String? { isEmpty ? other : self } }
 
 /// One book in a list: cover, title, author, length or progress.
 struct BookRow: View {
