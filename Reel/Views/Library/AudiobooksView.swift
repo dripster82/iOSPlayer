@@ -21,7 +21,9 @@ struct AudiobooksView: View {
             ForEach(groupedByAuthor(books), id: \.name) { author in
                 Section {
                     ForEach(author.series, id: \.name) { series in
-                        if let n = series.name {
+                        // Standalone books get a heading of their own when the author also has a
+                        // series, or they read as the tail of the series above them.
+                        if let n = series.name ?? (author.series.count > 1 ? "Other books" : nil) {
                             Text(n).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                                 .listRowSeparator(.hidden, edges: .bottom)
                         }
