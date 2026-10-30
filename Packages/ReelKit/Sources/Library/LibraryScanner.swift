@@ -73,7 +73,11 @@ public actor LibraryScanner {
             let dir = queue.removeFirst()
             if let tag = record.tag(for: dir), tag == .excluded { continue }
             let entries: [DirectoryEntry]
-            do { entries = try await source.list(dir) } catch { continue } // one bad folder shouldn't kill the scan
+            do { entries = try await source.list(dir) } catch {
+                // One bad folder shouldn't kill the scan; a root that will not list is worth a line, though.
+                if roots.contains(dir) { Diagnostics.log("scan", "\(record.name): could not list \(dir.isEmpty ? "/" : dir): \(error.localizedDescription)") }
+                continue
+            }
             listed[dir] = Set(entries.map(\.name))
 
             let videos = entries.filter { !$0.isDirectory && $0.isVideo }
@@ -129,6 +133,8 @@ public actor LibraryScanner {
         }
 
         // Books: the audio files under each audiobooks folder, grouped by `AudiobookGrouper`.
+        let bookRoots = record.folderRules.filter { $0.tag == .audiobooks && $0.includeInScan }.map(\.folderPath)
+        if !bookRoots.isEmpty { Diagnostics.log("scan", "\(record.name): audiobook folders \(bookRoots.map { $0.isEmpty ? "/" : $0 }.joined(separator: ", ")); audio files found: \(audioByRoot.map { "\($0.key.isEmpty ? "/" : $0.key) \($0.value.count)" }.joined(separator: ", ").ifEmpty("none"))") }
         for (root, paths) in audioByRoot {
             let books = AudiobookGrouper.books(files: paths, root: root)
             let made = upsertBooks(books, record: record)
@@ -284,7 +290,8 @@ public actor LibraryScanner {
                 modelContext.insert(book)
                 new += 1
             }
-            book.seriesName = b.series; book.seriesIndex = b.seriesIndex
+            // Tags trump names: once read, the names only fill what the tags left empty.
+            if !book.tagsRead || book.seriesName == nil { book.seriesName = b.series ?? book.seriesName; book.seriesIndex = b.seriesIndex ?? book.seriesIndex }
             if book.year == nil { book.year = b.year }
             book.pendingSync = true; book.updatedAt = Date()
             for (i, part) in b.parts.enumerated() {
@@ -342,3 +349,5 @@ public actor LibraryScanner {
     }
 }
 #endif
+
+private extension String { func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self } }

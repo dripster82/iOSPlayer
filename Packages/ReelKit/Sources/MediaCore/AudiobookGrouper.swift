@@ -53,8 +53,8 @@ public enum AudiobookGrouper {
                 let named = parseBookName(bookFolderName)
                 let fromParent = isSeriesFolder(parentName, root: root, folder: folder) ? parseBookName(parentName) : nil
                 let ordered = all.sorted { naturalLess(($0 as NSString).lastPathComponent, ($1 as NSString).lastPathComponent) }
-                books.append(Book(path: folder, title: named.title, author: named.author ?? fromParent?.author, series: fromParent?.title,
-                                  seriesIndex: named.index, year: named.year,
+                books.append(Book(path: folder, title: named.title, author: named.author ?? fromParent?.author, series: named.series ?? fromParent?.title,
+                                  seriesIndex: named.seriesIndex ?? named.index, year: named.year,
                                   parts: ordered.enumerated().map { Part(relativePath: $1, title: partTitle(($1 as NSString).lastPathComponent, index: $0 + 1)) }))
             } else {
                 // Single-file books, the folder being a series (or the root).
@@ -62,7 +62,7 @@ public enum AudiobookGrouper {
                 for p in paths.sorted(by: { naturalLess(($0 as NSString).lastPathComponent, ($1 as NSString).lastPathComponent) }) {
                     let stem = (((p as NSString).lastPathComponent) as NSString).deletingPathExtension
                     let named = parseBookName(stem)
-                    books.append(Book(path: p, title: named.title, author: named.author ?? series?.author, series: series?.title, seriesIndex: named.index, year: named.year,
+                    books.append(Book(path: p, title: named.title, author: named.author ?? series?.author, series: named.series ?? series?.title, seriesIndex: named.seriesIndex ?? named.index, year: named.year,
                                       parts: [Part(relativePath: p, title: named.title)]))
                 }
             }
@@ -102,13 +102,38 @@ public enum AudiobookGrouper {
         return parent != root && !parent.isEmpty && !parentName.isEmpty
     }
 
-    public struct ParsedName: Equatable, Sendable { public var title: String; public var author: String?; public var index: Int?; public var year: Int? }
+    public struct ParsedName: Equatable, Sendable {
+        public var title: String; public var author: String?; public var index: Int?; public var year: Int?
+        /// "Vatta's War" and 4 from "Command Decision: Vatta's War, Book 4"; the index above is the
+        /// file's own numbering ("01 The Long Earth"), this one the series' when the name says it.
+        public var series: String? = nil; public var seriesIndex: Int? = nil
+        public init(title: String, author: String?, index: Int?, year: Int?, series: String? = nil, seriesIndex: Int? = nil) {
+            self.title = title; self.author = author; self.index = index; self.year = year; self.series = series; self.seriesIndex = seriesIndex
+        }
+    }
 
     /// "01 The Long Earth" → index 1; "Elizabeth Moon - Remnant Population 2021" → author, title,
     /// year; "The Long Earth (Stephen Baxter & Terry Pratchett)" → title, author; bracketed tags such
     /// as "[Graphic Audio]" or "SPEC --" prefixes are dropped.
     public static func parseBookName(_ raw: String) -> ParsedName {
-        var s = raw.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
+        // Audible-style noise: "(Unabridged)", "[Dramatized Adaptation]", "(Abridged)".
+        var s = raw.replacingOccurrences(of: #"(?i)\s*[\(\[]\s*(unabridged|abridged|dramati[sz]ed adaptation|audiobook|audio book|graphic audio)\s*[\)\]]"#, with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
+        // "Title: Series, Book 4", "Title - Series, Book 4", "Title - Series 1": the series and its number.
+        var series: String?, seriesIndex: Int?
+        if let m = s.range(of: #"(?i)\s*[:\-–—]\s*([^:\-–—]+?),?\s*(book|volume|vol\.?|#|part|no\.?)\s*(\d+)\s*$"#, options: .regularExpression) {
+            let tail = String(s[m])
+            if let n = tail.range(of: #"\d+\s*$"#, options: .regularExpression), let num = Int(tail[n].trimmingCharacters(in: .whitespaces)) { seriesIndex = num }
+            var name = tail.replacingOccurrences(of: #"(?i),?\s*(book|volume|vol\.?|#|part|no\.?)\s*\d+\s*$"#, with: "", options: .regularExpression)
+            name = name.replacingOccurrences(of: #"^\s*[:\-–—]\s*"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { series = name; s.removeSubrange(m) }
+        } else if let m = s.range(of: #"\s[-–—]\s([A-Z][^:\-–—]*?)\s(\d{1,2})\s*$"#, options: .regularExpression) {
+            // "Cold Welcome - Vatta’s Peace 1"
+            let tail = String(s[m]).replacingOccurrences(of: #"^\s[-–—]\s"#, with: "", options: .regularExpression)
+            if let n = tail.range(of: #"\d+\s*$"#, options: .regularExpression), let num = Int(tail[n].trimmingCharacters(in: .whitespaces)) {
+                seriesIndex = num; series = String(tail[..<n.lowerBound]).trimmingCharacters(in: .whitespaces); s.removeSubrange(m)
+            }
+        }
         s = s.replacingOccurrences(of: #"^\s*[A-Z]{2,6}\s*-{1,2}\s*"#, with: "", options: .regularExpression)   // "SPEC -- "
         s = s.replacingOccurrences(of: "_", with: " ")
         var index: Int?
@@ -130,8 +155,8 @@ public enum AudiobookGrouper {
             else if looksLikeAuthor(right), !left.isEmpty, right.split(separator: " ").count <= 4 { author = right; s = left }
         }
         s = s.replacingOccurrences(of: #"\s+(\d+)\s*(of|/)\s*\d+\s*$"#, with: "", options: .regularExpression)
-        let title = s.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "-–.")))
-        return ParsedName(title: title.isEmpty ? raw : title, author: author, index: index, year: year)
+        let title = s.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "-–:.")))
+        return ParsedName(title: title.isEmpty ? raw : title, author: author, index: index, year: year, series: series, seriesIndex: seriesIndex)
     }
 
     /// Two to four capitalised words, "&" or "and" between names allowed, no digits: a person, not a title.

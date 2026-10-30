@@ -86,7 +86,9 @@ public final class LibraryStore: ObservableObject {
     }
 
     public func setTag(_ tag: FolderTag?, folder: String, on record: SourceRecord) throws {
-        if let existing = record.folderRules.first(where: { $0.folderPath == folder }) {
+        let matching = record.folderRules.filter { $0.folderPath == folder }
+        for extra in matching.dropFirst() { context.delete(extra) }   // an earlier build could add a folder twice
+        if let existing = matching.first {
             if let tag { existing.tagRaw = tag.rawValue; existing.includeInScan = tag != .excluded } else { context.delete(existing) }
         } else if let tag {
             let rule = FolderRule(folderPath: folder, tag: tag, includeInScan: tag != .excluded)
@@ -294,7 +296,12 @@ public final class LibraryStore: ObservableObject {
     }
     /// What the first part's tags said: a title and author override the names, the cover is kept as a file.
     public func applyBookTags(_ book: MediaItem, title: String?, author: String?, narrator: String?, year: Int?, cover: Data?) {
-        if let title, !title.isEmpty { book.title = title; book.sortTitle = MediaItem.makeSortTitle(title) }
+        if let title, !title.isEmpty {
+            // "Command Decision: Vatta's War, Book 4 (Unabridged)" → title, series and number.
+            let parsed = AudiobookGrouper.parseBookName(title)
+            book.title = parsed.title; book.sortTitle = MediaItem.makeSortTitle(parsed.title)
+            if let s = parsed.series { book.seriesName = s; book.seriesIndex = parsed.seriesIndex ?? book.seriesIndex }
+        }
         if let author, !author.isEmpty { book.author = author }
         if let narrator, !narrator.isEmpty { book.narrator = narrator }
         if let year, book.year == nil { book.year = year }
@@ -309,6 +316,18 @@ public final class LibraryStore: ObservableObject {
         invalidateCaches()
         objectWillChange.send()
         notifySync()
+    }
+    /// Titles stored by an earlier build with the edition noise and series still in them are cleaned once.
+    public func tidyBookTitles() {
+        var changed = false
+        for book in items(kind: .audiobook, includeHidden: true) {
+            let parsed = AudiobookGrouper.parseBookName(book.title)
+            guard parsed.title != book.title || (book.seriesName == nil && parsed.series != nil) else { continue }
+            book.title = parsed.title; book.sortTitle = MediaItem.makeSortTitle(parsed.title)
+            if book.seriesName == nil, let s = parsed.series { book.seriesName = s; book.seriesIndex = parsed.seriesIndex ?? book.seriesIndex }
+            book.pendingSync = true; book.updatedAt = Date(); changed = true
+        }
+        if changed { try? context.save(); objectWillChange.send(); notifySync() }
     }
     /// Books whose tags have not been read yet, with the file to read them from.
     public func booksNeedingTags() -> [(MediaItem, MediaFile)] {

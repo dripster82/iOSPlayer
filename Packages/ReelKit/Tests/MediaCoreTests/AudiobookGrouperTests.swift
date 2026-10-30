@@ -56,3 +56,32 @@ final class AudiobookGrouperTests: XCTestCase {
         XCTAssertNil(AudiobookGrouper.halfOf("Season 1 of the show"))
     }
 }
+
+final class AudiobookTitleTests: XCTestCase {
+    func testAudibleStyleTitles() {
+        let a = AudiobookGrouper.parseBookName("Command Decision: Vatta's War, Book 4 (Unabridged)")
+        XCTAssertEqual(a.title, "Command Decision"); XCTAssertEqual(a.series, "Vatta's War"); XCTAssertEqual(a.seriesIndex, 4); XCTAssertNil(a.author)
+        let b = AudiobookGrouper.parseBookName("Command Decision - Vatta's War, Book 4 (Unabridged)")
+        XCTAssertEqual(b.title, "Command Decision"); XCTAssertEqual(b.series, "Vatta's War"); XCTAssertEqual(b.seriesIndex, 4); XCTAssertNil(b.author)
+        let c = AudiobookGrouper.parseBookName("Cold Welcome [Dramatized Adaptation] - Vatta’s Peace 1 (Unabridged)")
+        XCTAssertEqual(c.title, "Cold Welcome"); XCTAssertEqual(c.series, "Vatta’s Peace"); XCTAssertEqual(c.seriesIndex, 1)
+        XCTAssertEqual(AudiobookGrouper.parseBookName("Guards! Guards! (Unabridged)").title, "Guards! Guards!")
+        XCTAssertEqual(AudiobookGrouper.parseBookName("Thud! (Unabridged)").title, "Thud!")
+        let d = AudiobookGrouper.parseBookName("Only You Can Save Mankind: Johnny Maxwell, Book 1")
+        XCTAssertEqual(d.title, "Only You Can Save Mankind"); XCTAssertEqual(d.series, "Johnny Maxwell"); XCTAssertEqual(d.seriesIndex, 1)
+        XCTAssertEqual(AudiobookGrouper.parseBookName("Into The Fire [Dramatized Adaptation] - Vatta’s Peace 2").title, "Into The Fire")
+        let e = AudiobookGrouper.parseBookName("Elizabeth Moon - Remnant Population 2021")
+        XCTAssertEqual(e.author, "Elizabeth Moon"); XCTAssertEqual(e.title, "Remnant Population")
+    }
+
+    func testFlatFolderOfSingleFilesGetsSeriesFromNames() {
+        let root = "Audio Books"
+        let files = ["Command Decision - Vatta's War, Book 4 (Unabridged).m4b", "Trading in Danger - Vatta's War, Book 1 (Unabridged).m4b", "Jingo (Unabridged).m4b"].map { root + "/" + $0 }
+        let books = AudiobookGrouper.books(files: files, root: root)
+        XCTAssertEqual(books.count, 3)
+        let vatta = books.filter { $0.series == "Vatta's War" }
+        XCTAssertEqual(vatta.map(\.seriesIndex), [1, 4])
+        XCTAssertEqual(vatta.map(\.title), ["Trading in Danger", "Command Decision"])
+        XCTAssertEqual(books.first { $0.title == "Jingo" }?.series, nil)
+    }
+}
