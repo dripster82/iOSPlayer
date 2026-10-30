@@ -20,7 +20,6 @@ struct HomeView: View {
         var nextUp: [MediaItem] = []
         var favourites: [MediaItem] = []
         var recentlyAdded: [MediaItem] = []
-        var unwatchedFilms: [MediaItem] = []
         var isEmpty = false
         var reviewCount = 0
         var unmatched = 0
@@ -44,7 +43,6 @@ struct HomeView: View {
                 ItemRow(title: "Next Up", items: rows.nextUp, wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Favourites", items: rows.favourites, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Recently Added", items: rows.recentlyAdded, subtitle: { _ in "Added recently" }, fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Unwatched Films", items: rows.unwatchedFilms, fixMatchTarget: $fixMatchTarget)
                 if !rows.loaded {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 80)
                 } else if rows.isEmpty {
@@ -102,9 +100,7 @@ struct HomeView: View {
         r.favourites = Array(library.favourites().prefix(12))
         rows = r
         await Task.yield()
-        let films = library.items(kind: .film)
-        r.unwatchedFilms = films.filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
-        r.isEmpty = films.isEmpty && r.recentlyAdded.isEmpty
+        r.isEmpty = r.recentlyAdded.isEmpty && library.items(kind: .film).isEmpty && library.items(kind: .show).isEmpty && library.audiobooks().isEmpty
         r.reviewCount = library.reviewCount()
         r.unmatched = library.unmatchedFileCount()
         rows = r
@@ -127,9 +123,7 @@ struct HomeView: View {
         r.nextUp = library.nextUp()
         r.favourites = Array(library.favourites().prefix(12))
         r.recentlyAdded = library.recentlyAdded()
-        let films = library.items(kind: .film)
-        r.unwatchedFilms = films.filter { library.watchState($0.itemKey)?.watched != true }.prefix(12).map { $0 }
-        r.isEmpty = films.isEmpty && r.recentlyAdded.isEmpty
+        r.isEmpty = r.recentlyAdded.isEmpty && library.items(kind: .film).isEmpty && library.items(kind: .show).isEmpty && library.audiobooks().isEmpty
         r.reviewCount = library.reviewCount()
         r.unmatched = library.unmatchedFileCount()
         r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })

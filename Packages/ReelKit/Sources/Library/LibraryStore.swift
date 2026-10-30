@@ -1089,8 +1089,8 @@ public final class LibraryStore: ObservableObject {
 
     /// Newest films and shows, by when they entered the library.
     public func recentlyAdded(limit: Int = 12) -> [MediaItem] {
-        let film = MediaKind.film.rawValue, show = MediaKind.show.rawValue
-        var d = FetchDescriptor<MediaItem>(predicate: #Predicate { ($0.kindRaw == film || $0.kindRaw == show) && !$0.hidden }, sortBy: [SortDescriptor(\.addedAt, order: .reverse)])
+        let film = MediaKind.film.rawValue, show = MediaKind.show.rawValue, book = MediaKind.audiobook.rawValue
+        var d = FetchDescriptor<MediaItem>(predicate: #Predicate { ($0.kindRaw == film || $0.kindRaw == show || $0.kindRaw == book) && !$0.hidden }, sortBy: [SortDescriptor(\.addedAt, order: .reverse)])
         d.fetchLimit = limit * 3   // some of the newest may still be waiting for their files
         return ((try? context.fetch(d)) ?? []).filter(Self.playable).prefix(limit).map { $0 }
     }
