@@ -110,6 +110,18 @@ enum ShowMarkers {
         }
     }
 
+    /// Searches made by the first build looked at the first minute only; let them run again, once.
+    static func retryEarlySearchesOnce() {
+        let key = "reel.showMarkers.retrySearch.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        lock.withLock {
+            var all = load()
+            for k in all.keys { for e in all[k]!.episodes.keys where all[k]!.episodes[e]?.locatedIntro == nil { all[k]!.episodes[e]?.introSearched = false } }
+            save(all)
+        }
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
     /// Drops what the app worked out on its own for a show (the located intros), keeping the marks.
     static func forgetLocated(showKey: String) {
         update(showKey: showKey) { s in for k in s.episodes.keys { s.episodes[k]?.locatedIntro = nil; s.episodes[k]?.introSearched = false } }
@@ -164,6 +176,8 @@ enum ShowMarkers {
     }
 
     private static var searching: Set<String> = []
+    /// True while the marked intro is being looked for in this episode; the heavier scans wait.
+    static func isSearchingIntro(itemKey: String) -> Bool { searching.contains(itemKey) }
 
     /// Looks for the marked intro in the opening minutes of an episode: a frame every 8 s from the
     /// start, each compared to the fingerprints, stopping at the first that matches; then a finer
@@ -172,22 +186,30 @@ enum ShowMarkers {
     static func locateIntro(showKey: String, itemKey: String, url: URL, duration: TimeInterval, softwareDecoding: Bool, found: @escaping @MainActor (IntroMemory.Window?) -> Void) {
         guard needsIntroSearch(showKey: showKey, itemKey: itemKey), !searching.contains(itemKey), let s = show(showKey), let length = s.introLength else { return }
         let prints = s.introPrints
-        // Intros start within the first few minutes; a sixth of the file bounds the search for short episodes.
-        let limit = max(60, min(540, duration / 6))
+        // Intros start within the first few minutes, after a cold open of any length. The file's
+        // duration is often still unknown this early, so it only ever shrinks the window.
+        let limit = duration > 0 ? min(600, max(120, duration / 4)) : 600
+        // Where the intro started in the marked episodes is the best guess for this one: those
+        // neighbourhoods are looked at first (each frame is an open of the file, seconds apart),
+        // then the rest of the window from the start.
+        let known = s.episodes.values.compactMap { $0.introStart ?? $0.locatedIntro }.sorted()
+        var times: [TimeInterval] = []
+        for k in known { for dt in stride(from: -16.0, through: 16, by: IntroLocator.coarseStep) where k + dt >= 0 { times.append(k + dt) } }
+        times += stride(from: 0, through: limit, by: IntroLocator.coarseStep)
+        var seen = Set<Int>()
+        times = times.filter { seen.insert(Int($0)).inserted }
         searching.insert(itemKey)
-        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): up to \(Int(limit))s")
+        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): up to \(Int(limit))s, near \(known.map { "\(Int($0))s" }.joined(separator: ", ")) first")
         Task {
             defer { searching.remove(itemKey) }
             var estimate: TimeInterval?
             var looked = 0
-            var t: TimeInterval = 0
-            while t <= limit {
+            for t in times {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); return }
                 if let image = await ScrubThumbnails.frame(url: url, at: t, softwareDecoding: softwareDecoding), let p = FrameFingerprint(image) {
                     looked += 1
                     if let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints) { estimate = start; break }
                 }
-                t += IntroLocator.coarseStep
             }
             guard var start = estimate else {
                 updateEpisode(showKey: showKey, itemKey: itemKey) { $0.introSearched = true }

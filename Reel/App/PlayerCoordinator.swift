@@ -467,6 +467,10 @@ final class PlayerCoordinator: ObservableObject {
         Task { [weak self] in
             // Soon after the start, not a minute in: a short visit should still leave frames behind.
             try? await Task.sleep(for: .seconds(3))
+            // The intro search wants the file to itself: its answer is needed within a minute or two,
+            // and every extra open of the share slows each of its frames.
+            var waited = 0
+            while let self, self.current?.itemKey == key, ShowMarkers.isSearchingIntro(itemKey: key), waited < 60 { try? await Task.sleep(for: .seconds(5)); waited += 1 }
             guard let self, self.current?.itemKey == key, [.playing, .paused, .buffering].contains(self.engine.status) else { return }
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
