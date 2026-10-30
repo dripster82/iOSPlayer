@@ -381,12 +381,17 @@ public final class LibraryStore: ObservableObject {
     }
     /// Books the catalogues have not been asked about: after the tags, so the search has the best
     /// title and author the files can give.
-    public func booksNeedingLookup() -> [MediaItem] { audiobooks().filter { $0.tagsRead && $0.bookLookup == nil } }
+    public func booksNeedingLookup() -> [MediaItem] { audiobooks().filter { $0.tagsRead && ($0.bookLookup == nil || $0.bookLookup == "redo-manual") } }
 
     /// What a catalogue said about a book. Chosen by hand it replaces everything; taken on the
     /// names it fills what the files did not say, and the names' title and author stand when the
     /// tags gave them (the tags are the edition on disk; the catalogue may be another).
-    public func applyBookLookup(_ book: MediaItem, hit: AudiobookHit, manual: Bool) {
+    public func applyBookLookup(_ book: MediaItem, hit given: AudiobookHit, manual: Bool) {
+        // Of the series the catalogue lists, the one this library already shelves the author's
+        // other books under (or the tags named), else the parent series.
+        var hit = given
+        let known = [book.seriesName].compactMap { $0 } + items(kind: .audiobook).filter { $0 !== book && $0.author == book.author }.compactMap(\.seriesName)
+        hit.chooseSeries(known: known)
         let trust = manual || !book.tagsRead
         if trust || book.title.isEmpty { book.title = hit.title; book.sortTitle = MediaItem.makeSortTitle(hit.title) }
         if let a = hit.authorLine, trust || book.author == nil { book.author = a }
@@ -412,8 +417,11 @@ public final class LibraryStore: ObservableObject {
     public func redoBookLookupsOnce(key: String) {
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         var n = 0
-        for book in items(kind: .audiobook, includeHidden: true) where book.bookLookup == "matched" {
-            book.tagsRead = false; book.bookLookup = nil; book.pendingSync = true; book.updatedAt = Date(); n += 1
+        for book in items(kind: .audiobook, includeHidden: true) where book.bookLookup == "matched" || book.bookLookup == "manual" {
+            // With an ASIN the lookup refreshes the same edition; without, the tags are read again first.
+            if book.asin == nil { book.tagsRead = false }
+            book.bookLookup = book.bookLookup == "manual" ? "redo-manual" : nil
+            book.pendingSync = true; book.updatedAt = Date(); n += 1
         }
         if n > 0 { try? context.save(); Diagnostics.log("library", "redoing tags and catalogue lookups for \(n) books") }
         UserDefaults.standard.set(true, forKey: key)

@@ -27,6 +27,10 @@ public struct AudiobookHit: Sendable, Equatable, Identifiable {
     public var coverURL: String?
     public var publisher: String?
     public var genres: [String]
+    /// Every series the catalogue files the book under ("Discworld" 34 and "Discworld: Ankh-Morpork
+    /// City Watch" 7); `series` is the one chosen from these.
+    public var allSeries: [SeriesEntry] = []
+    public struct SeriesEntry: Sendable, Equatable { public var name: String; public var position: String?; public init(name: String, position: String?) { self.name = name; self.position = position } }
 
     public init(source: String, asin: String? = nil, appleID: Int? = nil, title: String, subtitle: String? = nil, authors: [String] = [], narrators: [String] = [],
                 series: String? = nil, seriesPosition: String? = nil, year: Int? = nil, runtimeMinutes: Int? = nil, summary: String? = nil, coverURL: String? = nil,
@@ -34,6 +38,17 @@ public struct AudiobookHit: Sendable, Equatable, Identifiable {
         self.source = source; self.asin = asin; self.appleID = appleID; self.title = title; self.subtitle = subtitle; self.authors = authors; self.narrators = narrators
         self.series = series; self.seriesPosition = seriesPosition; self.year = year; self.runtimeMinutes = runtimeMinutes; self.summary = summary; self.coverURL = coverURL
         self.publisher = publisher; self.genres = genres
+    }
+
+    /// The series to show: one the library already knows (the author's other books, the tags) when
+    /// the catalogue lists it, else the parent series, which is the shortest name ("Discworld"
+    /// before "Discworld: Ankh-Morpork City Watch"). Sets `series` and `seriesPosition`.
+    public mutating func chooseSeries(known: [String]) {
+        guard !allSeries.isEmpty else { return }
+        let norm = { (s: String) in MatchScorer.normalise(s) }
+        let knownNorm = Set(known.map(norm))
+        let pick = allSeries.first { knownNorm.contains(norm($0.name)) } ?? allSeries.min { $0.name.count < $1.name.count }!
+        series = pick.name; seriesPosition = pick.position
     }
 
     /// The whole number of "3" or "3.0"; nil for "1.5".
@@ -108,18 +123,23 @@ public actor AudibleCatalogClient {
             ((p[key] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
                 .filter { $0.range(of: #"(?i)\s[-–]\s*(introduction|foreword|afterword|translator|editor|illustrator|contributor|adapt\w*)\s*$"#, options: .regularExpression) == nil }
         }
-        let series = (p["series"] as? [[String: Any]])?.first
+        let allSeries = ((p["series"] as? [[String: Any]]) ?? []).compactMap { s -> AudiobookHit.SeriesEntry? in
+            guard let name = s["title"] as? String else { return nil }
+            return .init(name: name, position: (s["sequence"] as? String) ?? (s["sequence"] as? Int).map(String.init))
+        }
         let images = p["product_images"] as? [String: Any]
         let cover = (images?["1000"] ?? images?["500"]) as? String
         let summary = (p["publisher_summary"] as? String) ?? (p["merchandising_summary"] as? String)
         let release = (p["release_date"] as? String) ?? (p["issue_date"] as? String)
         var subtitle = p["subtitle"] as? String
         // "(Long Earth 3)" as a subtitle repeats the series line.
-        if let s = subtitle, let name = series?["title"] as? String, MatchScorer.normalise(s).contains(MatchScorer.normalise(name)) { subtitle = nil }
-        return AudiobookHit(source: "Audible", asin: asin, title: title, subtitle: subtitle, authors: names("authors"), narrators: names("narrators"),
-                            series: series?["title"] as? String, seriesPosition: (series?["sequence"] as? String) ?? (series?["sequence"] as? Int).map(String.init),
-                            year: release.flatMap { Int($0.prefix(4)) }, runtimeMinutes: p["runtime_length_min"] as? Int,
-                            summary: summary.map(plainText), coverURL: cover, publisher: p["publisher_name"] as? String, genres: [])
+        if let s = subtitle, allSeries.contains(where: { MatchScorer.normalise(s).contains(MatchScorer.normalise($0.name)) }) { subtitle = nil }
+        var hit = AudiobookHit(source: "Audible", asin: asin, title: title, subtitle: subtitle, authors: names("authors"), narrators: names("narrators"),
+                               year: release.flatMap { Int($0.prefix(4)) }, runtimeMinutes: p["runtime_length_min"] as? Int,
+                               summary: summary.map(plainText), coverURL: cover, publisher: p["publisher_name"] as? String, genres: [])
+        hit.allSeries = allSeries
+        hit.chooseSeries(known: [])
+        return hit
     }
 }
 
@@ -215,7 +235,7 @@ public struct AudiobookLookup: Sendable {
         if out.genres.isEmpty { out.genres = full.genres }
         if out.coverURL == nil { out.coverURL = full.coverURL }
         if out.narrators.isEmpty { out.narrators = full.narrators }
-        if out.series == nil { out.series = full.series; out.seriesPosition = full.seriesPosition }
+        if out.series == nil { out.series = full.series; out.seriesPosition = full.seriesPosition; out.allSeries = full.allSeries }
         if out.year == nil { out.year = full.year }
         if out.runtimeMinutes == nil { out.runtimeMinutes = full.runtimeMinutes }
         return out

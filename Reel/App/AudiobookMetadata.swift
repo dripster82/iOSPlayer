@@ -22,6 +22,14 @@ enum AudiobookMetadata {
             defer { running = false }
             for book in pending {
                 guard DeviceConditions.allowsBackgroundWork, !book.isDeleted else { break }
+                // A book already pinned to an edition (chosen by hand, or matched before) is fetched by
+                // its ASIN: the edition stands, the series is chosen again under the current rules.
+                if let asin = book.asin, let hit = try? await lookup.audible.book(asin: asin) {
+                    let wasManual = book.bookLookup == "redo-manual"
+                    library.applyBookLookup(book, hit: await lookup.details(hit), manual: wasManual)
+                    Diagnostics.log("library", "catalogue: \(book.title.prefix(40)) refreshed from \(asin), series \(book.seriesName ?? "none") \(book.seriesIndex.map(String.init) ?? "")")
+                    continue
+                }
                 let hits = await lookup.search(title: book.title, author: book.author)
                 if let best = AudiobookLookup.best(hits, title: book.title, author: book.author) {
                     let full = await lookup.details(best)

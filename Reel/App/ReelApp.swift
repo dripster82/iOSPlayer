@@ -213,7 +213,7 @@ struct ReelApp: App {
                         hasActivated = true
                         Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
                         // Books whose tags were not read (the app was put away mid-scan) get them now.
-                        Task { try? await Task.sleep(for: .seconds(8)); library.tidyBookTitles(); library.redoBookLookupsOnce(key: "bookLookupRedo1"); AudiobookTags.readPending(library: library) }
+                        Task { try? await Task.sleep(for: .seconds(8)); library.tidyBookTitles(); library.redoBookLookupsOnce(key: "bookLookupRedo3"); AudiobookTags.readPending(library: library) }
                         // A scan publishes progress every second and every screen rebuilds on it; on a
                         // cold launch Home gets several seconds to itself first.
                         Task { try? await Task.sleep(for: delay == .zero ? .zero : .seconds(6)); scanForNewMediaIfDue() }
