@@ -40,11 +40,14 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
 public enum IntroLocator {
     /// Seconds between the fingerprints taken from the marked intro.
     public static let spacing: TimeInterval = 2
-    /// How many fingerprints: 8 cover the first 14 s of the intro, so a coarse scan every 8 s
-    /// always lands within a second of one of them.
-    public static let count = 8
-    /// Coarse scan step: no larger than the span the fingerprints cover.
-    public static let coarseStep: TimeInterval = 8
+    /// How many fingerprints: 20 cover the first 38 s of the intro, so a coarse scan every 36 s
+    /// always lands within a second of one of them. Every frame of the scan is an open of the file
+    /// over the share, seconds each, so the longer the span the sooner the intro is found.
+    public static let count = 20
+    /// Coarse scan step for a set of fingerprints: two seconds short of the span they cover, and
+    /// never under 8 s (a set trimmed to a short intro still works, just slower).
+    public static func coarseStep(forPrints n: Int) -> TimeInterval { max(8, TimeInterval(n - 2) * spacing) }
+    public static var coarseStep: TimeInterval { coarseStep(forPrints: count) }
     /// Mean grey difference below which two frames are taken to be the same picture. Frames a second
     /// apart in the same sequence score 5–20; frames from different scenes score 40 and up.
     public static let threshold: Double = 24

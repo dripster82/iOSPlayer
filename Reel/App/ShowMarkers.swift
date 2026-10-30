@@ -91,7 +91,14 @@ enum ShowMarkers {
             e.introEnd = time
             if let start = e.introStart, start >= time { e.introStart = nil }
         }
-        update(showKey: showKey) { s in if let start = s.episodes[itemKey]?.introStart { s.introLength = time - start } }
+        update(showKey: showKey) { s in
+            if let start = s.episodes[itemKey]?.introStart {
+                s.introLength = time - start
+                // Prints past the intro's end are the episode itself; they would match nothing anyway.
+                let keep = Int((time - start) / IntroLocator.spacing)
+                if keep >= 3, s.introPrints.count > keep { s.introPrints = Array(s.introPrints.prefix(keep)) }
+            }
+        }
         Diagnostics.log("player", "intro end marked at \(Int(time))s for \(showKey.prefix(40))")
     }
 
@@ -135,6 +142,9 @@ enum ShowMarkers {
         guard let s = show(showKey), s.creditsPrints.contains(where: { !$0.isFlat }), s.episodes[itemKey]?.creditsStart == nil else { return }
         let prints = s.creditsPrints
         Task {
+            // The intro search comes first; the credits are a long way off.
+            var waited = 0
+            while searching.contains(itemKey), waited < 120 { try? await Task.sleep(for: .seconds(5)); waited += 1 }
             var samples: [IntroLocator.Sample] = []
             for dt in stride(from: -20.0, through: 20, by: 4) {
                 guard DeviceConditions.allowsBackgroundWork else { return }
@@ -189,17 +199,17 @@ enum ShowMarkers {
         // Intros start within the first few minutes, after a cold open of any length. The file's
         // duration is often still unknown this early, so it only ever shrinks the window.
         let limit = duration > 0 ? min(600, max(120, duration / 4)) : 600
-        // Where the intro started in the marked episodes is the best guess for this one: those
-        // neighbourhoods are looked at first (each frame is an open of the file, seconds apart),
-        // then the rest of the window from the start.
+        // A frame every step through the window (the step is just under the span the prints cover,
+        // so one frame per step is enough), taken nearest the marked episodes' intro starts first:
+        // each frame is an open of the file over the share, seconds apart, and the answer is wanted
+        // before the titles arrive.
+        let step = IntroLocator.coarseStep(forPrints: prints.count)
         let known = s.episodes.values.compactMap { $0.introStart ?? $0.locatedIntro }.sorted()
-        var times: [TimeInterval] = []
-        for k in known { for dt in stride(from: -16.0, through: 16, by: IntroLocator.coarseStep) where k + dt >= 0 { times.append(k + dt) } }
-        times += stride(from: 0, through: limit, by: IntroLocator.coarseStep)
-        var seen = Set<Int>()
-        times = times.filter { seen.insert(Int($0)).inserted }
+        var times = Array(stride(from: 0, through: limit, by: step))
+        if !known.isEmpty { times.sort { a, b in let da = known.map { abs($0 - a) }.min()!, db = known.map { abs($0 - b) }.min()!; return da != db ? da < db : a < b } }
         searching.insert(itemKey)
-        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): up to \(Int(limit))s, near \(known.map { "\(Int($0))s" }.joined(separator: ", ")) first")
+        let began = Date()
+        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): \(times.count) frames up to \(Int(limit))s, every \(Int(step))s, nearest \(known.map { "\(Int($0))s" }.joined(separator: ", ")) first")
         Task {
             defer { searching.remove(itemKey) }
             var estimate: TimeInterval?
@@ -213,14 +223,14 @@ enum ShowMarkers {
             }
             guard var start = estimate else {
                 updateEpisode(showKey: showKey, itemKey: itemKey) { $0.introSearched = true }
-                Diagnostics.log("player", "intro not found in \(itemKey.prefix(40)) after \(looked) frames")
+                Diagnostics.log("player", "intro not found in \(itemKey.prefix(40)) after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
                 found(nil)
                 return
             }
-            // Settle the start against the first fingerprint, a second at a time around the estimate.
+            // Settle the start against the first fingerprint, either side of the estimate.
             if let first = prints.first, !first.isFlat {
                 var best: (TimeInterval, Double)?
-                for dt in [-3.0, -2, -1, 0, 1, 2, 3] {
+                for dt in [-2.0, 0, 2] {
                     let at = max(0, start + dt)
                     guard let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding), let p = FrameFingerprint(image) else { continue }
                     let d = p.distance(to: first)
@@ -229,7 +239,7 @@ enum ShowMarkers {
                 if let best, best.1 < IntroLocator.threshold { start = best.0 }
             }
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
-            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames")
+            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
             found(.init(start: start, end: start + length))
         }
     }

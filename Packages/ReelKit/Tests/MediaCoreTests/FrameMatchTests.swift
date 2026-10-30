@@ -29,7 +29,7 @@ final class FrameMatchTests: XCTestCase {
         // Marked intro: fingerprints 2 s apart from 90 s. A coarse scan of the other episode every
         // 8 s hits the frame that is the third fingerprint (4 s into the intro) at 124 s.
         let targets = (0..<IntroLocator.count).map { print(seed: 10 + $0) }
-        var samples = stride(from: 0.0, through: 200, by: IntroLocator.coarseStep).map { IntroLocator.Sample(time: $0, print: print(seed: 50 + Int($0))) }
+        var samples = stride(from: 0.0, through: 200, by: 8).map { IntroLocator.Sample(time: $0, print: print(seed: 50 + Int($0))) }
         samples[15] = IntroLocator.Sample(time: 120, print: print(seed: 12))   // same picture as fingerprint 2
         XCTAssertEqual(IntroLocator.estimateStart(samples: samples, targets: targets), 116)
         XCTAssertNil(IntroLocator.estimateStart(samples: Array(samples[0..<10]), targets: targets), "nothing close enough: no start")
