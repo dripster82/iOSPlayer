@@ -121,7 +121,7 @@ enum ShowMarkers {
         /// libvlc's teardown blocks, so it runs off the main thread.
         func close() async { guard let grabber else { return }; await Task.detached(priority: .utility) { grabber.close() }.value }
     }
-    static let printsVersion = 3   // 3: four prints a second over the whole intro
+    static let printsVersion = 4   // 4: every slot kept, so the offsets are right
 
     /// The marked episode whose intro still has no prints (the app was put away before they were
     /// taken), so they can be taken when it next plays.
@@ -169,10 +169,12 @@ enum ShowMarkers {
 
     @MainActor
     static func markIntroEnd(showKey: String, itemKey: String, url: URL, time: TimeInterval, softwareDecoding: Bool) {
-        updateEpisode(showKey: showKey, itemKey: itemKey) { e in
-            e.introEnd = time
-            if let start = e.introStart, start >= time { e.introStart = nil }
+        // An end at or before the start is a slip of the thumb, not a new intro: nothing changes.
+        if let start = episode(showKey: showKey, itemKey: itemKey)?.introStart, start >= time - 5 {
+            Diagnostics.log("player", "intro end at \(Int(time))s ignored: the start is at \(Int(start))s")
+            return
         }
+        updateEpisode(showKey: showKey, itemKey: itemKey) { e in e.introEnd = time }
         update(showKey: showKey) { s in
             if let start = s.episodes[itemKey]?.introStart {
                 s.introLength = time - start
@@ -203,7 +205,7 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v3"
+        let key = "reel.showMarkers.retrySearch.v4"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
@@ -316,9 +318,11 @@ enum ShowMarkers {
                     // ten seconds further into the titles, must match its own print too.
                     let checkIndex = min(prints.count - 1, Int(10 / spacing))
                     let checkAt = start + TimeInterval(checkIndex) * spacing
-                    if let q = await grab.frame(at: checkAt), let (i, d) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(2 / spacing) {
-                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed \(Int(checkAt))s (print \(i), difference \(Int(d)))")
-                        estimate = start; break
+                    if let q = await grab.frame(at: checkAt), let (i, d) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(3 / spacing) {
+                        // Two readings of the start: the second is usually the sharper one.
+                        let second = checkAt - TimeInterval(i) * spacing
+                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed at \(Int(checkAt))s (print \(i), difference \(Int(d))); start \(String(format: "%.1f", (start + second) / 2))s")
+                        estimate = (start + second) / 2; break
                     }
                     Diagnostics.log("player", "intro candidate at \(Int(start))s not confirmed at \(Int(checkAt))s; looking on")
                 }

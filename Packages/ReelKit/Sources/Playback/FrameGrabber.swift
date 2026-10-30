@@ -71,8 +71,10 @@ public final class FrameGrabber: @unchecked Sendable {
                 // start means the stream began at 0, so seek there once (the rate keeps up with it).
                 if !state.sought, time < from - 1.5 { state.sought = true; if let session = self.session { _ = reel_grab_seek(session, Int64(from * 1000)) }; return }
                 // The first frame at or past each target; frames before the first target are skipped.
+                // A frame that covers two targets is kept for both: every slot must have a print, or
+                // the prints after it sit at the wrong offsets.
                 while state.next < targets.count, time >= targets[state.next] - 0.05 {
-                    if state.collected.last?.1 !== image { state.collected.append((targets[state.next], image)) }
+                    state.collected.append((targets[state.next], image))
                     state.next += 1
                 }
                 if state.next >= targets.count || time >= end + spacing { state.finish(); self.clearHandler() }
