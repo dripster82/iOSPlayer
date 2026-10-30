@@ -41,8 +41,24 @@ struct AppliedBatch: Sendable {
     var changed: Bool { sources + items + files > 0 }
 }
 
+/// A small keyed document the app keeps outside SwiftData (the show marks: intro and credits
+/// positions) that rides the same zone as a "Document" record. The app registers one store; the
+/// engine asks it which keys are pending, builds a record from each, and hands fetched records
+/// back to it. The store decides whether a fetched document is newer than its own.
+public protocol SyncedDocuments: AnyObject, Sendable {
+    func pendingKeys() -> [String]
+    func document(for key: String) -> (data: Data, updatedAt: Date)?
+    func apply(key: String, data: Data, updatedAt: Date)
+    func markSynced(key: String)
+    func markAllPending()
+    func remove(key: String)
+}
+
 @MainActor
 public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate {
+    /// The app's document store, if it has one. Set once at launch, before syncing starts.
+    nonisolated(unsafe) public static var documents: SyncedDocuments?
+
     /// Non-nil while a restore is running; the app shows a progress screen instead of the library so
     /// nothing appears before its files have arrived and been linked.
     @Published public private(set) var restore: RestoreProgress?
@@ -276,6 +292,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
 
     /// First enable on a device with an existing library: everything it has should go up.
     private func markEverythingPending() {
+        Self.documents?.markAllPending()
         for s in (try? ctx.fetch(FetchDescriptor<SourceRecord>())) ?? [] where s.type != .local { s.pendingSync = true }
         for i in (try? ctx.fetch(FetchDescriptor<MediaItem>())) ?? [] { i.pendingSync = true }
         for f in (try? ctx.fetch(FetchDescriptor<MediaFile>())) ?? [] where f.source?.type != .local { f.pendingSync = true }
@@ -289,6 +306,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         guard let engine else { return }
         var ids: [CKRecord.ID] = []
         for ws in (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("watch|" + ws.itemKey)) }
+        for k in Self.documents?.pendingKeys() ?? [] { ids.append(recordID("doc|" + k)) }
         for f in (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("fav|" + f.itemKey)) }
         for o in (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("override|" + o.fileKey)) }
         for c in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.pendingSync }))) ?? [] { ids.append(recordID("collection|" + c.id.uuidString)) }
@@ -579,6 +597,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         guard let (type, key) = Self.split(id) else { return nil }
         switch type {
         case "watch": return (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first)?.updatedAt
+        case "doc": return Self.documents?.document(for: key)?.updatedAt
         case "fav": return (try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first)?.updatedAt
         case "override": return (try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first)?.updatedAt
         case "collection": return UUID(uuidString: key).flatMap { u in (try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == u })).first)?.updatedAt }
@@ -608,6 +627,11 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             let r = baseRecord("WatchState", id)
             r["itemKey"] = ws.itemKey; r["watched"] = ws.watched ? 1 : 0; r["position"] = ws.position; r["duration"] = ws.duration
             r["updatedAt"] = ws.updatedAt; r["deviceID"] = ws.deviceID; r["lastPlayedAt"] = ws.lastPlayedAt
+            return r
+        case "doc":
+            guard let doc = Self.documents?.document(for: key) else { return nil }
+            let r = baseRecord("Document", id)
+            r["key"] = key; r["payload"] = doc.data; r["updatedAt"] = doc.updatedAt
             return r
         case "fav":
             guard let f = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first else { return nil }
@@ -677,6 +701,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     nonisolated static func apply(_ r: CKRecord, in ctx: ModelContext, deleting: inout [String]) {
         let remoteUpdated = (r["updatedAt"] as? Date) ?? .distantPast
         switch r.recordType {
+        case "Document":
+            guard let key = r["key"] as? String, let data = r["payload"] as? Data else { return }
+            Self.documents?.apply(key: key, data: data, updatedAt: remoteUpdated)
         case "WatchState":
             guard let key = r["itemKey"] as? String else { return }
             let ws = (try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first) ?? { let w = WatchState(itemKey: key, deviceID: "remote"); w.updatedAt = .distantPast; w.pendingSync = false; ctx.insert(w); return w }()
@@ -851,6 +878,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     nonisolated static func applyDeletion(_ id: CKRecord.ID, in ctx: ModelContext) {
         guard let (type, key) = Self.split(id) else { return }
         switch type {
+        case "doc": Self.documents?.remove(key: key)
         case "collection":
             if let uuid = UUID(uuidString: key), let c = try? ctx.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == uuid })).first { ctx.delete(c) }
         case "source":
@@ -871,6 +899,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         guard let (type, key) = Self.split(id) else { return }
         switch type {
         case "watch": if let x = try? ctx.fetch(FetchDescriptor<WatchState>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
+        case "doc": Self.documents?.markSynced(key: key)
         case "fav": if let x = try? ctx.fetch(FetchDescriptor<Favourite>(predicate: #Predicate { $0.itemKey == key })).first { x.pendingSync = false }
         case "override": if let x = try? ctx.fetch(FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key })).first { x.pendingSync = false }
         case "groupart": if let x = try? ctx.fetch(FetchDescriptor<GroupArtwork>(predicate: #Predicate { $0.groupID == key })).first { x.pendingSync = false }

@@ -388,7 +388,7 @@ struct TimedOverlays: View {
             if duration > 0, duration - t < 60, duration - t > 0, player.upNext != nil { player.prepareNext() }
             // The countdown runs from the moment the card shows, so the next episode starts
             // before the credits are over, not after them.
-            if duration > 0, t >= upNextAt, t < duration, upNextCountdown == nil, !countdownCancelled { startCountdown() }
+            if duration > 0, t >= countdownAt, t < duration, upNextCountdown == nil, !countdownCancelled { startCountdown() }
             if duration > 0, t < upNextAt - 5 { countdownCancelled = false }
         }
         .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
@@ -405,6 +405,9 @@ struct TimedOverlays: View {
     /// When the card appears: where the credits start, if a chapter or the frame scan found them,
     /// else the lead before the end.
     private var upNextAt: TimeInterval { player.creditsStart ?? (duration - upNextLead) }
+    /// When the countdown starts: the card's time plus the grace a scanned credits start needs,
+    /// but never so late that the countdown would outlast the file.
+    private var countdownAt: TimeInterval { min(upNextAt + player.creditsGrace, duration - TimeInterval(max(3, settings.autoPlayCountdown)) - 3) }
 
     /// Chapters first (a named intro, or the unnamed-chapter shape rule); otherwise what the viewer's
     /// own skips have taught the app about this show.
@@ -622,6 +625,7 @@ struct TrackSheet: View {
                     Button { engine.startPictureInPicture(); dismiss() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
                         .disabled(!engine.canStartPictureInPicture)
                     Label("With an AirPlay speaker or TV selected before you press Play, MP4/MOV files over HTTP or from Downloads stream natively; MKV and SMB mirror the screen.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)
+                    if player.current?.kind == .episode { marksSection }
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -631,6 +635,40 @@ struct TrackSheet: View {
     }
 
     private var title: String { switch kind { case .audio: "Audio"; case .subtitles: "Subtitles"; case .chapters: "Chapters"; case .speed: "Speed"; case .more: "More" } }
+
+    /// Marks for this show: the viewer pauses where the intro starts and ends and where the credits
+    /// begin, and the app finds those places in the other episodes.
+    @ViewBuilder private var marksSection: some View {
+        let e = player.marks, show = player.showMarks
+        Section {
+            markRow("Intro starts here", at: e?.introStart, icon: "forward.frame") { player.markIntroStart() }
+            markRow("Intro ends here", at: e?.introEnd, icon: "forward.frame.fill") { player.markIntroEnd() }
+            markRow("Credits start here", at: e?.creditsStart, icon: "text.below.photo") { player.markCreditsStart() }
+            if let show, !show.isEmpty {
+                Button("Clear this show's marks", role: .destructive) { player.clearMarks() }
+            }
+            Button("Forget what Reel worked out") { player.forgetAutomatic(); dismiss() }
+        } header: { Text("Mark this show") } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pause at the spot, then mark it. The intro is the same pictures every week, so once its start and end are marked Reel looks for it in the other episodes, wherever their opening scene puts it. Credits run the same length every week, so one mark places them in every episode. Marks win over what Reel works out on its own; \"Forget\" drops the automatic intro and credits and scans again.")
+                if let show, let l = show.introLength, l >= 10 { Text("Intro: \(Int(l)) s long" + (show.introPrints.isEmpty ? ", fingerprinting…" : "")) }
+                if let show, let l = show.creditsLength { Text("Credits: \(Int(l)) s long") }
+            }
+        }
+    }
+
+    private func markRow(_ title: String, at time: TimeInterval?, icon: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            Task { @MainActor in player.objectWillChange.send() }   // the row's time comes from the store
+        } label: {
+            HStack {
+                Label(title, systemImage: icon).foregroundStyle(.primary)
+                Spacer()
+                Text(time.map { "at \(MediaFormat.clock($0))" } ?? "at \(MediaFormat.clock(engine.time))").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
 
     private func row(_ title: String, sub: String?, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {

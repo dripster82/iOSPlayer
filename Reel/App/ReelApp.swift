@@ -35,6 +35,8 @@ struct ReelApp: App {
         _settings = StateObject(wrappedValue: settings)
         _library = StateObject(wrappedValue: store)
         let sync = SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID)
+        SyncEngine.documents = ShowMarkersSync()
+        ShowMarkers.onChange = { [weak sync] in Task { @MainActor in sync?.pushPendingChanges() } }
         _sync = StateObject(wrappedValue: sync)
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
         _downloads = StateObject(wrappedValue: DownloadManager(library: store))

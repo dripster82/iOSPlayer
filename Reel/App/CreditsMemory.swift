@@ -22,6 +22,8 @@ enum CreditsMemory {
     static func record(itemKey: String, start: TimeInterval?) {
         var all = load(); all[itemKey] = start ?? none; save(all)
     }
+    /// Drops the scan's answer so the title is scanned again next time.
+    static func forget(itemKey: String) { var all = load(); all[itemKey] = nil; save(all) }
 
     private static var inProgress: Set<String> = []
 

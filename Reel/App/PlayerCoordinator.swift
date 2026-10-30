@@ -100,6 +100,10 @@ final class PlayerCoordinator: ObservableObject {
     /// Where the end credits start, once known: a named or short final chapter first, else the
     /// dark-frame scan's result (kept per title). The Up Next card appears and counts down from here.
     @Published private(set) var creditsStart: TimeInterval?
+    /// How long after `creditsStart` the Up Next countdown may begin. A frame scan places the start
+    /// early by up to a keyframe, so its answer gets a grace period; a chapter or the viewer's own
+    /// mark is exact and gets none.
+    @Published private(set) var creditsGrace: TimeInterval = 0
 
     enum SleepTimer: Hashable { case minutes(Int), endOfEpisode }
     @Published private(set) var sleepTimer: SleepTimer?
@@ -324,6 +328,8 @@ final class PlayerCoordinator: ObservableObject {
     /// the titles; remember it for the show and see whether two such jumps agree.
     private func noteUserSeek(from: TimeInterval, to: TimeInterval) {
         guard let current, current.kind == .episode, let show = current.show, from < 600, to - from >= 20, to - from <= 240 else { return }
+        // A marked intro is the viewer's word; skips do not second-guess it.
+        if ShowMarkers.show(show.itemKey)?.introLength != nil { return }
         // Skips the app made for the viewer (the button, a learned window) teach nothing new.
         if let intro = engine.chapters.intro, abs(to - (intro.start + intro.duration)) < 1 { return }
         if let learned = learnedIntro, abs(to - learned.end) < 1 { return }
@@ -438,10 +444,11 @@ final class PlayerCoordinator: ObservableObject {
                 let memory = TrackMemory.choice(for: Self.memoryKey(item))
                 preferredFill = memory?.fill
                 pendingRate = memory?.rate.flatMap { $0 == 1 ? nil : $0 }
-                learnedIntro = item.kind == .episode ? item.show.flatMap { IntroMemory.window(showKey: $0.itemKey) } : nil
-                creditsStart = nil
+                learnedIntro = item.kind == .episode ? item.show.flatMap { ShowMarkers.introWindow(showKey: $0.itemKey, itemKey: item.itemKey) ?? IntroMemory.window(showKey: $0.itemKey) } : nil
+                creditsStart = nil; creditsGrace = 0
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
+                if let show = item.show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
                 startSaveTimer()
                 isLoading = false
@@ -469,6 +476,66 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
+    /// The marked intro, looked for in this episode as soon as it plays: its answer is wanted
+    /// before the titles come round, a minute or more in.
+    private func scheduleIntroSearch(showKey: String, key: String, url: URL) {
+        guard ShowMarkers.needsIntroSearch(showKey: showKey, itemKey: key) else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
+            ShowMarkers.locateIntro(showKey: showKey, itemKey: key, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec)) { [weak self] window in
+                guard let self, self.current?.itemKey == key, let window else { return }
+                self.learnedIntro = window
+            }
+        }
+    }
+
+    // MARK: - Marks
+
+    private var markContext: (showKey: String, itemKey: String, url: URL)? {
+        guard let current, current.kind == .episode, let show = current.show, let url = lastPlaybackURL ?? engine.currentURL else { return nil }
+        return (show.itemKey, current.itemKey, url)
+    }
+    /// The show's marks, for the More sheet.
+    var marks: ShowMarkers.Episode? { markContext.flatMap { ShowMarkers.episode(showKey: $0.showKey, itemKey: $0.itemKey) } }
+    var showMarks: ShowMarkers.Show? { markContext.flatMap { ShowMarkers.show($0.showKey) } }
+
+    func markIntroStart() {
+        guard let c = markContext else { return }
+        ShowMarkers.markIntroStart(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
+        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+    }
+    func markIntroEnd() {
+        guard let c = markContext else { return }
+        ShowMarkers.markIntroEnd(showKey: c.showKey, itemKey: c.itemKey, time: engine.time)
+        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+    }
+    func markCreditsStart() {
+        guard let c = markContext else { return }
+        ShowMarkers.markCreditsStart(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, duration: engine.duration, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
+        creditsStart = engine.time; creditsGrace = 0
+    }
+    /// Forgets what the app worked out on its own for this show and episode (the scanned credits,
+    /// the intro learned from skips, the intros it located) and starts over; marks stay.
+    func forgetAutomatic() {
+        guard let c = markContext else { return }
+        CreditsMemory.forget(itemKey: c.itemKey)
+        IntroMemory.forget(showKey: c.showKey)
+        ShowMarkers.forgetLocated(showKey: c.showKey)
+        Diagnostics.log("player", "forgot the automatic intro and credits for \(c.showKey.prefix(40))")
+        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+        creditsStart = nil; creditsGrace = 0
+        resolveCredits(key: c.itemKey, url: c.url)
+        scheduleIntroSearch(showKey: c.showKey, key: c.itemKey, url: c.url)
+    }
+    func clearMarks() {
+        guard let c = markContext else { return }
+        ShowMarkers.forget(showKey: c.showKey)
+        learnedIntro = IntroMemory.window(showKey: c.showKey)
+        creditsStart = nil; creditsGrace = 0
+        resolveCredits(key: c.itemKey, url: c.url)
+    }
+
     /// Chapters first; then the scan's stored result; else the scan, soon into the play (it is some
     /// fifty opens of the file, four seconds each over a share, so its answer is a few minutes away
     /// and is wanted before the end). Episodes only: a film's credits are not followed by anything,
@@ -477,10 +544,23 @@ final class PlayerCoordinator: ObservableObject {
         let duration = duration ?? engine.duration, chapters = chapters ?? engine.chapters
         guard let current, current.kind == .episode, duration > 0, creditsStart == nil else { return }
         if let byChapter = chapters.creditsStart(fileDuration: duration) {
-            creditsStart = byChapter
+            creditsStart = byChapter; creditsGrace = 0
             Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
             return
         }
+        if let show = current.show, let marked = ShowMarkers.creditsStart(showKey: show.itemKey, itemKey: key, duration: duration) {
+            let exact = ShowMarkers.episode(showKey: show.itemKey, itemKey: key)?.creditsStart != nil
+            creditsStart = marked; creditsGrace = exact ? 0 : 5
+            Diagnostics.log("player", "credits \(exact ? "marked" : "by the show's credits length") at \(Int(marked))s")
+            if !exact {
+                ShowMarkers.confirmCredits(showKey: show.itemKey, itemKey: key, url: url, estimate: marked, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec)) { [weak self] found in
+                    guard let self, self.current?.itemKey == key, let found else { return }
+                    self.creditsStart = found; self.creditsGrace = 0
+                }
+            }
+            return
+        }
+        creditsGrace = 15
         if let stored = CreditsMemory.start(for: key) {
             creditsStart = stored
             if let stored { Diagnostics.log("player", "credits known at \(Int(stored))s") }
@@ -594,7 +674,7 @@ final class PlayerCoordinator: ObservableObject {
         opts.dialogueBoost = settings.dialogueBoost
         opts.allowFrameDrops = ExternalDisplay.shared.isConnected
         Self.applySubtitleStyle(&opts, settings)
-        preferredFill = nil; pendingRate = nil; learnedIntro = nil; creditsStart = nil
+        preferredFill = nil; pendingRate = nil; learnedIntro = nil; creditsStart = nil; creditsGrace = 0
         engine.load(PlaybackItem(url: url, title: name, subtitle: url.isFileURL ? nil : url.host, startAt: resume, itemKey: key), options: opts)
         scheduleScrubThumbnails(key: key, url: url)
         nowPlaying.attach(engine, title: name, subtitle: nil, artwork: nil)
@@ -654,7 +734,7 @@ final class PlayerCoordinator: ObservableObject {
         currentVideoCodec = nil
         externalURL = nil
         learnedIntro = nil
-        creditsStart = nil
+        creditsStart = nil; creditsGrace = 0
         if case .minutes = sleepTimer { } else { setSleepTimer(nil) }
     }
 

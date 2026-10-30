@@ -409,3 +409,19 @@ credits-like frames after which they stay in the majority. The scan starts 45 s 
 thumbnails, uses the same thumbnailer, backs off when the device is hot or in Low Power Mode, and its result
 (a time or "none") is kept per title in UserDefaults (`reel.creditsMemory`), per device. Episodes only.
 Tests: `CreditsDetectionTests`.
+
+## 30 Oct — Intro and credits marks, credits grace, synced marks
+
+- The Up Next countdown now starts a grace period after a *scanned* credits start (15 s; 5 s when the
+  start comes from the show's learned credits length; none for a chapter or a hand mark), because the
+  frame scan lands up to a keyframe early. `PlayerCoordinator.creditsGrace`.
+- The player's More sheet has **Mark this show**: Intro starts here / Intro ends here / Credits start
+  here, plus Clear this show's marks and Forget what Reel worked out. `Reel/App/ShowMarkers.swift`.
+  Marks win over chapters-less automatic answers. The intro start is fingerprinted (8 frames, 2 s apart,
+  `FrameFingerprint`/`IntroLocator` in Playback) and looked for in other episodes' opening minutes as
+  they start to play; the intro end gives the length. A credits mark gives the show's credits length,
+  and its fingerprints pin the start exactly in episodes whose credits open on the same card.
+- Marks sync through CloudKit as one "Document" record per show (`SyncedDocuments` in Sync,
+  `ShowMarkersSync` in the app): whole-document, last writer wins.
+- Known: the DLNA and FTP integration tests need the local test server and corpus (gone from the
+  scratchpad); they fail for that reason alone.

@@ -437,6 +437,7 @@ private struct NativeUpNext: View {
 
     private var lead: TimeInterval { TimeInterval(max(3, settings.autoPlayCountdown)) + 10 }
     private var showAt: TimeInterval { player.creditsStart ?? (duration() - lead) }
+    private var countdownAt: TimeInterval { min(showAt + player.creditsGrace, duration() - TimeInterval(max(3, settings.autoPlayCountdown)) - 3) }
 
     var body: some View {
         let total = duration(), now = clock.time
@@ -444,7 +445,7 @@ private struct NativeUpNext: View {
             if let next = player.upNext, total > 1, now >= showAt { card(next) }
         }
         .onChange(of: clock.time) { _, t in
-            if total > 1, t >= showAt, t < total, countdown == nil, !cancelled { start() }
+            if total > 1, t >= countdownAt, t < total, countdown == nil, !cancelled { start() }
             if t < showAt - 5 { cancelled = false }
         }
     }
