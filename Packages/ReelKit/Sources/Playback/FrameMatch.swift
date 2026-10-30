@@ -41,16 +41,19 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
 /// apart from the intro's start; a scan of the episode's opening minutes supplies samples, and the
 /// best sample that matches one of the fingerprints places the start.
 public enum IntroLocator {
-    /// Seconds between the fingerprints taken from the marked intro.
-    public static let spacing: TimeInterval = 2
-    /// How many fingerprints: 20 cover the first 38 s of the intro, so a coarse scan every 36 s
-    /// always lands within a second of one of them. Every frame of the scan is an open of the file
-    /// over the share, seconds each, so the longer the span the sooner the intro is found.
+    /// Seconds between the fingerprints taken from a marked intro whose length is known: a frame a
+    /// second over the whole of it, so a sample from another episode that lands anywhere in the
+    /// titles is within half a second of a print.
+    public static let spacing: TimeInterval = 1
+    /// Spacing when only the start is marked (the length is not known yet): 2 s over `count` frames.
+    public static let provisionalSpacing: TimeInterval = 2
     public static let count = 20
-    /// Coarse scan step for a set of fingerprints: two seconds short of the span they cover, and
-    /// never under 8 s (a set trimmed to a short intro still works, just slower).
-    public static func coarseStep(forPrints n: Int) -> TimeInterval { max(8, TimeInterval(n - 2) * spacing) }
-    public static var coarseStep: TimeInterval { coarseStep(forPrints: count) }
+    /// The most prints a show keeps: two minutes of titles at a second each.
+    public static let maxCount = 120
+    /// Coarse scan step for a set of prints: two seconds short of the span they cover, so one
+    /// sample per step is enough to land in the intro, and never under 8 s. Every frame of the
+    /// scan is an open of the file over the share, seconds each, so the span sets the pace.
+    public static func coarseStep(forPrints n: Int, spacing: TimeInterval) -> TimeInterval { max(8, TimeInterval(n - 1) * spacing - 2) }
     /// Mean grey difference below which two frames are taken to be the same picture. Frames a second
     /// apart in the same sequence score 5–20; frames from different scenes score 40 and up.
     public static let threshold: Double = 24
@@ -83,7 +86,7 @@ public enum IntroLocator {
 
     /// Where the intro starts, from coarse samples: the sample closest to a fingerprint, when it
     /// is close enough, shifted back by that fingerprint's offset from the start.
-    public static func estimateStart(samples: [Sample], targets: [FrameFingerprint]) -> TimeInterval? {
+    public static func estimateStart(samples: [Sample], targets: [FrameFingerprint], spacing: TimeInterval = spacing) -> TimeInterval? {
         var best: (time: TimeInterval, distance: Double)?
         for s in samples {
             guard let (i, d) = matches(s.print, in: targets) else { continue }

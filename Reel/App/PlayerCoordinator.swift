@@ -516,7 +516,7 @@ final class PlayerCoordinator: ObservableObject {
     }
     func markIntroEnd() {
         guard let c = markContext else { return }
-        ShowMarkers.markIntroEnd(showKey: c.showKey, itemKey: c.itemKey, time: engine.time)
+        ShowMarkers.markIntroEnd(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
         learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
     }
     func markCreditsStart() {

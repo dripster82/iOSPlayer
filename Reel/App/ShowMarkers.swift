@@ -23,6 +23,8 @@ enum ShowMarkers {
     struct Show: Codable, Equatable {
         /// Taken at the marked intro start and every `IntroLocator.spacing` seconds after it.
         var introPrints: [FrameFingerprint] = []
+        /// Seconds between the prints (1 over a whole marked intro; 2 while only the start is marked).
+        var printSpacing: TimeInterval?
         /// 2 once the prints come from precise seeks; older sets were keyframes and are retaken.
         var printsVersion: Int?
         var introLength: TimeInterval?
@@ -87,7 +89,9 @@ enum ShowMarkers {
     /// The marked episode whose intro still has no prints (the app was put away before they were
     /// taken), so they can be taken when it next plays.
     static func needsFingerprints(showKey: String, itemKey: String) -> TimeInterval? {
-        guard let s = show(showKey), s.introPrints.isEmpty || (s.printsVersion ?? 1) < Self.printsVersion, !fingerprinting.contains(showKey) else { return nil }
+        guard let s = show(showKey), !fingerprinting.contains(showKey) else { return nil }
+        let provisional = s.introLength != nil && (s.printSpacing ?? IntroLocator.provisionalSpacing) != IntroLocator.spacing
+        guard s.introPrints.isEmpty || (s.printsVersion ?? 1) < Self.printsVersion || provisional else { return nil }
         return s.episodes[itemKey]?.introStart
     }
 
@@ -101,33 +105,35 @@ enum ShowMarkers {
         let began = Date()
         var assertion = UIBackgroundTaskIdentifier.invalid
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro fingerprints") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
-        Diagnostics.log("player", "fingerprinting the intro of \(itemKey.prefix(40)) from \(Int(time))s: \(IntroLocator.count) frames")
+        // The whole intro a second at a time once its length is known; the first 38 s at 2 s until then.
+        let length = show(showKey)?.introLength
+        let spacing = length == nil ? IntroLocator.provisionalSpacing : IntroLocator.spacing
+        let count = length.map { min(IntroLocator.maxCount, max(3, Int($0 / spacing) + 1)) } ?? IntroLocator.count
+        Diagnostics.log("player", "fingerprinting the intro of \(itemKey.prefix(40)) from \(Int(time))s: \(count) frames \(Int(spacing))s apart")
         Task {
             defer {
                 fingerprinting.remove(showKey)
                 if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
             }
             var prints: [FrameFingerprint] = []
-            for i in 0..<IntroLocator.count {
-                let at = time + TimeInterval(i) * IntroLocator.spacing
+            for i in 0..<count {
+                let at = time + TimeInterval(i) * spacing
                 if let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
             }
             let usable = prints.filter { !$0.isFlat }.count
-            guard prints.count >= IntroLocator.count / 2, usable >= 3 else {
+            guard prints.count >= count / 2, usable >= 3 else {
                 Diagnostics.log("player", "intro prints for \(showKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
                 return
             }
-            // Trim to the intro's length when the end is already marked.
-            var kept = prints
-            if let length = show(showKey)?.introLength { let keep = Int(length / IntroLocator.spacing); if keep >= 3, kept.count > keep { kept = Array(kept.prefix(keep)) } }
-            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(kept.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s")
-            update(showKey: showKey) { $0.introPrints = kept; $0.printsVersion = Self.printsVersion }
+            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s")
+            update(showKey: showKey) { $0.introPrints = prints; $0.printSpacing = spacing; $0.printsVersion = Self.printsVersion }
             // Episodes searched with the old prints are searched again with these.
             update(showKey: showKey) { s in for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false } }
         }
     }
 
-    static func markIntroEnd(showKey: String, itemKey: String, time: TimeInterval) {
+    @MainActor
+    static func markIntroEnd(showKey: String, itemKey: String, url: URL, time: TimeInterval, softwareDecoding: Bool) {
         updateEpisode(showKey: showKey, itemKey: itemKey) { e in
             e.introEnd = time
             if let start = e.introStart, start >= time { e.introStart = nil }
@@ -135,12 +141,15 @@ enum ShowMarkers {
         update(showKey: showKey) { s in
             if let start = s.episodes[itemKey]?.introStart {
                 s.introLength = time - start
-                // Prints past the intro's end are the episode itself; they would match nothing anyway.
-                let keep = Int((time - start) / IntroLocator.spacing)
-                if keep >= 3, s.introPrints.count > keep { s.introPrints = Array(s.introPrints.prefix(keep)) }
+                // The provisional prints (2 s apart, the first 38 s) give way to a frame a second
+                // over the whole intro, taken when the episode next plays or straight away below.
+                if (s.printSpacing ?? IntroLocator.provisionalSpacing) != IntroLocator.spacing { s.introPrints = [] }
             }
         }
         Diagnostics.log("player", "intro end marked at \(Int(time))s for \(showKey.prefix(40))")
+        if let start = episode(showKey: showKey, itemKey: itemKey)?.introStart, show(showKey)?.introPrints.isEmpty == true {
+            fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: start, softwareDecoding: softwareDecoding)
+        }
     }
 
     @MainActor
@@ -151,7 +160,7 @@ enum ShowMarkers {
         Task {
             var prints: [FrameFingerprint] = []
             for i in 0..<IntroLocator.count {
-                if let image = await ScrubThumbnails.frame(url: url, at: time + TimeInterval(i) * IntroLocator.spacing, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
+                if let image = await ScrubThumbnails.frame(url: url, at: time + TimeInterval(i) * IntroLocator.provisionalSpacing, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { prints.append(p) }
             }
             Diagnostics.log("player", "credits prints for \(showKey.prefix(40)): \(prints.filter { !$0.isFlat }.count) usable of \(prints.count)")
             update(showKey: showKey) { $0.creditsPrints = prints }
@@ -191,7 +200,7 @@ enum ShowMarkers {
                 guard DeviceConditions.allowsBackgroundWork else { return }
                 if let image = await ScrubThumbnails.frame(url: url, at: max(0, estimate + dt), softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) { samples.append(.init(time: max(0, estimate + dt), print: p)) }
             }
-            let exact = IntroLocator.estimateStart(samples: samples, targets: prints)
+            let exact = IntroLocator.estimateStart(samples: samples, targets: prints, spacing: IntroLocator.provisionalSpacing)
             Diagnostics.log("player", "credits prints in \(itemKey.prefix(40)): \(exact.map { "matched at \(Int($0))s" } ?? "no match"), estimate \(Int(estimate))s")
             found(exact)
         }
@@ -244,7 +253,8 @@ enum ShowMarkers {
         // so one frame per step is enough), taken nearest the marked episodes' intro starts first:
         // each frame is an open of the file over the share, seconds apart, and the answer is wanted
         // before the titles arrive.
-        let step = IntroLocator.coarseStep(forPrints: prints.count)
+        let spacing = s.printSpacing ?? IntroLocator.provisionalSpacing
+        let step = IntroLocator.coarseStep(forPrints: prints.count, spacing: spacing)
         let known = s.episodes.values.compactMap { $0.introStart ?? $0.locatedIntro }.sorted()
         var times = Array(stride(from: 0, through: limit, by: step))
         if !known.isEmpty { times.sort { a, b in let da = known.map { abs($0 - a) }.min()!, db = known.map { abs($0 - b) }.min()!; return da != db ? da < db : a < b } }
@@ -264,7 +274,7 @@ enum ShowMarkers {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); return }
                 if let image = await ScrubThumbnails.frame(url: url, at: t, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) {
                     looked += 1
-                    if let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints) { estimate = start; break }
+                    if let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) { estimate = start; break }
                 }
             }
             guard var start = estimate else {
@@ -276,7 +286,7 @@ enum ShowMarkers {
             // Settle the start against the first fingerprint, either side of the estimate.
             if let first = prints.first, !first.isFlat {
                 var best: (TimeInterval, Double)?
-                for dt in [-2.0, 0, 2] {
+                for dt in [-1.0, 0, 1] {
                     let at = max(0, start + dt)
                     guard let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding, precise: true), let p = FrameFingerprint(image) else { continue }
                     let d = p.distance(to: first)
