@@ -304,6 +304,11 @@ struct FixMatchView: View {
     private var series: MediaItem? { item?.kind == .show ? item : item?.show }
 
     var body: some View {
+        if let item, item.kind == .audiobook || item.isAudiobookPart { BookMatchView(book: item.kind == .audiobook ? item : (item.show ?? item)) }
+        else { tmdbBody }
+    }
+
+    private var tmdbBody: some View {
         NavigationStack {
             List {
                 if let series {

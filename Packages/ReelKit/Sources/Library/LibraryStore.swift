@@ -379,6 +379,42 @@ public final class LibraryStore: ObservableObject {
         }
         if changed { try? context.save(); objectWillChange.send(); notifySync() }
     }
+    /// Books the catalogues have not been asked about: after the tags, so the search has the best
+    /// title and author the files can give.
+    public func booksNeedingLookup() -> [MediaItem] { audiobooks().filter { $0.tagsRead && $0.bookLookup == nil } }
+
+    /// What a catalogue said about a book. Chosen by hand it replaces everything; taken on the
+    /// names it fills what the files did not say, and the names' title and author stand when the
+    /// tags gave them (the tags are the edition on disk; the catalogue may be another).
+    public func applyBookLookup(_ book: MediaItem, hit: AudiobookHit, manual: Bool) {
+        let trust = manual || !book.tagsRead
+        if trust || book.title.isEmpty { book.title = hit.title; book.sortTitle = MediaItem.makeSortTitle(hit.title) }
+        if let a = hit.authorLine, trust || book.author == nil { book.author = a }
+        if let n = hit.narratorLine, trust || book.narrator == nil { book.narrator = n }
+        if let s = hit.series { book.seriesName = s; book.seriesIndex = hit.seriesIndex ?? (manual ? nil : book.seriesIndex) }
+        else if manual { book.seriesName = nil; book.seriesIndex = nil }
+        if let y = hit.year, trust || book.year == nil { book.year = y }
+        if let s = hit.summary, !s.isEmpty { book.overview = s }
+        if let m = hit.runtimeMinutes { book.runtimeMinutes = m }
+        if !hit.genres.isEmpty { book.genres = hit.genres }
+        if let c = hit.coverURL { book.posterOverrideURL = c }
+        book.asin = hit.asin ?? (manual ? nil : book.asin)
+        book.bookLookup = manual ? "manual" : "matched"
+        book.pendingSync = true; book.updatedAt = Date()
+        try? context.save()
+        invalidateCaches(); objectWillChange.send(); notifySync()
+    }
+    /// Nothing in the catalogues was close enough; the names and tags stand, and Fix match waits.
+    public func markBookUnmatched(_ book: MediaItem) {
+        book.bookLookup = "none"; book.pendingSync = true; book.updatedAt = Date()
+        try? context.save()
+    }
+    /// Forget a lookup so the next pass asks again (a title corrected by hand, say).
+    public func resetBookLookup(_ book: MediaItem) {
+        book.bookLookup = nil; book.pendingSync = true; book.updatedAt = Date()
+        try? context.save()
+    }
+
     /// Books whose tags have not been read yet, with the file to read them from.
     public func booksNeedingTags() -> [(MediaItem, MediaFile)] {
         audiobooks().filter { !$0.tagsRead }.compactMap { b in

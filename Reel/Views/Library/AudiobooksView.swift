@@ -9,6 +9,7 @@ struct AudiobooksView: View {
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var settings: AppSettings
     @State private var refresh = 0
+    @State private var fixing: MediaItem?
 
     var body: some View {
         let books = library.audiobooks()
@@ -26,12 +27,14 @@ struct AudiobooksView: View {
                         }
                         ForEach(series.books, id: \.itemKey) { book in
                             NavigationLink(value: book.itemKey) { BookRow(book: book) }
+                                .contextMenu { Button { fixing = book } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") } }
                         }
                     }
                 } header: { Text(author.name) }
             }
         }
         .navigationTitle("Audiobooks")
+        .sheet(item: $fixing) { BookMatchView(book: $0) }
         .searchButton()
         .itemNavigation()
         .onReceive(library.objectWillChange) { _ in refresh += 1 }
@@ -90,7 +93,7 @@ struct BookRow: View {
 struct BookCover: View {
     let book: MediaItem
     var body: some View {
-        if let url = LibraryStore.coverURL(book) {
+        if let url = book.posterURL {
             AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { placeholder }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         } else { placeholder.clipShape(RoundedRectangle(cornerRadius: 8)) }
@@ -168,6 +171,8 @@ struct AudiobookDetailView: View {
     let book: MediaItem
     @State private var refresh = 0
     @State private var confirmReset = false
+    @State private var fixing = false
+    @State private var fullSummary = false
 
     var body: some View {
         let parts = BookProgress.parts(book)
@@ -182,10 +187,14 @@ struct AudiobookDetailView: View {
                         if let a = book.author { Text(a).font(.headline).foregroundStyle(.secondary) }
                         if let n = book.narrator { Text("Read by \(n)").font(.subheadline).foregroundStyle(.secondary) }
                         if let s = book.seriesName { Text(book.seriesIndex.map { "\(s), book \($0)" } ?? s).font(.subheadline).foregroundStyle(.secondary) }
-                        if let y = book.year { Text(String(y)).font(.caption).foregroundStyle(.secondary) }
+                        Text([book.year.map(String.init), book.genres.first].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                         Text(BookProgress.summary(book, library: library)).font(.caption).foregroundStyle(.secondary)
                     }
                 }.padding(.vertical, 4)
+                if let o = book.overview, !o.isEmpty {
+                    Text(o).font(.subheadline).lineLimit(fullSummary ? nil : 4)
+                        .onTapGesture { withAnimation { fullSummary.toggle() } }
+                }
                 if let next {
                     Button {
                         player.play(next, settings: settings)
@@ -224,6 +233,15 @@ struct AudiobookDetailView: View {
             }
         }
         .navigationTitle(book.title).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { fixing = true } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") }
+                    if book.bookLookup == "none" { Text("No catalogue entry was close enough") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
+        .sheet(isPresented: $fixing) { BookMatchView(book: book) }
         .confirmationDialog("Start over?", isPresented: $confirmReset) {
             Button("Forget my place in every part", role: .destructive) {
                 library.setWatched(false, itemKeys: parts.map(\.itemKey))

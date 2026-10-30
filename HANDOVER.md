@@ -448,3 +448,15 @@ player needs the record, but the matcher and the library ignore it. Long-press a
 Library** (a video: its folder is rescanned; audio: **Add to Library as Audiobook** tags the folder
 Books via `LibraryStore.adoptAsAudiobooks`). Fix Match has an **Audiobook** segment that does the
 same for a title that was read as a film or show; the placeholder title is retired.
+
+### Book metadata (30 Oct 2026)
+`Metadata/AudiobookLookup.swift`: `AudibleCatalogClient` (Audible's keyless catalogue search, UK
+region by default: ASIN, authors, narrators, series and position, summary, 1000px cover),
+`AudnexusClient` (detail by ASIN: plain description, genres) and `AppleBooksClient` (iTunes Search,
+the fallback). `AudiobookLookup` ties them together and scores hits (`best` accepts ≥ 0.82 on title
+and author). `AudiobookMetadata.lookupPending` (Reel/App) runs after the tags are read, one book at a
+time; a clear hit is applied with `LibraryStore.applyBookLookup` (names' title/author stand when the
+tags gave them; narrator, series, year, summary, genres, cover and ASIN are filled; the cover goes in
+`posterOverrideURL`), otherwise `bookLookup = "none"`. **Fix match** on a book (row long-press, the
+page's … menu, or any Fix match on a book) opens `BookMatchView`, which searches and applies the
+chosen edition in full. New item fields `asin` and `bookLookup` sync.

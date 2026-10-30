@@ -18,7 +18,7 @@ enum AudiobookTags {
     static func readPending(library: LibraryStore) {
         guard !running else { return }
         let pending = library.booksNeedingTags()
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty else { AudiobookMetadata.lookupPending(library: library); return }
         running = true
         Diagnostics.log("library", "reading tags for \(pending.count) audiobooks")
         Task {
@@ -29,6 +29,7 @@ enum AudiobookTags {
                 let tags = await read(url)
                 let folderCover = await coverBeside(file, library: library)
                 library.applyBookTags(book, title: tags?.title, author: tags?.author, narrator: tags?.narrator, year: tags?.year, cover: tags?.cover ?? folderCover)
+                if book === pending.last?.0 { AudiobookMetadata.lookupPending(library: library) }
                 Diagnostics.log("library", "tags for \(book.title.prefix(40)): \(tags.map { "title \"\($0.title ?? "")\", author \"\($0.author ?? "")\", cover \($0.cover != nil)" } ?? "none read")\(folderCover != nil ? ", cover beside the parts" : "")")
             }
         }

@@ -218,6 +218,11 @@ public final class MediaItem {
     public var coverPath: String? = nil
     /// True once the first part's tags were read; the names gave the title and author until then.
     public var tagsRead: Bool = false
+    /// Audible's id for the edition, once a catalogue lookup (or Fix match) named it.
+    public var asin: String? = nil
+    /// The catalogue lookup: nil not tried yet, "matched" taken on the names, "manual" chosen in
+    /// Fix match, "none" nothing close enough (Fix match still offered).
+    public var bookLookup: String? = nil
 
     // Episode fields
     public var seasonNumber: Int?

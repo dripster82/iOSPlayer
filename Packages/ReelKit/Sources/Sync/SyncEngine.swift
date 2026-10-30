@@ -673,6 +673,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             r["posterOverrideURL"] = i.posterOverrideURL; r["backdropOverrideURL"] = i.backdropOverrideURL; r["logoOverrideURL"] = i.logoOverrideURL
             r["preferredFileID"] = i.preferredFileID?.uuidString
             r["author"] = i.author; r["narrator"] = i.narrator; r["seriesName"] = i.seriesName; r["seriesIndex"] = i.seriesIndex
+            r["asin"] = i.asin; r["bookLookup"] = i.bookLookup
             r["confidence"] = i.confidenceRaw; r["addedAt"] = i.addedAt; r["hidden"] = i.hidden ? 1 : 0
             r["seasonNumber"] = i.seasonNumber; r["episodeNumber"] = i.episodeNumber; r["airDate"] = i.airDate
             r["showKey"] = i.show?.itemKey ?? i.showKeyHint; r["seasonCount"] = i.seasonCount
@@ -825,6 +826,8 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let a = r["author"] as? String { i.author = a; i.tagsRead = true }
             if let n = r["narrator"] as? String { i.narrator = n }
             i.seriesName = r["seriesName"] as? String; i.seriesIndex = r["seriesIndex"] as? Int
+            if let a = r["asin"] as? String { i.asin = a }
+            if let l = r["bookLookup"] as? String { i.bookLookup = l }
             i.confidenceRaw = (r["confidence"] as? String) ?? i.confidenceRaw
             i.addedAt = (r["addedAt"] as? Date) ?? i.addedAt; i.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             i.seasonNumber = r["seasonNumber"] as? Int; i.episodeNumber = r["episodeNumber"] as? Int; i.airDate = r["airDate"] as? Date
