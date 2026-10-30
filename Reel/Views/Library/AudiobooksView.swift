@@ -82,7 +82,7 @@ struct BookRow: View {
         HStack(spacing: 12) {
             BookCover(book: book).frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 3) {
-                Text(book.seriesIndex.map { "\($0). " } ?? "" + book.title).font(.body.weight(.semibold)).lineLimit(2)
+                Text((book.seriesIndex.map { "\($0). " } ?? "") + book.title).font(.body.weight(.semibold)).lineLimit(2)
                 if let a = book.author { Text(a).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                 Text(BookProgress.summary(book, library: library)).font(.caption).foregroundStyle(.secondary)
                 if let p = BookProgress.fraction(book, library: library) { ProgressView(value: p).tint(Color.accentColor) }
