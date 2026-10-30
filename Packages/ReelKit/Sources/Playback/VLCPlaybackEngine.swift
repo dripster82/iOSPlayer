@@ -262,6 +262,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func play() {
         if verifyOnNextPlay { flushDisplayLayerIfNeeded() }
+        // The stall clock restarts here too: on a hot device the watchdog only looks every 15 s, which
+        // is longer than its 8 s stall threshold.
+        lastProgressAt = Date(); lastPicturesAt = Date()
         player.play()
         if verifyOnNextPlay { verifyOnNextPlay = false; verifyOutput() }
     }
@@ -375,7 +378,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 let hot: Bool = { switch ProcessInfo.processInfo.thermalState { case .serious, .critical: true; default: false } }()
                 try? await Task.sleep(for: .seconds(hot ? 15 : 2))
                 guard let self, !Task.isCancelled else { return }
-                guard self.status == .playing, let stats = self.player.media?.statistics else { continue }
+                guard self.status == .playing, let stats = self.player.media?.statistics else {
+                    // Paused, opening or buffering: no output is expected, so the stall clock starts again
+                    // from here. Otherwise a long pause reads as "no output for 400s" the moment play resumes.
+                    self.lastProgressAt = Date(); self.lastPicturesAt = Date()
+                    continue
+                }
                 let pictures = Int(stats.displayedPictures)
                 let count = pictures + Int(stats.playedAudioBuffers)
                 if pictures != self.lastPictures {
@@ -626,7 +634,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         pipController?.invalidatePlaybackState()
         switch state {
         case .opening: setStatus(.opening)
-        case .buffering: setStatus(player.isPlaying && lastTickAt >= loadedAt ? .playing : .buffering)
+        case .buffering:
+            // VLC reports buffering for a paused player too (a seek, a flush); that is still paused, and
+            // the viewer wants the play button, not a spinner over a picture that is not moving.
+            if status == .paused, !player.isPlaying { break }
+            setStatus(player.isPlaying && lastTickAt >= loadedAt ? .playing : .buffering)
         case .playing:
             setStatus(.playing)
             hasPlayed = true
