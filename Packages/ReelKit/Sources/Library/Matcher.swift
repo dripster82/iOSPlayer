@@ -62,6 +62,7 @@ struct Matcher {
         file.suggestedTMDbID = nil; file.suggestionSource = nil
         do {
             switch kind {
+            case .audiobook: return markReview(file)   // books never reach the matcher
             case .episode, .show:
                 guard let s = parsed.season, let e = parsed.episode else { return markReview(file) }
                 let showID: Int

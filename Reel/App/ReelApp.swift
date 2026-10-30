@@ -47,6 +47,8 @@ struct ReelApp: App {
         store.syncHooks = SyncHooks(changed: { [weak sync] in sync?.pushPendingChanges() },
                                     deleted: { [weak sync] keys in sync?.deleteRecords(named: keys) })
         sync.onChangesApplied = { [weak store] in store?.invalidateCaches(); store?.objectWillChange.send() }
+        // Books found by a scan get their embedded tags (title, author, cover) read afterwards.
+        store.scanFinished = { [weak store] _ in if let store { AudiobookTags.readPending(library: store) } }
         // Must happen before launch finishes, so here rather than in a view.
         BackgroundScans.register(library: store, settings: settings)
         #if canImport(VLCKit)
@@ -207,6 +209,8 @@ struct ReelApp: App {
                         let delay: Duration = hasActivated ? .zero : .seconds(1.5)
                         hasActivated = true
                         Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
+                        // Books whose tags were not read (the app was put away mid-scan) get them now.
+                        Task { try? await Task.sleep(for: .seconds(8)); AudiobookTags.readPending(library: library) }
                         // A scan publishes progress every second and every screen rebuilds on it; on a
                         // cold launch Home gets several seconds to itself first.
                         Task { try? await Task.sleep(for: delay == .zero ? .zero : .seconds(6)); scanForNewMediaIfDue() }

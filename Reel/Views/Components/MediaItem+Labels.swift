@@ -14,3 +14,8 @@ extension MediaItem {
         return have < total ? "\(have) of \(total) \(noun)" : "\(n) \(noun)"
     }
 }
+
+extension MediaItem {
+    /// A part of an audiobook: an episode whose parent is a book.
+    var isAudiobookPart: Bool { kind == .episode && show?.kind == .audiobook }
+}

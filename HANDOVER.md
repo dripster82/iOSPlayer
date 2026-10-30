@@ -44,6 +44,8 @@ Reel/                   SwiftUI app target
   Views/Library/        HomeView, TVView (+FilmsView, FavouritesView, CollectionsView in TVView.swift),
                         DetailViews (HeroHeader, FilmDetailView, ShowDetailView, EpisodeRow, FlowLayout),
                         SearchView, NeedsReviewView (+FixMatchView)
+  Views/Library/AudiobooksView.swift  Audiobooks list, BookRow/BookCover, BookProgress, AudiobookDetailView
+  App/AudiobookTags.swift             Reads a book's embedded tags (title, author, cover) with VLCMedia.parse after a scan
   Views/Sources/        SourcesView (+SourceDetailView, TagSheet, FileBrowserView), AddSourceView,
                         FilesView (the Files tab: Downloads then every source as a plain folder tree; audio files play too)
   Views/Player/         PlayerView (PlayerView → PlayerContentView, Scrubber, TrackSheet, AirPlayButton, VolumeControl),
@@ -426,3 +428,16 @@ Tests: `CreditsDetectionTests`.
   `ShowMarkersSync` in the app): whole-document, last writer wins.
 - Known: the DLNA and FTP integration tests need the local test server and corpus (gone from the
   scratchpad); they fail for that reason alone.
+
+## Audiobooks (30 Oct 2026)
+
+A folder tagged **Audiobooks** (`FolderTag.audiobooks`) is walked for audio files (`AudioFile.audioExtensions`); videos in
+it are judged as in a mixed folder. `AudiobookGrouper` (MediaCore, tested) turns the files into books: one m4b per book in
+a series folder, a folder of parts as one book, "X 1 of 2"/"X 2 of 2" sibling folders merged. A book is a `MediaItem` of
+kind `.audiobook` (`ItemKey.book(sourceID:path:)`, fields `author`, `narrator`, `seriesName`, `seriesIndex`, `coverPath`,
+`tagsRead`); its parts are `.episode` items under it (`ItemKey.bookPart`, season 1, episode = part number), so Continue
+Watching, up-next, resume and the sleep timer are the series machinery. `MediaItem.isAudiobookPart` keeps intro search,
+credits and marks off them. After a scan `AudiobookTags.readPending` parses the first part with VLC for title, author,
+narrator, year and cover (or a picture beside the parts), writing them through `LibraryStore.applyBookTags`; covers live
+in Application Support/Covers, per device. The Audiobooks section (sidebar, Files tab row) appears only when a book exists.
+Debug: `reel://debug-list?path=<folder>&depth=N` logs a source folder's tree.

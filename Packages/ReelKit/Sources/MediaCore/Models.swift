@@ -5,6 +5,9 @@ public enum MediaKind: String, Codable, Sendable, CaseIterable {
     case film
     case show
     case episode
+    /// A book: its parts (one m4b, or a folder of mp3s) are `episode` items with the book as their
+    /// `show`, so playing on, resuming and Continue Watching work as they do for a series.
+    case audiobook
 }
 
 /// How a folder was tagged by the user. Overrides filename heuristics.
@@ -13,6 +16,8 @@ public enum FolderTag: String, Codable, Sendable, CaseIterable {
     case films
     case mixed
     case excluded
+    /// Audio files in here are books, grouped by `AudiobookGrouper`; videos are judged as in a mixed folder.
+    case audiobooks
 }
 
 /// How confident the matcher was. Low-confidence matches get a badge in the UI.

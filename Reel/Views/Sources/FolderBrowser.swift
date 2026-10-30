@@ -72,8 +72,8 @@ struct FolderBrowser: View {
                 }.buttonStyle(.plain)
                 if on {
                     Picker("", selection: Binding(get: { picked.wrappedValue[e.relativePath] ?? .mixed }, set: { picked.wrappedValue[e.relativePath] = $0 })) {
-                        Text("TV").tag(FolderTag.tv); Text("Films").tag(FolderTag.films); Text("Mixed").tag(FolderTag.mixed); Text("Skip").tag(FolderTag.excluded)
-                    }.pickerStyle(.segmented).frame(width: 220)
+                        Text("TV").tag(FolderTag.tv); Text("Films").tag(FolderTag.films); Text("Mixed").tag(FolderTag.mixed); Text("Books").tag(FolderTag.audiobooks); Text("Skip").tag(FolderTag.excluded)
+                    }.pickerStyle(.segmented).frame(width: 270)
                 }
                 Button { nav.append(BrowseFolder(path: e.relativePath)) } label: { Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary).padding(.leading, 4) }.buttonStyle(.plain)
             }
@@ -89,6 +89,7 @@ struct FolderBrowser: View {
         let n = name.lowercased()
         if ["tv", "tv shows", "shows", "series"].contains(n) { return .tv }
         if ["films", "movies", "film", "movie", "cinema"].contains(n) { return .films }
+        if ["audiobooks", "audio books", "books", "audiobook"].contains(n) { return .audiobooks }
         return nil
     }
 

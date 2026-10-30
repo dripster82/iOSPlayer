@@ -215,8 +215,8 @@ struct TagPill: View {
         Text(label).font(.caption2.bold()).textCase(.uppercase).padding(.horizontal, 7).padding(.vertical, 2)
             .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 6)).foregroundStyle(colour)
     }
-    private var label: String { switch tag { case .tv: "TV"; case .films: "Films"; case .mixed: "Mixed"; case .excluded: "Excluded"; case nil: "Untagged" } }
-    private var colour: Color { switch tag { case .tv: .blue; case .films: Color.accentColor; case .mixed: .purple; case .excluded: .red; case nil: .secondary } }
+    private var label: String { switch tag { case .tv: "TV"; case .films: "Films"; case .mixed: "Mixed"; case .audiobooks: "Books"; case .excluded: "Excluded"; case nil: "Untagged" } }
+    private var colour: Color { switch tag { case .tv: .blue; case .films: Color.accentColor; case .mixed: .purple; case .audiobooks: .orange; case .excluded: .red; case nil: .secondary } }
 }
 
 struct TagSheet: View {
@@ -228,8 +228,8 @@ struct TagSheet: View {
         NavigationStack {
             List {
                 Section {
-                    row("TV shows", .tv); row("Films", .films); row("Mixed · decide per file", .mixed); row("Not media · exclude", .excluded)
-                } header: { Text(folder.isEmpty ? "/" : folder) } footer: { Text("Overrides the filename guess for everything in this folder.") }
+                    row("TV shows", .tv); row("Films", .films); row("Mixed · decide per file", .mixed); row("Audiobooks", .audiobooks); row("Not media · exclude", .excluded)
+                } header: { Text(folder.isEmpty ? "/" : folder) } footer: { Text("Overrides the filename guess for everything in this folder. Audiobooks: the audio files in here are grouped into books (one m4b per book, or a folder of parts); any videos are judged as in a mixed folder.") }
                 Section {
                     Button("Remove folder from this source", role: .destructive) { try? library.removeFolder(folder, from: source); dismiss() }
                 } footer: { Text("Removes its files from the library. Excluding a folder does the same but keeps it listed so the scan skips it.") }

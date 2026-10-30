@@ -53,12 +53,18 @@ public final class SourceRecord {
     }
 
     /// The most specific rule whose folder contains the path.
-    public func tag(for relativePath: String) -> FolderTag? {
+    public func tag(for relativePath: String) -> FolderTag? { rule(for: relativePath)?.tag }
+    /// The nearest folder rule above (or at) a path.
+    public func rule(for relativePath: String) -> FolderRule? {
         let lower = relativePath.lowercased()
         return folderRules
             .filter { lower == $0.folderPath.lowercased() || lower.hasPrefix($0.folderPath.lowercased() + "/") }
-            .max { $0.folderPath.count < $1.folderPath.count }?
-            .tag
+            .max { $0.folderPath.count < $1.folderPath.count }
+    }
+    /// The audiobooks folder a path sits in, when its nearest rule says books.
+    public func audiobooksRoot(for relativePath: String) -> String? {
+        guard let r = rule(for: relativePath), r.tag == .audiobooks, r.includeInScan else { return nil }
+        return r.folderPath
     }
 }
 
@@ -202,6 +208,16 @@ public final class MediaItem {
     /// TMDb person ids, one per `cast` entry (0 when unknown), for the person page.
     public var castIDs: [Int] = []
     public var castPhotosCheckedAt: Date? = nil
+
+    // Audiobook fields (the book item; its parts are episodes of it)
+    public var author: String? = nil
+    public var narrator: String? = nil
+    public var seriesName: String? = nil
+    public var seriesIndex: Int? = nil
+    /// The cover as a file in the app's Covers folder (embedded art, or a picture beside the parts). Per device.
+    public var coverPath: String? = nil
+    /// True once the first part's tags were read; the names gave the title and author until then.
+    public var tagsRead: Bool = false
 
     // Episode fields
     public var seasonNumber: Int?

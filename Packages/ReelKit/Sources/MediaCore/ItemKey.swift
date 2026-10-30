@@ -26,6 +26,14 @@ public enum ItemKey {
         title.lowercased().replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
     }
 
+    /// An audiobook: the source and the folder (or single file) that is the book. The parts are
+    /// numbered under it like episodes, so the series machinery carries them.
+    public static func book(sourceID: UUID, path: String) -> String {
+        var h = FNV1a(); h.update(sourceID.uuidString.lowercased()); h.update(path.lowercased())
+        return "book:\(h.hexDigest)"
+    }
+    public static func bookPart(bookKey: String, index: Int) -> String { "\(bookKey):P\(String(format: "%03d", index))" }
+
     /// Fallback for unmatched files: filename, size and duration hashed together.
     /// Duration is optional because a scan knows size before it knows duration.
     public static func unmatched(fileName: String, size: Int64, duration: TimeInterval?) -> String {

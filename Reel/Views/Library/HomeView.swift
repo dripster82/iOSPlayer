@@ -38,7 +38,7 @@ struct HomeView: View {
                 syncStatus
                 ItemRow(title: "Continue Watching", items: rows.continueWatching.map(\.0), wide: true, subtitle: { item in
                     guard let ws = rows.continueWatching.first(where: { $0.0.itemKey == item.itemKey })?.1 else { return "" }
-                    let prefix = item.kind == .episode ? (item.episodeCode ?? "") + " · " : ""
+                    let prefix = item.isAudiobookPart ? "Part \(item.episodeNumber ?? 0) · " : item.kind == .episode ? (item.episodeCode ?? "") + " · " : ""
                     return prefix + MediaFormat.minutesLeft(ws.duration - ws.position)
                 }, onTap: { player.play($0, settings: settings) }, isContinueWatching: true, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Next Up", items: rows.nextUp, wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)

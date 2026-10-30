@@ -189,6 +189,7 @@ public final class LibraryStore: ObservableObject {
                 assertion.end()
                 self?.notifySync()
                 self?.retryIfLookupsFailed(record, providers: providers)
+                self?.scanFinished?(record)
             }
         }
     }
@@ -256,7 +257,7 @@ public final class LibraryStore: ObservableObject {
         // Films and episodes: the file check runs in the store rather than by faulting every item's
         // files. Shows (a few hundred at most) are checked in memory; SwiftData cannot evaluate the
         // nested episodes-with-files predicate and throws at fetch time.
-        if kind == .show {
+        if kind == .show || kind == .audiobook {
             let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.kindRaw == raw && (includeHidden || !$0.hidden) }, sortBy: [SortDescriptor(\.sortTitle)])
             return ((try? context.fetch(d)) ?? []).filter(Self.playable)
         }
@@ -269,10 +270,54 @@ public final class LibraryStore: ObservableObject {
     /// files, and a card that cannot play reads as a failed sync.
     public static func playable(_ item: MediaItem) -> Bool {
         switch item.kind {
-        case .show: return item.episodes.contains { !$0.files.isEmpty }
+        case .show, .audiobook: return item.episodes.contains { !$0.files.isEmpty }
         default: return !item.files.isEmpty
         }
     }
+
+    // MARK: - Audiobooks
+
+    /// Books in series order: series name, then the book's number in it, then title.
+    public func audiobooks() -> [MediaItem] {
+        items(kind: .audiobook).sorted { ($0.seriesName ?? $0.sortTitle, $0.seriesIndex ?? 0, $0.sortTitle) < ($1.seriesName ?? $1.sortTitle, $1.seriesIndex ?? 0, $1.sortTitle) }
+    }
+    /// Where covers read from the files live. Per device; the path stored on the item is the file name.
+    nonisolated public static var coversDirectory: URL {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Covers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    nonisolated public static func coverURL(_ item: MediaItem) -> URL? {
+        guard let name = item.coverPath ?? item.show?.coverPath else { return nil }
+        let url = coversDirectory.appendingPathComponent(name)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+    /// What the first part's tags said: a title and author override the names, the cover is kept as a file.
+    public func applyBookTags(_ book: MediaItem, title: String?, author: String?, narrator: String?, year: Int?, cover: Data?) {
+        if let title, !title.isEmpty { book.title = title; book.sortTitle = MediaItem.makeSortTitle(title) }
+        if let author, !author.isEmpty { book.author = author }
+        if let narrator, !narrator.isEmpty { book.narrator = narrator }
+        if let year, book.year == nil { book.year = year }
+        if let cover, !cover.isEmpty {
+            let name = book.itemKey.replacingOccurrences(of: ":", with: "-") + ".jpg"
+            try? cover.write(to: Self.coversDirectory.appendingPathComponent(name))
+            book.coverPath = name
+        }
+        book.tagsRead = true
+        book.pendingSync = true; book.updatedAt = Date()
+        try? context.save()
+        invalidateCaches()
+        objectWillChange.send()
+        notifySync()
+    }
+    /// Books whose tags have not been read yet, with the file to read them from.
+    public func booksNeedingTags() -> [(MediaItem, MediaFile)] {
+        audiobooks().filter { !$0.tagsRead }.compactMap { b in
+            b.episodes.sorted { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) }.first?.files.first.map { (b, $0) }
+        }
+    }
+    /// Called on the main actor when a scan finishes, with the source scanned.
+    public var scanFinished: ((SourceRecord) -> Void)?
 
     public func item(_ key: String) -> MediaItem? {
         var d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key }); d.fetchLimit = 1

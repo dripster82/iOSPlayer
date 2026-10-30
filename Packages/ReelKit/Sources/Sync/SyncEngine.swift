@@ -672,6 +672,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             r["studioLogos"] = Self.list(i.studioLogos); r["collectionPosterPath"] = i.collectionPosterPath
             r["posterOverrideURL"] = i.posterOverrideURL; r["backdropOverrideURL"] = i.backdropOverrideURL; r["logoOverrideURL"] = i.logoOverrideURL
             r["preferredFileID"] = i.preferredFileID?.uuidString
+            r["author"] = i.author; r["narrator"] = i.narrator; r["seriesName"] = i.seriesName; r["seriesIndex"] = i.seriesIndex
             r["confidence"] = i.confidenceRaw; r["addedAt"] = i.addedAt; r["hidden"] = i.hidden ? 1 : 0
             r["seasonNumber"] = i.seasonNumber; r["episodeNumber"] = i.episodeNumber; r["airDate"] = i.airDate
             r["showKey"] = i.show?.itemKey ?? i.showKeyHint; r["seasonCount"] = i.seasonCount
@@ -821,6 +822,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             if let cp = r["collectionPosterPath"] as? String { i.collectionPosterPath = cp }
             i.posterOverrideURL = r["posterOverrideURL"] as? String; i.backdropOverrideURL = r["backdropOverrideURL"] as? String; i.logoOverrideURL = r["logoOverrideURL"] as? String
             i.preferredFileID = (r["preferredFileID"] as? String).flatMap(UUID.init)
+            if let a = r["author"] as? String { i.author = a; i.tagsRead = true }
+            if let n = r["narrator"] as? String { i.narrator = n }
+            i.seriesName = r["seriesName"] as? String; i.seriesIndex = r["seriesIndex"] as? Int
             i.confidenceRaw = (r["confidence"] as? String) ?? i.confidenceRaw
             i.addedAt = (r["addedAt"] as? Date) ?? i.addedAt; i.hidden = ((r["hidden"] as? Int) ?? 0) == 1
             i.seasonNumber = r["seasonNumber"] as? Int; i.episodeNumber = r["episodeNumber"] as? Int; i.airDate = r["airDate"] as? Date

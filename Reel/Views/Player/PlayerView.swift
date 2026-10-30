@@ -59,8 +59,16 @@ struct PlayerContentView: View {
                 } else if engine.isAudioOnly {
                     // An audiobook or a song: nothing to paint, so the title stands in for the picture.
                     VStack(spacing: 14) {
-                        Image(systemName: "waveform").font(.system(size: 56)).foregroundStyle(.white.opacity(0.8)).symbolEffect(.variableColor.iterative, isActive: engine.status == .playing)
-                        Text(player.current?.title ?? "").font(.title3.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(3)
+                        if let book = player.current?.show, book.kind == .audiobook, let cover = LibraryStore.coverURL(book) {
+                            AsyncImage(url: cover) { $0.resizable().scaledToFit() } placeholder: { Image(systemName: "headphones").font(.system(size: 56)).foregroundStyle(.white.opacity(0.8)) }
+                                .frame(maxWidth: min(geo.size.width, geo.size.height) * 0.45).clipShape(RoundedRectangle(cornerRadius: 12)).shadow(radius: 12)
+                        } else {
+                            Image(systemName: "waveform").font(.system(size: 56)).foregroundStyle(.white.opacity(0.8)).symbolEffect(.variableColor.iterative, isActive: engine.status == .playing)
+                        }
+                        let book = player.current?.show.flatMap { $0.kind == .audiobook ? $0 : nil }
+                        Text(book?.title ?? player.current?.title ?? "").font(.title3.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(3)
+                        if let a = book?.author { Text(a).font(.subheadline).foregroundStyle(.white.opacity(0.8)) }
+                        if let book, book.episodes.filter({ !$0.files.isEmpty }).count > 1, let n = player.current?.episodeNumber { Text("Part \(n) of \(book.episodes.filter { !$0.files.isEmpty }.count)").font(.footnote).foregroundStyle(.white.opacity(0.7)) }
                         if let c = engine.chapters.first(where: { $0.start <= engine.clock.time && engine.clock.time < $0.start + $0.duration }) {
                             Text(c.title).font(.footnote).foregroundStyle(.white.opacity(0.7))
                         }
@@ -623,7 +631,7 @@ struct TrackSheet: View {
                     Picker(selection: Binding(get: { player.sleepTimer }, set: { player.setSleepTimer($0) })) {
                         Text("Off").tag(PlayerCoordinator.SleepTimer?.none)
                         ForEach([15, 30, 45, 60, 90], id: \.self) { m in Text("\(m) minutes").tag(PlayerCoordinator.SleepTimer?.some(.minutes(m))) }
-                        Text("End of this episode").tag(PlayerCoordinator.SleepTimer?.some(.endOfEpisode))
+                        Text(player.current?.isAudiobookPart == true ? "End of this part" : "End of this episode").tag(PlayerCoordinator.SleepTimer?.some(.endOfEpisode))
                     } label: {
                         VStack(alignment: .leading) {
                             Text("Sleep timer")
@@ -634,7 +642,7 @@ struct TrackSheet: View {
                     Button { engine.startPictureInPicture(); dismiss() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
                         .disabled(!engine.canStartPictureInPicture)
                     Label("With an AirPlay speaker or TV selected before you press Play, MP4/MOV files over HTTP or from Downloads stream natively; MKV and SMB mirror the screen.", systemImage: "airplayvideo").font(.footnote).foregroundStyle(.secondary)
-                    if player.current?.kind == .episode { marksSection }
+                    if player.current?.kind == .episode, player.current?.isAudiobookPart == false { marksSection }
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)

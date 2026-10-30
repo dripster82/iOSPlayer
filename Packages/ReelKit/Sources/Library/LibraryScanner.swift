@@ -65,6 +65,8 @@ public actor LibraryScanner {
         var listed: [String: Set<String>] = [:]
         let existing = Dictionary(record.files.map { ($0.relativePath, $0) }, uniquingKeysWith: { a, _ in a })
         report.phase = .listing
+        /// Audio files found under each audiobooks-tagged folder, grouped into books once the walk is done.
+        var audioByRoot: [String: [String]] = [:]
 
         while !queue.isEmpty {
             try Task.checkCancellation()
@@ -77,6 +79,25 @@ public actor LibraryScanner {
             let videos = entries.filter { !$0.isDirectory && $0.isVideo }
             let subs = entries.filter { !$0.isDirectory && $0.isSubtitle }
             for e in entries where e.isDirectory && !DirectoryEntry.isSystemFolder(e.name) { queue.append(e.relativePath) }
+
+            if let root = record.audiobooksRoot(for: dir) {
+                for a in entries where !a.isDirectory && a.isAudio {
+                    seenPaths.insert(a.relativePath)
+                    report.filesSeen += 1
+                    audioByRoot[root, default: []].append(a.relativePath)
+                    if let file = existing[a.relativePath] {
+                        file.lastSeenAt = Date()
+                        if file.size != (a.size ?? file.size) || file.modified != a.modified { file.size = a.size ?? file.size; file.modified = a.modified; file.pendingSync = true; file.updatedAt = Date() }
+                        if file.classificationRaw != "audio" { file.classificationRaw = "audio"; file.pendingSync = true; file.updatedAt = Date() }
+                    } else {
+                        let file = MediaFile(relativePath: a.relativePath, size: a.size ?? 0, modified: a.modified, source: record)
+                        file.classificationRaw = "audio"
+                        file.pendingSync = true; file.updatedAt = Date()
+                        modelContext.insert(file)
+                        report.filesNew += 1
+                    }
+                }
+            }
 
             for v in videos {
                 seenPaths.insert(v.relativePath)
@@ -106,6 +127,15 @@ public actor LibraryScanner {
             if report.filesSeen % 50 == 0 { progress?(report) }
             await Task.yield()
         }
+
+        // Books: the audio files under each audiobooks folder, grouped by `AudiobookGrouper`.
+        for (root, paths) in audioByRoot {
+            let books = AudiobookGrouper.books(files: paths, root: root)
+            let made = upsertBooks(books, record: record)
+            report.matched += made
+            Diagnostics.log("scan", "\(record.name): \(books.count) audiobooks under \(root.isEmpty ? "/" : root) (\(paths.count) files, \(made) new)")
+        }
+        try modelContext.save()
 
         // Files outside every included root (rules changed, or a merged source record briefly had none)
         // leave the library; the next device learns through the sync deletions.
@@ -143,7 +173,7 @@ public actor LibraryScanner {
             try modelContext.save()
             var retired = 0
             for id in touched {
-                guard let item = modelContext.model(for: id) as? MediaItem, !item.isDeleted, item.files.isEmpty, item.kind != .show else { continue }
+                guard let item = modelContext.model(for: id) as? MediaItem, !item.isDeleted, item.files.isEmpty, item.kind != .show, item.kind != .audiobook else { continue }
                 item.pendingDeletion = true; item.hidden = true
                 droppedKeys.append(SyncKeys.item(item.itemKey))
                 retired += 1
@@ -177,7 +207,7 @@ public actor LibraryScanner {
             // Reviewed files without an item are tried again too: the viewer has said what they are.
             // A placeholder does not count as matched: TMDb is asked again each scan (answers are cached),
             // so a title it learns later, or a search that has since got more forgiving, takes over.
-            let toMatch = record.files.filter { file in inScope(file.relativePath) && !file.ignored
+            let toMatch = record.files.filter { file in inScope(file.relativePath) && !file.ignored && file.classificationRaw != "audio"
                 && (file.item == nil || file.item?.itemKey.hasPrefix("local-") == true)
                 && (file.reviewed || file.classificationRaw != "review" || file.guessKindRaw != nil) }
             report.matchTotal = toMatch.count
@@ -233,6 +263,47 @@ public actor LibraryScanner {
         report.phase = .done
         progress?(report)
         return droppedKeys
+    }
+
+    /// Book items and their parts for the grouped audio files. Keys come from the source and the
+    /// book's path, so a rescan finds the same items; a book whose title or author the tags have
+    /// already given keeps them, the names only fill what is still empty. Returns how many books are new.
+    private func upsertBooks(_ books: [AudiobookGrouper.Book], record: SourceRecord) -> Int {
+        let filesByPath = Dictionary(record.files.map { ($0.relativePath, $0) }, uniquingKeysWith: { a, _ in a })
+        var new = 0
+        for b in books {
+            let key = ItemKey.book(sourceID: record.id, path: b.path)
+            let book: MediaItem
+            if let found = try? modelContext.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key })).first {
+                book = found
+                if !book.tagsRead { book.title = b.title; book.sortTitle = MediaItem.makeSortTitle(b.title); book.author = b.author ?? book.author }
+                if book.pendingDeletion || book.hidden { book.pendingDeletion = false; book.hidden = false }
+            } else {
+                book = MediaItem(itemKey: key, kind: .audiobook, title: b.title, year: b.year, confidence: .manual)
+                book.author = b.author
+                modelContext.insert(book)
+                new += 1
+            }
+            book.seriesName = b.series; book.seriesIndex = b.seriesIndex
+            if book.year == nil { book.year = b.year }
+            book.pendingSync = true; book.updatedAt = Date()
+            for (i, part) in b.parts.enumerated() {
+                let partKey = ItemKey.bookPart(bookKey: key, index: i + 1)
+                let item: MediaItem
+                if let found = try? modelContext.fetch(FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == partKey })).first { item = found }
+                else { item = MediaItem(itemKey: partKey, kind: .episode, title: part.title, confidence: .manual); modelContext.insert(item) }
+                item.title = part.title; item.sortTitle = MediaItem.makeSortTitle(part.title)
+                item.seasonNumber = 1; item.episodeNumber = i + 1
+                item.show = book
+                if item.pendingDeletion || item.hidden { item.pendingDeletion = false; item.hidden = false }
+                item.pendingSync = true; item.updatedAt = Date()
+                if let file = filesByPath[part.relativePath], file.item !== item { file.item = item; file.pendingSync = true; file.updatedAt = Date() }
+            }
+            // Parts the book no longer has (files renamed, halves merged differently) go quietly.
+            let keep = Set(b.parts.indices.map { ItemKey.bookPart(bookKey: key, index: $0 + 1) })
+            for stale in book.episodes where !keep.contains(stale.itemKey) && stale.files.isEmpty { stale.pendingDeletion = true; stale.hidden = true }
+        }
+        return new
     }
 
     private func apply(_ c: Classification, to file: MediaFile) {

@@ -123,7 +123,10 @@ struct ItemDestination: View {
             switch item.kind {
             case .show: ShowDetailView(show: item)
             case .film: FilmDetailView(film: item)
-            case .episode: if let show = item.show { ShowDetailView(show: show, initialSeason: item.seasonNumber) } else { Text(item.title) }
+            case .audiobook: AudiobookDetailView(book: item)
+            case .episode:
+                if let show = item.show { if show.kind == .audiobook { AudiobookDetailView(book: show) } else { ShowDetailView(show: show, initialSeason: item.seasonNumber) } }
+                else { Text(item.title) }
             }
         } else {
             ContentUnavailableView("Not in library", systemImage: "questionmark.folder")

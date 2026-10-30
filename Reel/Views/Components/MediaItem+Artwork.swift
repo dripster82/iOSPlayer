@@ -5,8 +5,8 @@ import Metadata
 /// Where each piece of an item's artwork comes from: the user's pick in Edit artwork first, else the
 /// automatic choice (TMDb, or fanart.tv for logos and backdrops when TMDb has none).
 extension MediaItem {
-    var posterURL: URL? { posterOverrideURL.flatMap(Self.artworkURL) ?? ArtworkURL.poster(posterPath) }
-    func posterURL(size: ArtworkURL.PosterSize) -> URL? { posterOverrideURL.flatMap(Self.artworkURL) ?? ArtworkURL.poster(posterPath, size: size) }
+    var posterURL: URL? { posterOverrideURL.flatMap(Self.artworkURL) ?? LibraryStore.coverURL(self) ?? ArtworkURL.poster(posterPath) }
+    func posterURL(size: ArtworkURL.PosterSize) -> URL? { posterOverrideURL.flatMap(Self.artworkURL) ?? LibraryStore.coverURL(self) ?? ArtworkURL.poster(posterPath, size: size) }
     var backdropURL: URL? { backdropOverrideURL.flatMap(Self.artworkURL) ?? ArtworkURL.backdrop(backdropPath) ?? extraBackdropURL.flatMap(URL.init) }
     func backdropURL(size: ArtworkURL.BackdropSize) -> URL? { backdropOverrideURL.flatMap(Self.artworkURL) ?? ArtworkURL.backdrop(backdropPath, size: size) ?? extraBackdropURL.flatMap(URL.init) }
     var stillURL: URL? { stillPath.flatMap { $0.hasPrefix("demo://") ? Self.artworkURL($0) : nil } ?? ArtworkURL.still(stillPath) }

@@ -44,7 +44,8 @@ struct PosterCard: View {
         switch item.kind {
         case .show: item.seasonsLabel
         case .film: [item.year.map(String.init), library.preferredFile(item)?.resolution].compactMap { $0 }.joined(separator: " · ")
-        case .episode: item.episodeCode ?? ""
+        case .episode: item.show?.kind == .audiobook ? "Part \(item.episodeNumber ?? 0)" : (item.episodeCode ?? "")
+        case .audiobook: item.author ?? ""
         }
     }
 

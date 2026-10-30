@@ -55,6 +55,10 @@ final class PlayerCoordinator: ObservableObject {
     func previewURL(_ url: URL?) -> URL? { Self.needsSoftwareDecoding(currentVideoCodec) ? nil : url }
 
     private static func titles(for item: MediaItem) -> (String, String) {
+        if item.isAudiobookPart, let book = item.show {
+            let parts = book.episodes.filter { !$0.files.isEmpty }.count
+            return (book.title, [parts > 1 ? "Part \(item.episodeNumber ?? 0) of \(parts)" : nil, book.author].compactMap { $0 }.joined(separator: " · "))
+        }
         if item.kind == .episode { return (item.show?.title ?? item.title, [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ")) }
         return (item.title, item.year.map(String.init) ?? "")
     }
@@ -438,17 +442,18 @@ final class PlayerCoordinator: ObservableObject {
                     show(notice: "AirPlay is carrying the sound only. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
                 }
                 let opts = playbackOptions(for: item, settings: settings)
-                let subtitle = item.kind == .episode ? [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ") : item.year.map(String.init)
-                let playbackItem = PlaybackItem(url: url, title: item.kind == .episode ? (item.show?.title ?? item.title) : item.title, subtitle: subtitle, startAt: resume,
+                let (playTitle, playSubtitle) = Self.titles(for: item)
+                let subtitle: String? = playSubtitle.isEmpty ? nil : playSubtitle
+                let playbackItem = PlaybackItem(url: url, title: playTitle, subtitle: subtitle, startAt: resume,
                                                 externalSubtitles: subs + SubtitleStore.subtitles(for: item.itemKey), itemKey: item.itemKey)
                 let memory = TrackMemory.choice(for: Self.memoryKey(item))
                 preferredFill = memory?.fill
                 pendingRate = memory?.rate.flatMap { $0 == 1 ? nil : $0 }
-                learnedIntro = item.kind == .episode ? item.show.flatMap { ShowMarkers.introWindow(showKey: $0.itemKey, itemKey: item.itemKey) ?? IntroMemory.window(showKey: $0.itemKey) } : nil
+                learnedIntro = item.kind == .episode && !item.isAudiobookPart ? item.show.flatMap { ShowMarkers.introWindow(showKey: $0.itemKey, itemKey: item.itemKey) ?? IntroMemory.window(showKey: $0.itemKey) } : nil
                 creditsStart = nil; creditsGrace = 0
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
-                if let show = item.show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }
+                if let show = item.show, show.kind == .show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }
                 nowPlaying.attach(engine, title: playbackItem.title, subtitle: subtitle, artwork: nil)
                 startSaveTimer()
                 isLoading = false
@@ -551,7 +556,7 @@ final class PlayerCoordinator: ObservableObject {
     /// and its length makes the scan dear.
     private func resolveCredits(key: String, url: URL, duration: TimeInterval? = nil, chapters: [Chapter]? = nil) {
         let duration = duration ?? engine.duration, chapters = chapters ?? engine.chapters
-        guard let current, current.kind == .episode, duration > 0, creditsStart == nil else { return }
+        guard let current, current.kind == .episode, !current.isAudiobookPart, duration > 0, creditsStart == nil else { return }
         if let byChapter = chapters.creditsStart(fileDuration: duration) {
             creditsStart = byChapter; creditsGrace = 0
             Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
