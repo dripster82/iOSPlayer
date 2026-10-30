@@ -198,7 +198,14 @@ struct HistoryView: View {
                 if let item = library.item(ws.itemKey) {
                     NavigationLink(value: item.itemKey) {
                         HStack(spacing: 12) {
-                            ArtworkImage(url: (item.kind == .episode ? item.show : item)?.posterURL ?? item.posterURL, title: item.title, aspect: item.isAudiobookPart || item.kind == .audiobook ? 1 : 2 / 3, cornerRadius: 6).frame(width: 44, height: item.isAudiobookPart || item.kind == .audiobook ? 44 : 66)
+                            let isBook = item.isAudiobookPart || item.kind == .audiobook
+                            ArtworkImage(url: (item.kind == .episode ? item.show : item)?.posterURL ?? item.posterURL, title: item.title, aspect: isBook ? 1 : 2 / 3, cornerRadius: 6).frame(width: 44, height: isBook ? 44 : 66)
+                                // What kind of thing it was: a show, a film or a book.
+                                .overlay(alignment: .bottomTrailing) {
+                                    Image(systemName: isBook ? "headphones" : item.kind == .episode ? "tv" : "film")
+                                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.white).padding(3)
+                                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4)).padding(2)
+                                }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.kind == .episode ? (item.show?.title ?? item.title) : item.title).font(.subheadline.weight(.semibold))
                                 if item.kind == .episode, !item.isAudiobookPart { Text(item.title).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
