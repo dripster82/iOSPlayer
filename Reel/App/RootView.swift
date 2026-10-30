@@ -65,10 +65,12 @@ struct RootView: View {
                     NavigationStack(path: nav.binding(for: nav.section ?? .home)) { (nav.section ?? .home).view }
                 }
             } else {
-                // Five tabs fit the phone's bar without a "More" tab. Files holds the plain view of
-                // every source and, as its first row, Downloads; Sources sits in Settings → Libraries.
+                // Five tabs fit the phone's bar without a "More" tab: Home, TV, Films, Audiobooks once
+                // a book exists, and Files (Downloads is its first row). Search is the magnifier in
+                // every tab's top bar; Sources sits in Settings → Libraries.
+                let hasBooks = !library.audiobooks().isEmpty
                 TabView(selection: Binding(get: { nav.section ?? .home }, set: { nav.section = $0 })) {
-                    ForEach([AppSection.home, .tv, .films, .files, .search]) { s in
+                    ForEach([AppSection.home, .tv, .films] + (hasBooks ? [.audiobooks] : []) + [.files]) { s in
                         NavigationStack(path: nav.binding(for: s)) { s.view }
                             .tabItem { Label(s.title, systemImage: s.icon) }
                             .tag(s)
@@ -76,6 +78,8 @@ struct RootView: View {
                 }
             }
         }
+        .onAppear { nav.searchIsAPage = sizeClass == .compact }
+        .onChange(of: sizeClass) { _, c in nav.searchIsAPage = c == .compact }
         .fullScreenCover(isPresented: $player.isPresented) {
             PlayerView()
         }

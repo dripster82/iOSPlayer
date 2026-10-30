@@ -12,16 +12,10 @@ struct FilesView: View {
 
     var body: some View {
         let sources = library.sources()
-        let books = library.audiobooks()
         List {
             Section {
                 NavigationLink { DownloadsView() } label: {
                     row("Downloads", systemImage: "arrow.down.circle", detail: downloadsDetail)
-                }
-                if !books.isEmpty {
-                    NavigationLink { AudiobooksView() } label: {
-                        row("Audiobooks", systemImage: "headphones", detail: "\(books.count) \(books.count == 1 ? "book" : "books")")
-                    }
                 }
             } header: { Text("On this device") }
             Section {
@@ -40,6 +34,7 @@ struct FilesView: View {
             }
         }
         .navigationTitle("Files")
+        .searchButton()
         .itemNavigation()
         .onReceive(library.objectWillChange) { _ in refresh += 1 }
     }

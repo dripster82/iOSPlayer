@@ -25,6 +25,7 @@ struct TVView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("TV Shows")
+        .searchButton()
         .refreshFromLibrary { all = library.items(kind: .show); genres = library.allGenres(kind: .show) }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
@@ -80,6 +81,7 @@ struct FilmsView: View {
             }.padding(.vertical, 8)
         }
         .navigationTitle("Films")
+        .searchButton()
         .refreshFromLibrary { all = library.items(kind: .film); genres = library.allGenres(kind: .film) }
         .toolbar {
             NavigationLink(value: LibraryRoute.collections) { Image(systemName: "rectangle.stack") }

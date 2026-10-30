@@ -75,6 +75,8 @@ enum LibraryRoute: Hashable {
     case universe(String)
     case filmCollection(Int)
     case smart(UUID)
+    /// Search as a page: on the phone it is a button in every tab's top bar, not a tab of its own.
+    case search
 }
 
 /// Who was tapped in a cast row. The TMDb id is 0 for cast recorded before ids were kept; the
@@ -100,6 +102,7 @@ struct LibraryRouteDestination: View {
         case .universe(let name): UniverseView(name: name)
         case .filmCollection(let id): FilmCollectionView(id: id)
         case .smart(let id): SmartCollectionView(id: id)
+        case .search: SearchView()
         case .collection(let id):
             if let c = library.collections().first(where: { $0.id == id }) {
                 ScrollView { ItemGrid(items: library.visible(c.itemKeys.compactMap { library.item($0) }, hideWatched: hideWatched), fixMatchTarget: $fixMatchTarget).padding(.vertical) }
@@ -134,7 +137,21 @@ struct ItemDestination: View {
     }
 }
 
+/// The magnifier in a tab's top bar on the phone, where Search has no tab. The iPad has it in the sidebar.
+struct SearchButton: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if sizeClass == .compact {
+                ToolbarItem(placement: .topBarLeading) { NavigationLink(value: LibraryRoute.search) { Image(systemName: "magnifyingglass") } }
+            }
+        }
+    }
+}
+
 extension View {
+    func searchButton() -> some View { modifier(SearchButton()) }
+
     /// Attach once per NavigationStack so `NavigationLink(value: itemKey)` works everywhere beneath.
     func itemNavigation() -> some View {
         navigationDestination(for: String.self) { ItemDestination(key: $0) }

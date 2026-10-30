@@ -68,6 +68,7 @@ struct HomeView: View {
             refreshRows()
         }
         .navigationTitle("Home")
+        .searchButton()
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 let n = rows.reviewCount

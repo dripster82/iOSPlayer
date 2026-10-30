@@ -15,7 +15,17 @@ final class AppNavigation: ObservableObject {
         Binding(get: { self.paths[s] ?? NavigationPath() }, set: { self.paths[s] = $0 })
     }
 
+    /// True on the phone, where Search is a page pushed in the current tab rather than a tab.
+    var searchIsAPage = false
+
     func show(_ s: AppSection) {
+        if s == .search, searchIsAPage {
+            let home = AppSection.home
+            section = home
+            var p = NavigationPath(); p.append(LibraryRoute.search)
+            paths[home] = p
+            return
+        }
         section = s
         paths[s] = NavigationPath()
     }
