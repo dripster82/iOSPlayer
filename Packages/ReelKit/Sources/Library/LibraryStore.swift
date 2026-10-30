@@ -297,8 +297,10 @@ public final class LibraryStore: ObservableObject {
         scanProgress.values.first { $0.phase == .done && $0.skipped > 0 && $0.lastError != nil }?.lastError
     }
 
+    /// Reviewed files whose decision left them unmatched (a placeholder, or nothing) come back to
+    /// the list: see `MediaFile.needsReview`.
     public func filesNeedingReview() -> [MediaFile] {
-        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.reviewed && !$0.ignored }, sortBy: [SortDescriptor(\.relativePath)])
+        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.ignored && (!$0.reviewed || $0.item == nil || $0.item?.confidenceRaw == "unmatched") }, sortBy: [SortDescriptor(\.relativePath)])
         return (try? context.fetch(d)) ?? []
     }
 
@@ -923,7 +925,7 @@ public final class LibraryStore: ObservableObject {
 
     /// Files with no match plus titles matched on a weak signal: both wait in Needs Review.
     public func reviewCount() -> Int {
-        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.reviewed && !$0.ignored })
+        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.ignored && (!$0.reviewed || $0.item == nil || $0.item?.confidenceRaw == "unmatched") })
         return ((try? context.fetchCount(d)) ?? 0) + lowConfidenceItems().count
     }
 

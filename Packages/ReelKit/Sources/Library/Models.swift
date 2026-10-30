@@ -139,7 +139,10 @@ public final class MediaFile {
     }
 
     public var fileName: String { (relativePath as NSString).lastPathComponent }
-    public var needsReview: Bool { classificationRaw == "review" && !reviewed && !ignored }
+    /// Waiting in Needs Review: the matcher could not place it and the viewer has not decided, or
+    /// decided and the decision still left it with no real match (the file keeps `reviewed` from
+    /// that decision, and from the other device by sync, but a placeholder is not an answer).
+    public var needsReview: Bool { classificationRaw == "review" && !ignored && (!reviewed || item == nil || item?.confidence == .unmatched) }
 }
 
 @Model

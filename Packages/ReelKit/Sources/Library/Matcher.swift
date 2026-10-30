@@ -355,6 +355,9 @@ struct Matcher {
     /// library shows everything it has even before the viewer has settled what it is.
     private func markReview(_ file: MediaFile) -> Outcome {
         file.classificationRaw = "review"
+        // A decision that ends here did not resolve the file (the chosen title had no such episode,
+        // the strict search drew a blank): it is back in the list, not quietly hidden as "reviewed".
+        file.reviewed = false
         file.pendingSync = true; file.updatedAt = Date()
         if file.item == nil || file.item?.itemKey.hasPrefix("local-") == true {
             let parsed = ParsedName(title: file.guessTitle ?? "", year: file.guessYear, season: file.guessSeason, episode: file.guessEpisode)
