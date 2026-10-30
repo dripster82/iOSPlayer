@@ -256,6 +256,7 @@ struct FileBrowserView: View {
     @State private var entries: [DirectoryEntry] = []
     @State private var loading = true
     @State private var error: String?
+    @State private var adding = false
 
     var body: some View {
         List {
@@ -265,22 +266,29 @@ struct FileBrowserView: View {
                         Label(e.name, systemImage: "folder").foregroundStyle(.primary)
                     }
                 } else {
+                    let inLibrary = isInLibrary(e)
                     Button { play(e) } label: {
                         HStack {
                             Image(systemName: e.isVideo ? "film" : e.isAudio ? "waveform" : e.isSubtitle ? "captions.bubble" : "doc").foregroundStyle(.secondary)
                             VStack(alignment: .leading) {
                                 Text(e.name).foregroundStyle(.primary).lineLimit(2)
-                                Text([e.size.map(MediaFormat.bytes), e.isSubtitle ? "Subtitle sidecar" : e.isAudio ? "Audio" : nil].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                Text([e.size.map(MediaFormat.bytes), e.isSubtitle ? "Subtitle sidecar" : e.isAudio ? "Audio" : nil, inLibrary ? "In library" : nil].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             if e.isPlayable { Image(systemName: "play.fill").foregroundStyle(.secondary) }
                         }
                     }.disabled(!e.isPlayable)
+                    .contextMenu {
+                        if e.isPlayable && !inLibrary {
+                            Button { add(e) } label: { Label(e.isAudio ? "Add to Library as Audiobook" : "Add to Library", systemImage: "plus.rectangle.on.folder") }
+                        }
+                    }
                 }
             }
         }
         .overlay {
             if loading { ProgressView() }
+            else if adding { ProgressView("Adding to the library…").padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)) }
             else if let error { ContentUnavailableView("Can't list folder", systemImage: "wifi.exclamationmark", description: Text(error)) }
             else if entries.isEmpty { ContentUnavailableView("Empty folder", systemImage: "folder") }
         }
@@ -302,12 +310,31 @@ struct FileBrowserView: View {
         loading = false
     }
 
+    /// Already a library title (not just a record left by playing it from here).
+    private func isInLibrary(_ e: DirectoryEntry) -> Bool {
+        source.files.contains { $0.relativePath == e.relativePath && $0.item != nil && $0.item?.hidden == false }
+    }
+
+    /// The file's folder joins the library: as a book (its audio files grouped) or scanned for
+    /// titles like any folder of the source.
+    private func add(_ e: DirectoryEntry) {
+        adding = true
+        Task {
+            defer { adding = false }
+            do { try await library.addToLibrary(path: e.relativePath, isAudio: e.isAudio, on: source, providers: settings.providers) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+
     private func play(_ e: DirectoryEntry) {
         // Prefer the library's record so progress is saved against the right item.
         if let f = source.files.first(where: { $0.relativePath == e.relativePath }) {
             if let item = f.item { player.play(item, file: f, settings: settings) } else { player.playFile(f, settings: settings) }
         } else {
+            // Browsing is not adding: the record exists so the player can open it and keep its place,
+            // but "browsed" keeps it out of the matcher and the library until Add to Library says so.
             let f = MediaFile(relativePath: e.relativePath, size: e.size ?? 0, modified: e.modified, source: source)
+            f.classificationRaw = "browsed"
             library.context.insert(f)
             player.playFile(f, settings: settings)
         }

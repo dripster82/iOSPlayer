@@ -441,3 +441,10 @@ credits and marks off them. After a scan `AudiobookTags.readPending` parses the 
 narrator, year and cover (or a picture beside the parts), writing them through `LibraryStore.applyBookTags`; covers live
 in Application Support/Covers, per device. The Audiobooks section (sidebar, Files tab row) appears only when a book exists.
 Debug: `reel://debug-list?path=<folder>&depth=N` logs a source folder's tree.
+
+### Browsing is not adding (30 Oct 2026)
+Playing a file from Files or a source's browser leaves a `MediaFile` with classification `browsed`: the
+player needs the record, but the matcher and the library ignore it. Long-press a file → **Add to
+Library** (a video: its folder is rescanned; audio: **Add to Library as Audiobook** tags the folder
+Books via `LibraryStore.adoptAsAudiobooks`). Fix Match has an **Audiobook** segment that does the
+same for a title that was read as a film or show; the placeholder title is retired.

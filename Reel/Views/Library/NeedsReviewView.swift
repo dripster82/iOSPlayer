@@ -289,6 +289,8 @@ struct FixMatchView: View {
     struct AnimeHit: Identifiable { var id: Int; var title: String; var target: String?; var tmdbShow: Int?; var tmdbMovie: Int? }
     @State private var anime: [AnimeHit] = []
     @State private var animeMode = false
+    /// Audiobook mode: no search; the file's folder is tagged Books and scanned again.
+    @State private var bookMode = false
     @State private var searching = false
     @State private var error: String?
     /// For a show or an episode: every file of the series, ticked ones take the new match. From an
@@ -339,21 +341,29 @@ struct FixMatchView: View {
                     }
                 }
                 Section {
-                    HStack {
-                        TextField("Title", text: $query).textInputAutocapitalization(.words).onSubmit(search)
-                        TextField("Year", text: $year).keyboardType(.numberPad).frame(width: 64)
+                    if !bookMode {
+                        HStack {
+                            TextField("Title", text: $query).textInputAutocapitalization(.words).onSubmit(search)
+                            TextField("Year", text: $year).keyboardType(.numberPad).frame(width: 64)
+                        }
                     }
-                    Picker("Type", selection: Binding(get: { animeMode ? 2 : (kind == .film ? 0 : 1) }, set: { v in animeMode = v == 2; if v == 0 { kind = .film } else if v == 1 { kind = .show } })) {
-                        Text("Film").tag(0); Text("TV Show").tag(1); Text("Anime").tag(2)
+                    Picker("Type", selection: Binding(get: { bookMode ? 3 : animeMode ? 2 : (kind == .film ? 0 : 1) }, set: { v in bookMode = v == 3; animeMode = v == 2; if v == 0 { kind = .film } else if v == 1 { kind = .show } })) {
+                        Text("Film").tag(0); Text("TV Show").tag(1); Text("Anime").tag(2); Text("Audiobook").tag(3)
                     }.pickerStyle(.segmented)
-                    Button(searching ? "Searching…" : (animeMode ? "Search AniDB" : "Search TMDb"), action: search).disabled(searching || query.isEmpty)
+                    if bookMode {
+                        Button("Mark folder as Audiobooks", action: adoptBook).disabled(applying || bookFolder == nil)
+                        Text(bookFolder.map { "“\($0.isEmpty ? "/" : $0)” is tagged Books and scanned again. Its audio files become a book (one book per file when each is a whole recording), listed under Audiobooks with the cover and author read from the files. This title goes." }
+                             ?? "This title's files are not in a source folder.").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button(searching ? "Searching…" : (animeMode ? "Search AniDB" : "Search TMDb"), action: search).disabled(searching || query.isEmpty)
+                    }
                     if animeMode {
                         Text(settings.animeMatching ? "Anime titles are matched by AniDB's own entries, so a season released under its own name (Alicization – War of Underworld) is found; Anime-Lists then places its episodes on the right TMDb season."
                              : "Turn on Anime matching in Settings → Metadata to search AniDB.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
-                Section {
+                if !bookMode { Section {
                     if animeMode {
                         ForEach(anime) { a in
                             Button { chooseAnime(a) } label: {
@@ -369,12 +379,12 @@ struct FixMatchView: View {
                     } else {
                         ForEach(shows) { s in ResultRow(title: s.name, year: s.year, overview: s.overview, poster: s.posterPath) { choose(s.id) } }
                     }
-                } footer: { Text(animeMode ? "AniDB titles, placed on TMDb by Anime-Lists. Episode numbers in the file names are mapped through that entry, so “- 03” of a later cour lands on the right TMDb episode." : "Results from TMDb. Your choice is saved in the app and synced to your other devices. The file is not renamed.") }
+                } footer: { Text(animeMode ? "AniDB titles, placed on TMDb by Anime-Lists. Episode numbers in the file names are mapped through that entry, so “- 03” of a later cour lands on the right TMDb episode." : "Results from TMDb. Your choice is saved in the app and synced to your other devices. The file is not renamed.") } }
             }
             .navigationTitle("Fix Match")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .overlay { if applying { ZStack { Color.black.opacity(0.2).ignoresSafeArea(); ProgressView("Rematching \(max(1, selected.count)) files…").padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)) } } }
+            .overlay { if applying { ZStack { Color.black.opacity(0.2).ignoresSafeArea(); ProgressView(bookMode ? "Scanning the folder…" : "Rematching \(max(1, selected.count)) files…").padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)) } } }
             .interactiveDismissDisabled(applying)
             .onAppear {
                 // The file's own name seeds the search, not the current match: when the match is
@@ -384,12 +394,36 @@ struct FixMatchView: View {
                 query = seed?.title ?? (item?.kind == .episode ? item?.show?.title : item?.title) ?? ""
                 year = (seed?.year ?? (item?.kind == .episode ? item?.show?.year : item?.year)).map(String.init) ?? ""
                 kind = (item?.kind == .show || item?.kind == .episode || seed?.season != nil) ? .show : .film
+                // An audio file (an m4b played from the file browser, say) is almost always a book.
+                if let sample, AudioFile.audioExtensions.contains((sample.relativePath as NSString).pathExtension.lowercased()) { bookMode = true }
                 if let series {
                     seriesFiles = series.episodes.flatMap(\.files).sorted { ($0.item?.seasonNumber ?? 0, $0.item?.episodeNumber ?? 0, $0.relativePath) < ($1.item?.seasonNumber ?? 0, $1.item?.episodeNumber ?? 0, $1.relativePath) }
                     selected = Set(seriesFiles.map(\.id))
                 }
-                if !query.isEmpty { search() }
+                if !query.isEmpty, !bookMode { search() }
             }
+        }
+    }
+
+    /// Every file this sheet speaks for: the folder (or the folder they share) is the one tagged.
+    private var allFiles: [MediaFile] {
+        if let item { return item.kind == .show ? item.episodes.flatMap(\.files) : item.files }
+        if let file { return [file] }
+        return files
+    }
+    private var bookFolder: String? {
+        let dirs = allFiles.map { ($0.relativePath as NSString).deletingLastPathComponent }
+        guard let first = dirs.first else { return nil }
+        return dirs.dropFirst().reduce(first) { LibraryStore.commonFolder($0, $1) }
+    }
+
+    private func adoptBook() {
+        guard let folder = bookFolder, let record = allFiles.first?.source, !applying else { return }
+        applying = true
+        Task {
+            defer { applying = false }
+            do { try await library.adoptAsAudiobooks(folder: folder, on: record, providers: settings.providers); dismiss() }
+            catch { self.error = error.localizedDescription }
         }
     }
 

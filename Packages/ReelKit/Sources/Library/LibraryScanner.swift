@@ -213,7 +213,7 @@ public actor LibraryScanner {
             // Reviewed files without an item are tried again too: the viewer has said what they are.
             // A placeholder does not count as matched: TMDb is asked again each scan (answers are cached),
             // so a title it learns later, or a search that has since got more forgiving, takes over.
-            let toMatch = record.files.filter { file in inScope(file.relativePath) && !file.ignored && file.classificationRaw != "audio"
+            let toMatch = record.files.filter { file in inScope(file.relativePath) && !file.ignored && file.classificationRaw != "audio" && file.classificationRaw != "browsed"
                 && (file.item == nil || file.item?.itemKey.hasPrefix("local-") == true)
                 && (file.reviewed || file.classificationRaw != "review" || file.guessKindRaw != nil) }
             report.matchTotal = toMatch.count

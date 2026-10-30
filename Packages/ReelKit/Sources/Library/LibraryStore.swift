@@ -225,26 +225,76 @@ public final class LibraryStore: ObservableObject {
             let dir = (f.relativePath as NSString).deletingLastPathComponent
             folders[s.id] = folders[s.id].map { Self.commonFolder($0, dir) } ?? dir
         }
-        for (id, folder) in folders {
-            guard scanTasks[id] == nil else { continue }   // a full scan of that source is already running
-            let scanner = LibraryScanner(modelContainer: container)
-            Diagnostics.log("scan", "rescan folder \(folder.isEmpty ? "/" : folder)")
-            do {
-                let dropped = try await scanner.scan(sourceID: id, credentials: CredentialStore.shared.load(for: id), providers: providers, scope: folder) { p in
-                    Task { @MainActor [weak self] in self?.publishProgress(p) }
-                }
-                if !dropped.isEmpty { syncHooks?.deleted(dropped) }
-            } catch {
-                Diagnostics.log("scan", "rescan of \(folder) failed: \(error.localizedDescription)")
-                lastError = error.localizedDescription
+        for (id, folder) in folders { await rescan(folder: folder, sourceID: id, providers: providers) }
+        objectWillChange.send()
+        notifySync()
+    }
+
+    /// One folder of one source, scanned now; skipped while a full scan of that source runs.
+    public func rescan(folder: String, sourceID id: UUID, providers: MetadataProviders) async {
+        guard scanTasks[id] == nil else { return }
+        let scanner = LibraryScanner(modelContainer: container)
+        Diagnostics.log("scan", "rescan folder \(folder.isEmpty ? "/" : folder)")
+        do {
+            let dropped = try await scanner.scan(sourceID: id, credentials: CredentialStore.shared.load(for: id), providers: providers, scope: folder) { p in
+                Task { @MainActor [weak self] in self?.publishProgress(p) }
+            }
+            if !dropped.isEmpty { syncHooks?.deleted(dropped) }
+        } catch {
+            Diagnostics.log("scan", "rescan of \(folder) failed: \(error.localizedDescription)")
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Add to Library from the file browser: an audio file's folder becomes a book; a video's folder
+    /// is scanned for titles (the records playing left behind as "browsed" join the scan as new).
+    public func addToLibrary(path: String, isAudio: Bool, on record: SourceRecord, providers: MetadataProviders) async throws {
+        let folder = (path as NSString).deletingLastPathComponent
+        if isAudio { try await adoptAsAudiobooks(folder: folder, on: record, providers: providers); return }
+        let lower = folder.lowercased()
+        for f in record.files where f.classificationRaw == "browsed" && (lower.isEmpty || f.relativePath.lowercased().hasPrefix(lower + "/")) {
+            f.classificationRaw = "pending"; f.pendingSync = true; f.updatedAt = Date()
+        }
+        try context.save()
+        Diagnostics.log("library", "add to library: \(folder.isEmpty ? "/" : folder)")
+        await rescan(folder: folder, sourceID: record.id, providers: providers)
+        objectWillChange.send()
+        notifySync()
+    }
+
+    /// The viewer says a folder holds audiobooks. An audio file played from the file browser
+    /// joins the library as a plain file, and the next scan read its name as a film; the folder is
+    /// tagged Books, those placeholder titles are retired, and the folder is scanned again so its
+    /// files come back as a book.
+    public func adoptAsAudiobooks(folder: String, on record: SourceRecord, providers: MetadataProviders) async throws {
+        try setTag(.audiobooks, folder: folder, on: record)
+        let lower = folder.lowercased()
+        var previous: [MediaItem] = []
+        for f in record.files where (lower.isEmpty || f.relativePath.lowercased().hasPrefix(lower + "/")) && AudioFile.audioExtensions.contains((f.relativePath as NSString).pathExtension.lowercased()) {
+            if let p = f.item { if !previous.contains(where: { $0 === p }) { previous.append(p) }; f.item = nil }
+            f.classificationRaw = "audio"; f.reviewed = false
+            f.pendingSync = true; f.updatedAt = Date()
+        }
+        try context.save()
+        var deleted: [String] = []
+        for p in previous where p.files.isEmpty && !p.pendingDeletion {
+            p.pendingDeletion = true; p.hidden = true
+            deleted.append(SyncKeys.item(p.itemKey))
+            if let show = p.show, !show.pendingDeletion, show.episodes.allSatisfy({ $0.files.isEmpty || $0.pendingDeletion }) {
+                show.pendingDeletion = true; show.hidden = true
+                deleted.append(SyncKeys.item(show.itemKey))
             }
         }
+        try context.save()
+        if !deleted.isEmpty { syncHooks?.deleted(deleted) }
+        Diagnostics.log("library", "audiobooks: \(folder.isEmpty ? "/" : folder) tagged Books, \(deleted.count) placeholder titles retired")
+        await rescan(folder: folder, sourceID: record.id, providers: providers)
         objectWillChange.send()
         notifySync()
     }
 
     /// "A/B/Season 1" and "A/B/Season 2" share "A/B".
-    static func commonFolder(_ a: String, _ b: String) -> String {
+    public static func commonFolder(_ a: String, _ b: String) -> String {
         var out: [Substring] = []
         for (x, y) in zip(a.split(separator: "/"), b.split(separator: "/")) {
             if x == y { out.append(x) } else { break }
