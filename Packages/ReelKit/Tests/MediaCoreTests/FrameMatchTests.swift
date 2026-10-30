@@ -17,6 +17,12 @@ final class FrameMatchTests: XCTestCase {
         let a = print(seed: 1)
         XCTAssertEqual(a.distance(to: a), 0)
         XCTAssertGreaterThan(a.distance(to: print(seed: 7)), IntroLocator.threshold)
+        XCTAssertEqual(a.similarity(to: a), 1, accuracy: 0.0001)
+        XCTAssertLessThan(abs(a.similarity(to: print(seed: 7))), 0.3)
+        // The same picture, darker and flatter (another encode's levels), is still the same picture.
+        let dim = FrameFingerprint(luma: a.luma.map { UInt8(Double($0) * 0.6 + 20) })
+        XCTAssertGreaterThan(a.similarity(to: dim), 0.99)
+        XCTAssertNotNil(IntroLocator.matches(dim, in: [print(seed: 2), a]))
     }
 
     func testFlatFramesAreNotFingerprints() {
@@ -52,6 +58,7 @@ final class FrameMatchTests: XCTestCase {
         for i in stride(from: 300, to: 380, by: 3) { b[i] = 200 }
         let pa = FrameFingerprint(luma: a), pb = FrameFingerprint(luma: b)
         XCTAssertLessThan(pa.distance(to: pb), IntroLocator.threshold, "mostly black: a small absolute difference")
+        XCTAssertLessThan(pa.similarity(to: pb), 0.2)
         XCTAssertNil(IntroLocator.matches(pa, in: [pb]), "but not the same card")
         XCTAssertNotNil(IntroLocator.matches(pa, in: [pa]))
     }

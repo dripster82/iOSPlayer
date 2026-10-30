@@ -48,6 +48,22 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
 
     /// Mean grey level: how much picture there is to compare.
     public var brightness: Double { luma.isEmpty ? 0 : Double(luma.reduce(0) { $0 + Int($1) }) / Double(luma.count) }
+
+    /// Normalised correlation, −1…1: 1 is the same picture whatever its overall brightness or
+    /// contrast (two encodes of the same titles differ in levels); unrelated pictures sit near 0,
+    /// and two credits cards with names in different places likewise.
+    public func similarity(to other: FrameFingerprint) -> Double {
+        guard luma.count == other.luma.count, !luma.isEmpty else { return 0 }
+        let n = Double(luma.count)
+        let ma = brightness, mb = other.brightness
+        var cov = 0.0, va = 0.0, vb = 0.0
+        for i in 0..<luma.count {
+            let a = Double(luma[i]) - ma, b = Double(other.luma[i]) - mb
+            cov += a * b; va += a * a; vb += b * b
+        }
+        guard va > n * 4, vb > n * 4 else { return 0 }   // a flat frame correlates with nothing
+        return cov / (va.squareRoot() * vb.squareRoot())
+    }
 }
 
 /// Finds a marked intro in another episode. The marks give `count` fingerprints `spacing` seconds
@@ -82,30 +98,34 @@ public enum IntroLocator {
 
     public struct Sample: Sendable { public var time: TimeInterval; public var print: FrameFingerprint; public init(time: TimeInterval, print: FrameFingerprint) { self.time = time; self.print = print } }
 
-    /// The fingerprint nearest to `sample`, with its distance.
-    public static func nearest(_ sample: FrameFingerprint, in targets: [FrameFingerprint]) -> (index: Int, distance: Double)? {
+    /// Correlation at or above which two frames are the same picture. Frames an eighth of a second
+    /// apart in the same sequence score 0.9 and up; different pictures score under 0.5.
+    public static let minimumSimilarity: Double = 0.8
+
+    /// The fingerprint most like `sample`, with its correlation.
+    public static func nearest(_ sample: FrameFingerprint, in targets: [FrameFingerprint]) -> (index: Int, similarity: Double)? {
         var best: (Int, Double)?
         for (i, t) in targets.enumerated() where !t.isFlat {
-            let d = sample.distance(to: t)
-            if best == nil || d < best!.1 { best = (i, d) }
+            let s = sample.similarity(to: t)
+            if best == nil || s > best!.1 { best = (i, s) }
         }
         return best
     }
 
     /// Whether `sample` shows the same picture as one of the fingerprints.
-    public static func matches(_ sample: FrameFingerprint, in targets: [FrameFingerprint]) -> (index: Int, distance: Double)? {
-        guard let (i, d) = nearest(sample, in: targets), d < allowance(sample, targets[i]) else { return nil }
-        return (i, d)
+    public static func matches(_ sample: FrameFingerprint, in targets: [FrameFingerprint]) -> (index: Int, similarity: Double)? {
+        guard let (i, s) = nearest(sample, in: targets), s >= minimumSimilarity else { return nil }
+        return (i, s)
     }
 
     /// Where the intro starts, from coarse samples: the sample closest to a fingerprint, when it
     /// is close enough, shifted back by that fingerprint's offset from the start.
     public static func estimateStart(samples: [Sample], targets: [FrameFingerprint], spacing: TimeInterval = spacing) -> TimeInterval? {
-        var best: (time: TimeInterval, distance: Double)?
+        var best: (time: TimeInterval, similarity: Double)?
         for s in samples {
-            guard let (i, d) = matches(s.print, in: targets) else { continue }
+            guard let (i, sim) = matches(s.print, in: targets) else { continue }
             let start = max(0, s.time - TimeInterval(i) * spacing)
-            if best == nil || d < best!.distance { best = (start, d) }
+            if best == nil || sim > best!.similarity { best = (start, sim) }
         }
         return best?.time
     }

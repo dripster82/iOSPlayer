@@ -205,7 +205,7 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v4"
+        let key = "reel.showMarkers.retrySearch.v5"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
@@ -313,15 +313,17 @@ enum ShowMarkers {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
                 if let p = await grab.frame(at: t) {
                     looked += 1
+                    let near = IntroLocator.nearest(p, in: prints)
+                    Diagnostics.log("player", "  \(Int(t))s: nearest print \(near?.index ?? -1) (\(String(format: "%.1f", TimeInterval(near?.index ?? 0) * spacing))s in) at \(String(format: "%.2f", near?.similarity ?? 0)), frame mean \(Int(p.brightness))\(p.isFlat ? " flat" : "")")
                     guard let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) else { continue }
                     // One picture can be a coincidence (a dark frame, a face in close-up); a second,
                     // ten seconds further into the titles, must match its own print too.
                     let checkIndex = min(prints.count - 1, Int(10 / spacing))
                     let checkAt = start + TimeInterval(checkIndex) * spacing
-                    if let q = await grab.frame(at: checkAt), let (i, d) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(3 / spacing) {
+                    if let q = await grab.frame(at: checkAt), let (i, sim) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(3 / spacing) {
                         // Two readings of the start: the second is usually the sharper one.
                         let second = checkAt - TimeInterval(i) * spacing
-                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed at \(Int(checkAt))s (print \(i), difference \(Int(d))); start \(String(format: "%.1f", (start + second) / 2))s")
+                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed at \(Int(checkAt))s (print \(i), similarity \(String(format: "%.2f", sim))); start \(String(format: "%.1f", (start + second) / 2))s")
                         estimate = (start + second) / 2; break
                     }
                     Diagnostics.log("player", "intro candidate at \(Int(start))s not confirmed at \(Int(checkAt))s; looking on")
@@ -341,10 +343,10 @@ enum ShowMarkers {
                 for dt in [-1.0, 0, 1] {
                     let at = max(0, start + dt)
                     guard let p = await grab.frame(at: at) else { continue }
-                    let d = p.distance(to: first)
-                    if best == nil || d < best!.1 { best = (at, d) }
+                    let sim = p.similarity(to: first)
+                    if best == nil || sim > best!.1 { best = (at, sim) }
                 }
-                if let best, best.1 < IntroLocator.allowance(first, first) { start = best.0 }
+                if let best, best.1 >= IntroLocator.minimumSimilarity { start = best.0 }
             }
             await grab.close()
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
