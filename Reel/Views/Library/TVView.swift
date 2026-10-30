@@ -4,7 +4,9 @@ import Library
 import Metadata
 
 struct TVView: View {
+    enum Sort: String, CaseIterable { case title = "Title", year = "Year, newest first", rating = "Rating", episodes = "Most episodes", unwatched = "Most unwatched", added = "Date added" }
     @EnvironmentObject private var library: LibraryStore
+    @AppStorage("tvSort") private var sort: Sort = .title
     @State private var quick: FilterBar.Quick = .all
     @State private var genre: String?
     @State private var decade: String?
@@ -13,7 +15,7 @@ struct TVView: View {
     @State private var genres: [String] = []
 
     var body: some View {
-        let shown = filtered(all)
+        let shown = sorted(filtered(all))
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 FilterBar(quick: $quick, genre: $genre, decade: $decade, genres: genres, decades: decades(all))
@@ -27,8 +29,24 @@ struct TVView: View {
         .navigationTitle("TV Shows")
         .searchButton()
         .refreshFromLibrary { all = library.items(kind: .show); genres = library.allGenres(kind: .show) }
+        .toolbar {
+            Menu {
+                Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+            } label: { Image(systemName: "arrow.up.arrow.down") }
+        }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
+    }
+
+    private func sorted(_ items: [MediaItem]) -> [MediaItem] {
+        switch sort {
+        case .title: items   // the store's order: by sort title
+        case .year: items.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+        case .rating: items.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+        case .episodes: items.sorted { $0.episodes.count > $1.episodes.count }
+        case .unwatched: items.sorted { library.unwatchedCount($0) > library.unwatchedCount($1) }
+        case .added: items.sorted { $0.addedAt > $1.addedAt }
+        }
     }
 
     private func filtered(_ items: [MediaItem]) -> [MediaItem] {
