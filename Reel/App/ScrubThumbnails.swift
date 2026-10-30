@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import MediaCore
 import VLCKit
+import Playback
 
 /// Preview frames for the scrubber: one per 20 s of runtime (at least 9, at most 150), made with
 /// VLC's thumbnailer a minute into a play (so they never compete with the opening buffer) and kept
@@ -117,8 +118,11 @@ final class ScrubThumbnails: ObservableObject {
         memory[key] = out
     }
 
-    /// One frame at `seconds`, through VLCMediaThumbnailer and its delegate.
-    static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool) async -> CGImage? {
+    /// One frame at `seconds`. `precise` decodes up to the frame itself (libvlc's precise seek) for
+    /// the fingerprints, which must line up between episodes; the scrubber's own frames take the
+    /// keyframe before, which VLCMediaThumbnailer hands back faster.
+    static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool, precise: Bool = false) async -> CGImage? {
+        if precise, PreciseThumbnail.isAvailable, let image = await PreciseThumbnail.frame(url: url, at: seconds, softwareDecoding: softwareDecoding) { return image }
         guard let media = VLCMedia(url: url) else { return nil }
         media.addOption(":start-time=\(Int(seconds))")
         media.addOption(":no-audio")

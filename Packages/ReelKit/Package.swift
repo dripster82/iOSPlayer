@@ -46,10 +46,17 @@ let package = Package(
             ]
         ),
 
+        // A C shim over libvlc's precise-seek thumbnailer, which VLCKit's own thumbnailer does not expose.
+        // The libvlc headers ride inside the xcframework; the symbols come from the framework at link time.
+        .target(
+            name: "ReelVLCThumb",
+            cSettings: hasVLCKit ? [.headerSearchPath("../../Vendor/VLCKit.xcframework/ios-arm64/VLCKit.framework/Headers")] : []
+        ),
+
         // VLCKit wrapper exposing an async state stream to SwiftUI.
         .target(
             name: "Playback",
-            dependencies: ["MediaCore", "MediaSources"] + (hasVLCKit ? [.target(name: "VLCKit", condition: .when(platforms: [.iOS]))] : []),
+            dependencies: ["MediaCore", "MediaSources", "ReelVLCThumb"] + (hasVLCKit ? [.target(name: "VLCKit", condition: .when(platforms: [.iOS]))] : []),
             linkerSettings: hasVLCKit ? [
                 // System frameworks and libraries VLCKit depends on (dynamic xcframework, embedded by Xcode).
                 .linkedFramework("AVFoundation", .when(platforms: [.iOS])),
