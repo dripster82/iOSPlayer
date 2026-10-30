@@ -329,7 +329,7 @@ final class PlayerCoordinator: ObservableObject {
     private func noteUserSeek(from: TimeInterval, to: TimeInterval) {
         guard let current, current.kind == .episode, let show = current.show, from < 600, to - from >= 20, to - from <= 240 else { return }
         // A marked intro is the viewer's word; skips do not second-guess it.
-        if ShowMarkers.show(show.itemKey)?.introLength != nil { return }
+        if ShowMarkers.hasIntroPattern(showKey: show.itemKey) { return }
         // Skips the app made for the viewer (the button, a learned window) teach nothing new.
         if let intro = engine.chapters.intro, abs(to - (intro.start + intro.duration)) < 1 { return }
         if let learned = learnedIntro, abs(to - learned.end) < 1 { return }
@@ -492,7 +492,7 @@ final class PlayerCoordinator: ObservableObject {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
-            ShowMarkers.locateIntro(showKey: showKey, itemKey: key, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec)) { [weak self] window in
+            ShowMarkers.locateIntro(showKey: showKey, itemKey: key, season: self.current?.seasonNumber, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec)) { [weak self] window in
                 guard let self, self.current?.itemKey == key, let window else { return }
                 self.learnedIntro = window
             }
@@ -501,9 +501,9 @@ final class PlayerCoordinator: ObservableObject {
 
     // MARK: - Marks
 
-    private var markContext: (showKey: String, itemKey: String, url: URL)? {
+    private var markContext: (showKey: String, itemKey: String, season: Int?, url: URL)? {
         guard let current, current.kind == .episode, let show = current.show, let url = lastPlaybackURL ?? engine.currentURL else { return nil }
-        return (show.itemKey, current.itemKey, url)
+        return (show.itemKey, current.itemKey, current.seasonNumber, url)
     }
     /// The show's marks, for the More sheet.
     var marks: ShowMarkers.Episode? { markContext.flatMap { ShowMarkers.episode(showKey: $0.showKey, itemKey: $0.itemKey) } }
@@ -511,7 +511,7 @@ final class PlayerCoordinator: ObservableObject {
 
     func markIntroStart() {
         guard let c = markContext else { return }
-        ShowMarkers.markIntroStart(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
+        ShowMarkers.markIntroStart(showKey: c.showKey, itemKey: c.itemKey, season: c.season, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
         learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
     }
     func markIntroEnd() {

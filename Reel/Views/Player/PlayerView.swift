@@ -651,11 +651,14 @@ struct TrackSheet: View {
         } header: { Text("Mark this show") } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pause at the spot, then mark it. The intro is the same pictures every week, so once its start and end are marked Reel looks for it in the other episodes, wherever their opening scene puts it. Credits run the same length every week, so one mark places them in every episode. Marks win over what Reel works out on its own; \"Forget\" drops the automatic intro and credits and scans again.")
-                if let show, let l = show.introLength, l >= 10 {
-                    let state = show.introPrints.isEmpty
-                        ? (player.current?.show.map { ShowMarkers.isFingerprinting(showKey: $0.itemKey) } ?? false ? ", fingerprinting…" : ", no frames yet: play the marked episode again")
-                        : ", \(show.introPrints.count) frames to look for"
-                    Text("Intro: \(Int(l)) s long" + state)
+                if let show, !show.patterns.isEmpty {
+                    let taking = player.current?.show.map { ShowMarkers.isFingerprinting(showKey: $0.itemKey) } ?? false
+                    let parts = show.patterns.map { p -> String in
+                        let length = p.length.map { "\(Int($0)) s" } ?? "end not marked"
+                        let state = p.prints.isEmpty ? (taking ? "fingerprinting…" : "no frames yet: play the marked episode again") : "\(p.prints.count) frames"
+                        return "\(p.label): \(length), \(state)"
+                    }
+                    Text((show.patterns.count == 1 ? "Intro pattern " : "Intro patterns, one per title sequence; mark one episode of a season whose titles differ. ") + parts.joined(separator: "; "))
                 }
                 if let show, let l = show.creditsLength { Text("Credits: \(Int(l)) s long") }
             }

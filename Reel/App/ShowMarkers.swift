@@ -16,18 +16,36 @@ enum ShowMarkers {
         var introStart: TimeInterval?
         var introEnd: TimeInterval?
         var creditsStart: TimeInterval?
-        /// Where a scan placed the marked intro in this episode (nil once searched and not found).
+        /// Where a scan placed a marked intro in this episode (nil once searched and not found),
+        /// and which pattern it matched, by the key of the episode that pattern was marked in.
         var locatedIntro: TimeInterval?
+        var locatedPattern: String?
         var introSearched = false
     }
+    /// One title sequence, marked in one episode. Shows change their titles between seasons, so a
+    /// show keeps a pattern per distinct sequence and every episode is searched against all of them.
+    struct IntroPattern: Codable, Equatable {
+        /// The episode it was marked in, and that episode's season when known.
+        var itemKey: String
+        var season: Int?
+        /// The marked start in that episode, and the intro's length once its end is marked too.
+        var start: TimeInterval
+        var length: TimeInterval?
+        /// Taken at the start and every `spacing` seconds after it (0.25 over a whole intro; 2
+        /// while only the start is marked). `version` says how they were taken; older sets are retaken.
+        var prints: [FrameFingerprint] = []
+        var spacing: TimeInterval?
+        var version: Int?
+
+        var isProvisional: Bool { (spacing ?? IntroLocator.provisionalSpacing) != IntroLocator.spacing }
+        /// Prints that can be searched for: a whole intro's worth, taken the current way.
+        var isUsable: Bool { length != nil && !isProvisional && (version ?? 1) >= ShowMarkers.printsVersion && prints.contains { !$0.isFlat } }
+        /// Whether the prints are missing or stale and should be taken again.
+        var needsPrints: Bool { prints.isEmpty || (version ?? 1) < ShowMarkers.printsVersion || (length != nil && isProvisional) }
+        var label: String { season.map { "S\($0)" } ?? "one episode" }
+    }
     struct Show: Codable, Equatable {
-        /// Taken at the marked intro start and every `IntroLocator.spacing` seconds after it.
-        var introPrints: [FrameFingerprint] = []
-        /// Seconds between the prints (1 over a whole marked intro; 2 while only the start is marked).
-        var printSpacing: TimeInterval?
-        /// 2 once the prints come from precise seeks; older sets were keyframes and are retaken.
-        var printsVersion: Int?
-        var introLength: TimeInterval?
+        var patterns: [IntroPattern] = []
         var creditsLength: TimeInterval?
         /// Taken at the marked credits start: a show that opens its credits on the same card every
         /// week lets another episode's credits be placed exactly rather than by length alone.
@@ -35,7 +53,44 @@ enum ShowMarkers {
         var episodes: [String: Episode] = [:]
         var updatedAt = Date.distantPast
         var pendingSync = false
-        var isEmpty: Bool { introPrints.isEmpty && introLength == nil && creditsLength == nil && episodes.values.allSatisfy { $0.introStart == nil && $0.introEnd == nil && $0.creditsStart == nil } }
+        var isEmpty: Bool { patterns.isEmpty && creditsLength == nil && episodes.values.allSatisfy { $0.introStart == nil && $0.introEnd == nil && $0.creditsStart == nil } }
+
+        /// The pattern marked in an episode.
+        func pattern(for itemKey: String) -> IntroPattern? { patterns.first { $0.itemKey == itemKey } }
+        var usablePatterns: [IntroPattern] { patterns.filter(\.isUsable) }
+        /// The patterns in the order worth trying for an episode of `season`: its own season's
+        /// first, then the nearest seasons. Every frame is compared to all of them anyway.
+        func patterns(nearest season: Int?) -> [IntroPattern] {
+            guard let season else { return usablePatterns }
+            return usablePatterns.sorted { abs(($0.season ?? -100) - season) < abs(($1.season ?? -100) - season) }
+        }
+
+        init() {}
+        // Earlier builds kept one set of prints per show; it becomes a pattern of unknown season,
+        // attached to the episode the start was marked in.
+        private enum Keys: String, CodingKey { case patterns, creditsLength, creditsPrints, episodes, updatedAt, pendingSync, introPrints, printSpacing, printsVersion, introLength }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            patterns = try c.decodeIfPresent([IntroPattern].self, forKey: .patterns) ?? []
+            creditsLength = try c.decodeIfPresent(TimeInterval.self, forKey: .creditsLength)
+            creditsPrints = try c.decodeIfPresent([FrameFingerprint].self, forKey: .creditsPrints) ?? []
+            episodes = try c.decodeIfPresent([String: Episode].self, forKey: .episodes) ?? [:]
+            updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
+            pendingSync = try c.decodeIfPresent(Bool.self, forKey: .pendingSync) ?? false
+            if patterns.isEmpty, let marked = episodes.first(where: { $0.value.introStart != nil }), let start = marked.value.introStart {
+                patterns = [IntroPattern(itemKey: marked.key, season: nil, start: start,
+                                         length: try c.decodeIfPresent(TimeInterval.self, forKey: .introLength),
+                                         prints: try c.decodeIfPresent([FrameFingerprint].self, forKey: .introPrints) ?? [],
+                                         spacing: try c.decodeIfPresent(TimeInterval.self, forKey: .printSpacing),
+                                         version: try c.decodeIfPresent(Int.self, forKey: .printsVersion))]
+            }
+        }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: Keys.self)
+            try c.encode(patterns, forKey: .patterns); try c.encodeIfPresent(creditsLength, forKey: .creditsLength)
+            try c.encode(creditsPrints, forKey: .creditsPrints); try c.encode(episodes, forKey: .episodes)
+            try c.encode(updatedAt, forKey: .updatedAt); try c.encode(pendingSync, forKey: .pendingSync)
+        }
     }
 
     private static let key = "reel.showMarkers"
@@ -45,6 +100,8 @@ enum ShowMarkers {
 
     static func show(_ showKey: String) -> Show? { load()[showKey] }
     static func episode(showKey: String, itemKey: String) -> Episode? { load()[showKey]?.episodes[itemKey] }
+    /// Whether the show has a marked intro (with or without its prints yet).
+    static func hasIntroPattern(showKey: String) -> Bool { !(show(showKey)?.patterns.isEmpty ?? true) }
 
     static func update(showKey: String, _ change: (inout Show) -> Void) {
         lock.lock()
@@ -66,20 +123,27 @@ enum ShowMarkers {
     // MARK: Marks
 
     /// The intro starts at `time` in this episode: the time is kept, and fingerprints of the next
-    /// seconds are taken so the intro can be found in other episodes. The frames come from the
-    /// thumbnailer, a few seconds each over a share, so the prints land a little later.
+    /// seconds are taken so the intro can be found in other episodes. The pattern replaces this
+    /// episode's own earlier one, or the one a search matched here (the same titles, so the fresh
+    /// marks stand for it); otherwise it is a new pattern, as a season with different titles needs.
     @MainActor
-    static func markIntroStart(showKey: String, itemKey: String, url: URL, time: TimeInterval, softwareDecoding: Bool) {
-        updateEpisode(showKey: showKey, itemKey: itemKey) { e in
-            e.introStart = time
-            e.locatedIntro = nil; e.introSearched = false
-            if let end = e.introEnd, end <= time { e.introEnd = nil }
-        }
+    static func markIntroStart(showKey: String, itemKey: String, season: Int?, url: URL, time: TimeInterval, softwareDecoding: Bool) {
         update(showKey: showKey) { s in
-            if let end = s.episodes[itemKey]?.introEnd { s.introLength = end - time }
-            s.introPrints = []
+            var e = s.episodes[itemKey] ?? Episode()
+            let replaces = e.locatedPattern
+            e.introStart = time
+            e.locatedIntro = nil; e.locatedPattern = nil; e.introSearched = false
+            if let end = e.introEnd, end <= time { e.introEnd = nil }
+            s.episodes[itemKey] = e
+            let pattern = IntroPattern(itemKey: itemKey, season: season, start: time, length: e.introEnd.map { $0 - time })
+            if let i = s.patterns.firstIndex(where: { $0.itemKey == itemKey }) ?? replaces.flatMap({ r in s.patterns.firstIndex { $0.itemKey == r } }) {
+                s.patterns[i] = pattern
+            } else {
+                s.patterns.append(pattern)
+            }
+            s.patterns.sort { ($0.season ?? 0, $0.itemKey) < ($1.season ?? 0, $1.itemKey) }
         }
-        Diagnostics.log("player", "intro marked at \(Int(time))s for \(showKey.prefix(40))")
+        Diagnostics.log("player", "intro marked at \(Int(time))s for \(showKey.prefix(40)) (\(season.map { "S\($0)" } ?? "season unknown"), \(show(showKey)?.patterns.count ?? 0) patterns)")
         fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: time, softwareDecoding: softwareDecoding)
     }
 
@@ -156,18 +220,17 @@ enum ShowMarkers {
     }
     static let printsVersion = 6   // 6: taken after a 20 s run-up, past the decoder's grey placeholder
 
-    /// The marked episode whose intro still has no prints (the app was put away before they were
-    /// taken), so they can be taken when it next plays.
+    /// The marked start in this episode whose pattern still has no prints (the app was put away
+    /// before they were taken, or they were taken an older way), so they can be taken when it plays.
     static func needsFingerprints(showKey: String, itemKey: String) -> TimeInterval? {
-        guard let s = show(showKey), !fingerprinting.contains(showKey) else { return nil }
-        let provisional = s.introLength != nil && (s.printSpacing ?? IntroLocator.provisionalSpacing) != IntroLocator.spacing
-        guard s.introPrints.isEmpty || (s.printsVersion ?? 1) < Self.printsVersion || provisional else { return nil }
-        return s.episodes[itemKey]?.introStart
+        guard let s = show(showKey), !fingerprinting.contains(showKey), let p = s.pattern(for: itemKey), p.needsPrints else { return nil }
+        return p.start
     }
 
-    /// Takes the fingerprints of the intro from `time`: a frame every two seconds, each an open of
-    /// the file over the share, a couple of minutes in all. A background assertion keeps the app
-    /// running if it is put away meanwhile; the prints are stored only when all are in.
+    /// Takes the fingerprints of this episode's pattern from `time`: four a second over the whole
+    /// intro once its length is known, a frame every two seconds over the first 38 s until then. A
+    /// background assertion keeps the app running if it is put away meanwhile; the prints are
+    /// stored only when all are in.
     @MainActor
     static func fingerprintIntro(showKey: String, itemKey: String, url: URL, time: TimeInterval, softwareDecoding: Bool) {
         guard !fingerprinting.contains(showKey) else { return }
@@ -175,11 +238,10 @@ enum ShowMarkers {
         let began = Date()
         var assertion = UIBackgroundTaskIdentifier.invalid
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro fingerprints") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
-        // The whole intro a second at a time once its length is known; the first 38 s at 2 s until then.
-        let length = show(showKey)?.introLength
+        let length = show(showKey)?.pattern(for: itemKey)?.length
         let spacing = length == nil ? IntroLocator.provisionalSpacing : IntroLocator.spacing
         let count = length.map { min(IntroLocator.maxCount, max(3, Int($0 / spacing) + 1)) } ?? IntroLocator.count
-        Diagnostics.log("player", "fingerprinting the intro of \(itemKey.prefix(40)) from \(Int(time))s: \(count) frames \(Int(spacing))s apart")
+        Diagnostics.log("player", "fingerprinting the intro of \(itemKey.prefix(40)) from \(Int(time))s: \(count) frames \(spacing)s apart")
         Task {
             defer {
                 fingerprinting.remove(showKey)
@@ -190,13 +252,16 @@ enum ShowMarkers {
             await grab.close()
             let usable = prints.filter { !$0.isFlat }.count
             guard prints.count >= count / 2, usable >= 3 else {
-                Diagnostics.log("player", "intro prints for \(showKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
+                Diagnostics.log("player", "intro prints for \(itemKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
                 return
             }
-            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
-            update(showKey: showKey) { $0.introPrints = prints; $0.printSpacing = spacing; $0.printsVersion = Self.printsVersion }
-            // Episodes searched with the old prints are searched again with these.
-            update(showKey: showKey) { s in for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false } }
+            Diagnostics.log("player", "intro prints for \(itemKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
+            update(showKey: showKey) { s in
+                guard let i = s.patterns.firstIndex(where: { $0.itemKey == itemKey }) else { return }
+                s.patterns[i].prints = prints; s.patterns[i].spacing = spacing; s.patterns[i].version = Self.printsVersion
+                // Episodes searched without these prints (or with an older set) are searched again.
+                for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false }
+            }
         }
     }
 
@@ -207,21 +272,22 @@ enum ShowMarkers {
             Diagnostics.log("player", "intro end at \(Int(time))s ignored: the start is at \(Int(start))s")
             return
         }
-        updateEpisode(showKey: showKey, itemKey: itemKey) { e in e.introEnd = time }
         update(showKey: showKey) { s in
-            if let start = s.episodes[itemKey]?.introStart {
-                s.introLength = time - start
-                // The provisional prints (2 s apart, the first 38 s) give way to a frame a second
-                // over the whole intro, taken when the episode next plays or straight away below.
-                if (s.printSpacing ?? IntroLocator.provisionalSpacing) != IntroLocator.spacing { s.introPrints = [] }
+            var e = s.episodes[itemKey] ?? Episode()
+            e.introEnd = time
+            s.episodes[itemKey] = e
+            if let i = s.patterns.firstIndex(where: { $0.itemKey == itemKey }) {
+                s.patterns[i].length = time - s.patterns[i].start
+                // The provisional prints (2 s apart, the first 38 s) give way to four a second over
+                // the whole intro, taken straight away below or when the episode next plays.
+                if s.patterns[i].isProvisional { s.patterns[i].prints = [] }
             }
         }
         Diagnostics.log("player", "intro end marked at \(Int(time))s for \(showKey.prefix(40))")
-        if let start = episode(showKey: showKey, itemKey: itemKey)?.introStart, show(showKey)?.introPrints.isEmpty == true {
-            fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: start, softwareDecoding: softwareDecoding)
+        if let p = show(showKey)?.pattern(for: itemKey), p.prints.isEmpty {
+            fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: p.start, softwareDecoding: softwareDecoding)
         }
     }
-
     @MainActor
     static func markCreditsStart(showKey: String, itemKey: String, url: URL, time: TimeInterval, duration: TimeInterval, softwareDecoding: Bool) {
         updateEpisode(showKey: showKey, itemKey: itemKey) { $0.creditsStart = time }
@@ -250,7 +316,7 @@ enum ShowMarkers {
 
     /// Drops what the app worked out on its own for a show (the located intros), keeping the marks.
     static func forgetLocated(showKey: String) {
-        update(showKey: showKey) { s in for k in s.episodes.keys { s.episodes[k]?.locatedIntro = nil; s.episodes[k]?.introSearched = false } }
+        update(showKey: showKey) { s in for k in s.episodes.keys { s.episodes[k]?.locatedIntro = nil; s.episodes[k]?.locatedPattern = nil; s.episodes[k]?.introSearched = false } }
     }
 
     /// Looks around the estimated credits start (the file's end less the show's credits length) for
@@ -277,13 +343,13 @@ enum ShowMarkers {
 
     // MARK: Answers
 
-    /// The intro window for an episode: its own marks, or the marked intro located in it plus the
-    /// learned length. Nil until a search has placed it.
+    /// The intro window for an episode: its own marks, or the pattern located in it plus that
+    /// pattern's length. Nil until a search has placed it.
     static func introWindow(showKey: String, itemKey: String) -> IntroMemory.Window? {
-        guard let s = show(showKey) else { return nil }
-        let e = s.episodes[itemKey]
-        if let start = e?.introStart, let end = e?.introEnd, end > start { return .init(start: start, end: end) }
-        if let start = e?.locatedIntro ?? e?.introStart, let length = s.introLength, length >= 10 { return .init(start: start, end: start + length) }
+        guard let s = show(showKey), let e = s.episodes[itemKey] else { return nil }
+        if let start = e.introStart, let end = e.introEnd, end > start { return .init(start: start, end: end) }
+        if let start = e.introStart, let length = s.pattern(for: itemKey)?.length, length >= 10 { return .init(start: start, end: start + length) }
+        if let start = e.locatedIntro, let length = (e.locatedPattern.flatMap { s.pattern(for: $0) } ?? s.usablePatterns.first)?.length, length >= 10 { return .init(start: start, end: start + length) }
         return nil
     }
 
@@ -296,10 +362,10 @@ enum ShowMarkers {
         return nil
     }
 
-    /// Whether the marked intro can be looked for in this episode: prints exist and it has not
-    /// been searched (or marked) already.
+    /// Whether a marked intro can be looked for in this episode: some pattern has prints and the
+    /// episode has not been searched (or marked) already.
     static func needsIntroSearch(showKey: String, itemKey: String) -> Bool {
-        guard let s = show(showKey), s.introPrints.contains(where: { !$0.isFlat }), (s.printsVersion ?? 1) >= Self.printsVersion, s.introLength != nil else { return false }
+        guard let s = show(showKey), !s.usablePatterns.isEmpty else { return false }
         let e = s.episodes[itemKey]
         return e?.introStart == nil && !(e?.introSearched ?? false)
     }
@@ -307,34 +373,40 @@ enum ShowMarkers {
     private static var searching: Set<String> = []
     /// What the continuous pass has seen so far: the last three matching frames and the start they imply.
     private final class Found: @unchecked Sendable {
-        var recent: [(TimeInterval, TimeInterval, Double)] = []
+        var recent: [(time: TimeInterval, start: TimeInterval, similarity: Double, pattern: Int, print: Int)] = []
         var start: TimeInterval?
+        var pattern: Int?
         var looked = 0
     }
     /// True while the marked intro is being looked for in this episode; the heavier scans wait.
     static func isSearchingIntro(itemKey: String) -> Bool { searching.contains(itemKey) }
 
-    /// Looks for the marked intro in the opening minutes of an episode: a frame every 8 s from the
-    /// start, each compared to the fingerprints, stopping at the first that matches; then a finer
-    /// look either side of the estimate to settle the start. `found` gets the window on the main actor.
+    /// Looks for the show's intro patterns in the opening minutes of an episode: one continuous
+    /// pass, a frame a second, each compared to every pattern's prints. `found` gets the window on
+    /// the main actor once three frames in a row agree on where one pattern starts.
     @MainActor
-    static func locateIntro(showKey: String, itemKey: String, url: URL, duration: TimeInterval, softwareDecoding: Bool, found: @escaping @MainActor (IntroMemory.Window?) -> Void) {
-        guard needsIntroSearch(showKey: showKey, itemKey: itemKey), !searching.contains(itemKey), let s = show(showKey), let length = s.introLength else { return }
-        let prints = s.introPrints
+    static func locateIntro(showKey: String, itemKey: String, season: Int?, url: URL, duration: TimeInterval, softwareDecoding: Bool, found: @escaping @MainActor (IntroMemory.Window?) -> Void) {
+        guard needsIntroSearch(showKey: showKey, itemKey: itemKey), !searching.contains(itemKey), let s = show(showKey) else { return }
+        let patterns = s.patterns(nearest: season)
+        guard !patterns.isEmpty else { return }
         // Intros start within the first few minutes, after a cold open of any length. The file's
         // duration is often still unknown this early, so it only ever shrinks the window.
         let limit = duration > 0 ? min(600, max(120, duration / 4)) : 600
-        let spacing = s.printSpacing ?? IntroLocator.provisionalSpacing
-        // One continuous pass, a frame a second against the prints: from a little before the nearest
-        // marked start (an episode's cold open is usually about the same length), then from the top.
-        let known = s.episodes.values.compactMap { $0.introStart ?? $0.locatedIntro }.sorted()
-        let nearestKnown = known.min() ?? 0
-        let firstFrom = max(0, nearestKnown - length - 20)
+        // From a little before the nearest known start (an episode's cold open is usually about the
+        // same length, and most alike within a season), then from the top.
+        let sameSeason = patterns.first?.season == season
+        let known = s.episodes.compactMap { k, e -> TimeInterval? in
+            guard let t = e.introStart ?? e.locatedIntro else { return nil }
+            if sameSeason, season != nil, s.pattern(for: k)?.season != season, e.locatedPattern.flatMap({ s.pattern(for: $0)?.season }) != season { return nil }
+            return t
+        }
+        let longest = patterns.compactMap(\.length).max() ?? 60
+        let firstFrom = max(0, (known.min() ?? 0) - longest - 20)
         searching.insert(itemKey)
         let began = Date()
         var assertion = UIBackgroundTaskIdentifier.invalid
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro search") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
-        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): a frame a second from \(Int(firstFrom))s to \(Int(limit))s, then from the top")
+        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): a frame a second from \(Int(firstFrom))s to \(Int(limit))s, then from the top, against \(patterns.count) pattern(s) (\(patterns.map(\.label).joined(separator: ", ")))")
         Task {
             defer {
                 searching.remove(itemKey)
@@ -346,8 +418,9 @@ enum ShowMarkers {
             try? FileManager.default.removeItem(at: dump)
             grab.dumpFolder = dump
             #endif
-            // A start is accepted when three frames in a row agree on it to within 1.5 s: one
-            // matching picture can be a coincidence, three consistent ones are the titles.
+            // A start is accepted when three frames in a row match the same pattern and agree on
+            // its start to within 1.5 s: one matching picture can be a coincidence, three
+            // consistent ones are the titles.
             let seen = Found()
             let stretches: [(TimeInterval, TimeInterval)] = firstFrom > 0 ? [(firstFrom, limit), (0, firstFrom)] : [(0, limit)]
             var looked = 0
@@ -357,14 +430,20 @@ enum ShowMarkers {
                 guard count > 0 else { continue }
                 let got = await grab.scan(from: from, count: count) { time, print in
                     seen.looked += 1
-                    guard let (i, sim) = IntroLocator.matches(print, in: prints) else { seen.recent = []; return false }
-                    let start = time - TimeInterval(i) * spacing
-                    seen.recent.append((time, start, sim))
+                    // The pattern this frame matches best, with the start it implies.
+                    var best: (pattern: Int, start: TimeInterval, similarity: Double, print: Int)?
+                    for (p, pattern) in patterns.enumerated() {
+                        guard let (i, sim) = IntroLocator.matches(print, in: pattern.prints), sim > (best?.similarity ?? 0) else { continue }
+                        best = (p, time - TimeInterval(i) * (pattern.spacing ?? IntroLocator.spacing), sim, i)
+                    }
+                    guard let best else { seen.recent = []; return false }
+                    if seen.recent.last?.pattern != best.pattern { seen.recent = [] }
+                    seen.recent.append((time, best.start, best.similarity, best.pattern, best.print))
                     if seen.recent.count > 3 { seen.recent.removeFirst() }
-                    let starts = seen.recent.map(\.1)
+                    let starts = seen.recent.map(\.start)
                     if starts.count == 3, (starts.max()! - starts.min()!) <= 1.5 {
-                        seen.start = starts.sorted()[1]
-                        Diagnostics.log("player", "intro frames at " + seen.recent.map { "\(Int($0.0))s (print \(Int(($0.0 - $0.1) / spacing)), \(String(format: "%.2f", $0.2)))" }.joined(separator: ", ") + " agree")
+                        seen.start = starts.sorted()[1]; seen.pattern = best.pattern
+                        Diagnostics.log("player", "intro frames at " + seen.recent.map { "\(Int($0.time))s (print \($0.print), \(String(format: "%.2f", $0.similarity)))" }.joined(separator: ", ") + " agree on pattern \(patterns[best.pattern].label)")
                         return true
                     }
                     return false
@@ -373,14 +452,14 @@ enum ShowMarkers {
                 if !got { Diagnostics.log("player", "intro pass \(Int(from))–\(Int(to))s gave no frames") }
             }
             await grab.close()
-            guard let start = seen.start else {
+            guard let start = seen.start, let p = seen.pattern, let length = patterns[p].length else {
                 updateEpisode(showKey: showKey, itemKey: itemKey) { $0.introSearched = true }
                 Diagnostics.log("player", "intro not found in \(itemKey.prefix(40)) after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
                 found(nil)
                 return
             }
-            updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
-            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(String(format: "%.1f", start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
+            updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.locatedPattern = patterns[p].itemKey; $0.introSearched = true }
+            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(String(format: "%.1f", start))s (pattern \(patterns[p].label)) after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
             found(.init(start: start, end: start + length))
         }
     }
