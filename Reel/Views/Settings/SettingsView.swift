@@ -9,91 +9,35 @@ struct SettingsView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
     @State private var artworkSize: Int64 = 0
-    @State private var showKeyHelp = false
-    @State private var unmatchedCount = 0
     @State private var reviewCount = 0
     @State private var hiddenCount = 0
+    @State private var sourceCount = 0
     @State private var confirmReset = false
 
     var body: some View {
         Form {
-            Section {
-                SecureField(AppSettings.BuiltIn.tmdb.isEmpty ? "TMDb API key (v3)" : "TMDb API key (built in · optional override)", text: $settings.tmdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    // A v3 key is 32 hex characters. The moment a complete one lands, match everything scanned without it.
-                    .onChange(of: settings.tmdbAPIKey) { _, key in
-                        if key.count == 32, unmatchedCount > 0 { library.scanAll(providers: settings.providers) }
-                    }
-                if unmatchedCount > 0, settings.tmdb != nil {
-                    Button("Match \(unmatchedCount) unmatched files now") { library.scanAll(providers: settings.providers) }
-                }
-                Toggle(isOn: $settings.animeMatching) {
-                    VStack(alignment: .leading) { Text("Anime matching"); Text("AniDB titles + Anime-Lists map fansub names and absolute episode numbers to TMDb. No key needed.").font(.caption).foregroundStyle(.secondary) }
-                }
-                SecureField("TheTVDB API key (optional)", text: $settings.tvdbAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-                if !settings.tvdbAPIKey.isEmpty {
-                    SecureField("TheTVDB subscriber PIN (optional)", text: $settings.tvdbPIN).textInputAutocapitalization(.never).autocorrectionDisabled()
-                }
-                SecureField(AppSettings.BuiltIn.fanart.isEmpty ? "fanart.tv API key (optional)" : "fanart.tv personal key (optional, for newer images)", text: $settings.fanartAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("How do I get a key?") { showKeyHelp = true }
-                Picker("Metadata language", selection: $settings.metadataLanguage) {
-                    ForEach([("en-GB", "English (UK)"), ("en-US", "English (US)"), ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"), ("ja-JP", "Japanese")], id: \.0) { Text($0.1).tag($0.0) }
-                }
-            } header: { Text("Metadata") } footer: {
-                Text(settings.effectiveTMDbKey.isEmpty ? "TMDb is required for titles, artwork and episode names. Free for non-commercial use." : "This product uses the TMDb API but is not endorsed or certified by TMDb. TheTVDB is a fallback search for shows TMDb can't find; a v4 project key is free for personal use at thetvdb.com/api-information. fanart.tv adds logos and extra backgrounds on detail screens; a project key is free at fanart.tv/get-an-api-key.")
-            }
-
-            Section {
-                SecureField(AppSettings.BuiltIn.openSubtitles.isEmpty ? "OpenSubtitles API key (optional)" : "OpenSubtitles API key (built in · optional)", text: $settings.openSubtitlesAPIKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-                if !settings.effectiveOpenSubtitlesKey.isEmpty {
-                    TextField("OpenSubtitles username", text: $settings.openSubtitlesUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("OpenSubtitles password", text: $settings.openSubtitlesPassword)
-                }
-                Picker("Subtitle size", selection: $settings.subtitleScale) {
-                    Text("Small").tag(80); Text("Normal").tag(100); Text("Large").tag(130); Text("Huge").tag(170)
-                }
-                Picker("Subtitle colour", selection: $settings.subtitleColor) {
-                    ForEach(AppSettings.subtitleColors, id: \.hex) { Text($0.name).tag($0.hex) }
-                }
-                Toggle("Box behind subtitles", isOn: $settings.subtitleBackground)
-                Toggle(isOn: $settings.subtitleRaised) { VStack(alignment: .leading) { Text("Raise subtitles"); Text("Lifts them above the bottom edge, for letterboxed films.").font(.caption).foregroundStyle(.secondary) } }
-            } header: { Text("Subtitles") } footer: {
-                Text("Find subtitles online from the player's Subtitles sheet. The API key comes from opensubtitles.com → API consumers (free); downloading needs a free account and has a daily limit. Only the title or TMDb id is sent, never your files.")
-            }
-
-            Section("Playback") {
-                Toggle(isOn: $settings.hardwareDecoding) { VStack(alignment: .leading) { Text("Hardware decoding"); Text("VideoToolbox. Turn off if a file shows artefacts.").font(.caption).foregroundStyle(.secondary) } }
-                Picker("Preferred audio language", selection: $settings.audioLanguage) { ForEach(AppSettings.languages, id: \.code) { Text($0.name).tag($0.code) } }
-                Picker("Preferred subtitle language", selection: $settings.subtitleLanguage) { ForEach(AppSettings.languages, id: \.code) { Text($0.name).tag($0.code) } }
-                Toggle("Subtitles on by default", isOn: $settings.subtitlesOnByDefault)
-                Picker("Skip interval", selection: $settings.skipInterval) { ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) s").tag($0) } }
-                Picker(selection: $settings.networkCachingMS) { ForEach([500, 1000, 1500, 3000, 5000], id: \.self) { Text("\($0) ms" + ($0 == 3000 ? " (default)" : "")).tag($0) } } label: {
-                    VStack(alignment: .leading) { Text("Network buffer"); Text("Raise if streaming stutters. Seeks take longer.").font(.caption).foregroundStyle(.secondary) }
-                }
-                Toggle("Auto-play next episode", isOn: $settings.autoPlayNext)
-                if settings.autoPlayNext {
-                    Picker("Up Next countdown", selection: $settings.autoPlayCountdown) { ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) s").tag($0) } }
-                }
-                Toggle(isOn: $settings.dialogueBoost) { VStack(alignment: .leading) { Text("Dialogue boost"); Text("Lifts quiet speech and tames loud scenes, for speakers at night. Also in the player's More sheet.").font(.caption).foregroundStyle(.secondary) } }
-                Toggle(isOn: $settings.backgroundAudio) { VStack(alignment: .leading) { Text("Play audio in background"); Text("Video pauses, audio continues").font(.caption).foregroundStyle(.secondary) } }
-            }
-
+            // The library: where the files come from and what is waiting for a decision.
             Section("Library") {
-                Toggle(isOn: $settings.scanOnLaunch) { VStack(alignment: .leading) { Text("Scan for new media on launch"); Text("Checks every source when the app opens (at most every 10 minutes). Sources → Refresh all does it on demand.").font(.caption).foregroundStyle(.secondary) } }
-                Toggle(isOn: $settings.acceptVLCLinks) { VStack(alignment: .leading) { Text("Accept VLC links"); Text("Lets apps that only know VLC (DS file, some browsers) open streams in Reel through vlc:// links. reel:// links always work.").font(.caption).foregroundStyle(.secondary) } }
-                NavigationLink { SourcesView() } label: { Label("Sources", systemImage: "externaldrive.connected.to.line.below") }
-                Toggle(isOn: Binding(get: { DemoLibrary.installed(in: library) != nil }, set: { on in if on { DemoLibrary.install(in: library) } else { DemoLibrary.remove(from: library) }; settings.demoInstalled = on })) {
-                    VStack(alignment: .leading) { Text("Sample library"); Text("Three short films and a show, built into the app, to try Reel without a server. The titles are invented and the clips are test patterns.").font(.caption).foregroundStyle(.secondary) }
-                }
+                NavigationLink { SourcesView() } label: { LabeledContent { Text("\(sourceCount)") } label: { Label("Sources", systemImage: "externaldrive.connected.to.line.below") } }
+                NavigationLink { NeedsReviewView() } label: { LabeledContent { Text("\(reviewCount)") } label: { Label("Needs Review", systemImage: "questionmark.folder") } }
+                NavigationLink { HiddenItemsView() } label: { LabeledContent { Text("\(hiddenCount)") } label: { Label("Hidden items", systemImage: "eye.slash") } }
+                NavigationLink { CodecsView() } label: { Label("Codecs and formats", systemImage: "waveform.badge.magnifyingglass") }
                 NavigationLink(value: LibraryRoute.favourites) { Label("Favourites", systemImage: "heart") }
                 NavigationLink(value: LibraryRoute.collections) { Label("Collections", systemImage: "rectangle.stack") }
-                NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }
-                NavigationLink { CodecsView() } label: { Label("Codecs and formats", systemImage: "waveform.badge.magnifyingglass") }
-                NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(hiddenCount)") }
+            }
+
+            // Preferences, one page each: the top level stays short enough to read in a glance.
+            Section("Preferences") {
+                NavigationLink { MetadataSettingsView() } label: { settingsRow("Metadata", "TMDb, TheTVDB, fanart.tv, Audible", "text.magnifyingglass") }
+                NavigationLink { PlaybackSettingsView() } label: { settingsRow("Playback", "Languages, skipping, Up Next, decoding", "play.circle") }
+                NavigationLink { SubtitleSettingsView() } label: { settingsRow("Subtitles", "Size, colour, OpenSubtitles", "captions.bubble") }
+                NavigationLink { ScanningSettingsView() } label: { settingsRow("Scanning", "On launch, mobile data, sample library", "arrow.triangle.2.circlepath") }
+                Picker(selection: $settings.theme) { ForEach(AppSettings.Theme.allCases) { Text($0.title).tag($0) } } label: { Label("Theme", systemImage: "circle.lefthalf.filled") }
             }
 
             Section {
                 Toggle(isOn: Binding(get: { sync.isEnabled }, set: { sync.setEnabled($0, cloudContainerID: AppSettings.cloudContainerID) })) {
-                    VStack(alignment: .leading) { Text("Sync library across your devices"); Text("Sources, the scanned library, watch progress, favourites and fixes. Uses your Apple ID; nothing to sign in to.").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Text("Sync across your devices"); Text("Sources, the library, watch progress, favourites, collections and fixes. Uses your Apple ID; nothing to sign in to.").font(.caption).foregroundStyle(.secondary) }
                 }
                 if sync.isEnabled {
                     LabeledContent("Last synced", value: sync.lastSyncedAt?.formatted(.relative(presentation: .named)) ?? "Not yet")
@@ -108,16 +52,12 @@ struct SettingsView: View {
             } header: { Text("iCloud") } footer: { Text("Source passwords travel only through iCloud Keychain, never through the app's iCloud data. Files-app folders stay on the device that added them.") }
 
             Section("Storage") {
+                NavigationLink { DownloadsView() } label: { LabeledContent("Downloads", value: MediaFormat.bytes(downloads.totalBytes)) }
                 Picker("Artwork cache limit", selection: $settings.artworkLimitBytes) {
                     ForEach([(500_000_000, "500 MB"), (1_000_000_000, "1 GB"), (2_000_000_000, "2 GB"), (5_000_000_000, "5 GB")], id: \.0) { Text($0.1).tag($0.0) }
                 }
                 LabeledContent("Artwork cache", value: MediaFormat.bytes(artworkSize))
                 Button("Clear artwork cache", role: .destructive) { Task { await ImageLoader.shared.clear(); artworkSize = 0 } }
-                NavigationLink { DownloadsView() } label: { LabeledContent("Downloads", value: MediaFormat.bytes(downloads.totalBytes)) }
-            }
-
-            Section("Appearance") {
-                Picker("Theme", selection: $settings.theme) { ForEach(AppSettings.Theme.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
             }
 
             Section("About") {
@@ -135,7 +75,7 @@ struct SettingsView: View {
                     Label("Reset Reel", systemImage: "arrow.counterclockwise").foregroundStyle(.red)
                 }
             } footer: {
-                Text("Removes the library, settings, downloads, caches and sync state from this device, as if the app had just been installed. Nothing in iCloud is touched, and source passwords stay in iCloud Keychain. The app quits; open it again to start over.")
+                Text("Removes the library, settings, downloads, caches and sync state from this device, as if the app had just been installed. Nothing in iCloud is touched, and source passwords stay in iCloud Keychain. The app quits.")
             }
         }
         .confirmationDialog("Reset Reel on this device?", isPresented: $confirmReset, titleVisibility: .visible) {
@@ -143,14 +83,15 @@ struct SettingsView: View {
         } message: { Text("Everything stored on this device is removed. Other devices and iCloud are unaffected.") }
         .navigationTitle("Settings")
         .refreshFromLibrary {
-            unmatchedCount = library.unmatchedFileCount()
+            sourceCount = library.sources().count
             reviewCount = library.filesNeedingReview().count
             hiddenCount = library.items(kind: .film, includeHidden: true).filter(\.hidden).count + library.items(kind: .show, includeHidden: true).filter(\.hidden).count
         }
         .task { artworkSize = await ImageLoader.shared.sizeOnDisk() }
-        .alert("TMDb API key", isPresented: $showKeyHelp) { Button("OK") {} } message: {
-            Text("Create a free account at themoviedb.org, open Settings → API, and request a v3 developer key. Personal, non-commercial use is free. Paste the key here.")
-        }
+    }
+
+    private func settingsRow(_ title: String, _ detail: String, _ icon: String) -> some View {
+        Label { VStack(alignment: .leading, spacing: 2) { Text(title); Text(detail).font(.caption).foregroundStyle(.secondary) } } icon: { Image(systemName: icon) }
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 import MediaCore
 import Library
@@ -56,13 +57,32 @@ struct SmartCollection: Codable, Identifiable, Equatable {
 
 @MainActor
 final class SmartCollectionStore: ObservableObject {
-    private let key = "reel.smartCollections"
-    @Published private(set) var all: [SmartCollection]
-    init() { all = (UserDefaults.standard.data(forKey: "reel.smartCollections")).flatMap { try? JSONDecoder().decode([SmartCollection].self, from: $0) } ?? [] }
-    func save(_ c: SmartCollection) {
-        if let i = all.firstIndex(where: { $0.id == c.id }) { all[i] = c } else { all.append(c) }
-        persist()
+    @Published private(set) var all: [SmartCollection] = []
+    private let library: LibraryStore
+    private var watcher: AnyCancellable?
+
+    /// Rules are kept as `MediaCollection` rows with `smartRules` set, so they sync like the hand-made
+    /// collections. Rules an earlier build kept in UserDefaults move over once.
+    init(library: LibraryStore) {
+        self.library = library
+        if let data = UserDefaults.standard.data(forKey: "reel.smartCollections"), let old = try? JSONDecoder().decode([SmartCollection].self, from: data) {
+            for c in old { save(c) }
+            UserDefaults.standard.removeObject(forKey: "reel.smartCollections")
+        }
+        reload()
+        watcher = library.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.reload() } }
     }
-    func remove(_ id: UUID) { all.removeAll { $0.id == id }; persist() }
-    private func persist() { if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: key) } }
+    private func reload() {
+        let rules = library.smartCollections().compactMap { c -> SmartCollection? in
+            guard let json = c.smartRules, var r = try? JSONDecoder().decode(SmartCollection.self, from: Data(json.utf8)) else { return nil }
+            r.id = c.id; r.name = c.name; return r
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        if rules != all { all = rules }
+    }
+    func save(_ c: SmartCollection) {
+        guard let data = try? JSONEncoder().encode(c), let json = String(data: data, encoding: .utf8) else { return }
+        library.saveSmartCollection(id: c.id, name: c.name, rules: json)
+        reload()
+    }
+    func remove(_ id: UUID) { library.removeCollection(id: id); reload() }
 }

@@ -114,6 +114,9 @@ public final class MediaFile {
     public var ignored: Bool
     public var addedAt: Date
     public var lastSeenAt: Date
+    /// Scans in a row that should have shown this file and did not, while its folder failed to
+    /// list: a share that was off is no evidence, but three misses running mean the file has gone.
+    public var missedScans: Int = 0
     /// What a second database (Wikidata, TVmaze, Kitsu) thinks this file is, when it differs from or
     /// adds to TMDb's weak answer: shown first in Needs Review. Local to this device.
     public var suggestedTMDbID: Int? = nil
@@ -351,6 +354,8 @@ public final class MediaCollection {
     public var artworkURL: String? = nil
     /// Up to four poster URLs the user ticked for the mosaic; empty means the first four titles.
     public var collageURLs: [String] = []
+    /// A smart collection: its rule as JSON (`SmartCollection` in the app). Nil for a hand-made one.
+    public var smartRules: String? = nil
 
     public init(name: String) {
         id = UUID()

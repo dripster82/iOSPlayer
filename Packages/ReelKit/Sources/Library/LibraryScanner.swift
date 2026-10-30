@@ -168,7 +168,17 @@ public actor LibraryScanner {
             }
             return false
         }
-        let gone = existing.filter { !seenPaths.contains($0.key) && isGone($0.key) }.map(\.value)
+        func inScope(_ path: String) -> Bool { scope.map { $0.isEmpty || path.hasPrefix($0 + "/") } ?? true }
+        var gone = existing.filter { !seenPaths.contains($0.key) && isGone($0.key) }.map(\.value)
+        // Unseen but not proven gone (the folder would not list): a miss. A share that was off for a
+        // scan is no evidence, but a file missed three scans running has gone, folder and all.
+        var missed = 0
+        for (path, file) in existing where !seenPaths.contains(path) && !gone.contains(where: { $0 === file }) && inScope(path) && file.classificationRaw != "browsed" {
+            file.missedScans += 1; missed += 1
+            if file.missedScans >= 3 { gone.append(file) }
+        }
+        for path in seenPaths { if let f = existing[path], f.missedScans != 0 { f.missedScans = 0 } }
+        if missed > 0 { Diagnostics.log("scan", "\(record.name): \(missed) files not seen this scan (\(gone.count) gone)") }
         if !gone.isEmpty {
             var touched = Set<PersistentIdentifier>()
             for file in gone {

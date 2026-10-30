@@ -7,6 +7,7 @@ public enum SyncKeys {
     public static func source(_ id: UUID) -> String { "source|\(id.uuidString)" }
     public static func item(_ itemKey: String) -> String { "item|\(itemKey)" }
     public static func groupArt(_ groupID: String) -> String { "groupart|\(groupID)" }
+    public static func collection(_ id: UUID) -> String { "collection|\(id.uuidString)" }
     public static func file(sourceID: UUID, relativePath: String) -> String {
         var h: UInt64 = 0xcbf29ce484222325
         for b in (sourceID.uuidString + "|" + relativePath).utf8 { h ^= UInt64(b); h = h &* 0x100000001b3 }

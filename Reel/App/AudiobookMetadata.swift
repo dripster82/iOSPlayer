@@ -9,7 +9,15 @@ import Metadata
 /// names and tags had it, with Fix match for the listener. One book at a time, after the tags.
 @MainActor
 enum AudiobookMetadata {
-    static let lookup = AudiobookLookup(region: "uk")
+    private static var cached: (region: String, lookup: AudiobookLookup)?
+    /// The catalogues for the region chosen in Settings → Metadata.
+    static var lookup: AudiobookLookup {
+        let region = UserDefaults.standard.string(forKey: "audibleRegion") ?? "uk"
+        if let cached, cached.region == region { return cached.lookup }
+        let made = AudiobookLookup(region: region)
+        cached = (region, made)
+        return made
+    }
     private static var running = false
 
     static func lookupPending(library: LibraryStore) {

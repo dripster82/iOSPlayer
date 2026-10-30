@@ -20,7 +20,7 @@ public final class LibraryStore: ObservableObject {
     @Published public var lastError: String?
     /// Set by the app once the sync engine exists. Every write that marks rows `pendingSync` calls `changed`.
     public var syncHooks: SyncHooks?
-    private func notifySync() { invalidateCaches(); syncHooks?.changed() }
+    func notifySync() { invalidateCaches(); syncHooks?.changed() }
 
     // Per-render lookups (poster cards, filters) read these instead of hitting SwiftData per item.
     // Built lazily from one fetch each; dropped on every write and whenever sync applies changes.
@@ -327,408 +327,12 @@ public final class LibraryStore: ObservableObject {
         }
     }
 
-    // MARK: - Audiobooks
-
-    /// Books in series order: series name, then the book's number in it, then title.
-    public func audiobooks() -> [MediaItem] {
-        items(kind: .audiobook).sorted { ($0.seriesName ?? $0.sortTitle, $0.seriesIndex ?? 0, $0.sortTitle) < ($1.seriesName ?? $1.sortTitle, $1.seriesIndex ?? 0, $1.sortTitle) }
-    }
-    /// Where covers read from the files live. Per device; the path stored on the item is the file name.
-    nonisolated public static var coversDirectory: URL {
-        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Covers", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-    nonisolated public static func coverURL(_ item: MediaItem) -> URL? {
-        guard let name = item.coverPath ?? item.show?.coverPath else { return nil }
-        let url = coversDirectory.appendingPathComponent(name)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-    /// What the first part's tags said: a title and author override the names, the cover is kept as a file.
-    public func applyBookTags(_ book: MediaItem, title: String?, author: String?, narrator: String?, year: Int?, cover: Data?) {
-        if let title, !title.isEmpty {
-            // "Command Decision: Vatta's War, Book 4 (Unabridged)" → title, series and number.
-            let parsed = AudiobookGrouper.parseBookName(title)
-            book.title = parsed.title; book.sortTitle = MediaItem.makeSortTitle(parsed.title)
-            if let s = parsed.series { book.seriesName = s; book.seriesIndex = parsed.seriesIndex ?? book.seriesIndex }
-        }
-        if let author, !author.isEmpty { book.author = author }
-        if let narrator, !narrator.isEmpty { book.narrator = narrator }
-        if let year, book.year == nil { book.year = year }
-        if let cover, !cover.isEmpty {
-            let name = book.itemKey.replacingOccurrences(of: ":", with: "-") + ".jpg"
-            try? cover.write(to: Self.coversDirectory.appendingPathComponent(name))
-            book.coverPath = name
-        }
-        book.tagsRead = true
-        book.pendingSync = true; book.updatedAt = Date()
-        try? context.save()
-        invalidateCaches()
-        objectWillChange.send()
-        notifySync()
-    }
-    /// Titles stored by an earlier build with the edition noise and series still in them are cleaned once.
-    public func tidyBookTitles() {
-        var changed = false
-        for book in items(kind: .audiobook, includeHidden: true) {
-            let parsed = AudiobookGrouper.parseBookName(book.title)
-            guard parsed.title != book.title || (book.seriesName == nil && parsed.series != nil) else { continue }
-            book.title = parsed.title; book.sortTitle = MediaItem.makeSortTitle(parsed.title)
-            if book.seriesName == nil, let s = parsed.series { book.seriesName = s; book.seriesIndex = parsed.seriesIndex ?? book.seriesIndex }
-            book.pendingSync = true; book.updatedAt = Date(); changed = true
-        }
-        if changed { try? context.save(); objectWillChange.send(); notifySync() }
-    }
-    /// Books the catalogues have not been asked about: after the tags, so the search has the best
-    /// title and author the files can give.
-    public func booksNeedingLookup() -> [MediaItem] { audiobooks().filter { $0.tagsRead && ($0.bookLookup == nil || $0.bookLookup == "redo-manual") } }
-
-    /// What a catalogue said about a book. Chosen by hand it replaces everything; taken on the
-    /// names it fills what the files did not say, and the names' title and author stand when the
-    /// tags gave them (the tags are the edition on disk; the catalogue may be another).
-    public func applyBookLookup(_ book: MediaItem, hit given: AudiobookHit, manual: Bool) {
-        // Of the series the catalogue lists, the one this library already shelves the author's
-        // other books under (or the tags named), else the parent series.
-        var hit = given
-        let known = [book.seriesName].compactMap { $0 } + items(kind: .audiobook).filter { $0 !== book && $0.author == book.author }.compactMap(\.seriesName)
-        hit.chooseSeries(known: known)
-        let trust = manual || !book.tagsRead
-        if trust || book.title.isEmpty { book.title = hit.title; book.sortTitle = MediaItem.makeSortTitle(hit.title) }
-        if let a = hit.authorLine, trust || book.author == nil { book.author = a }
-        if let n = hit.narratorLine, trust || book.narrator == nil { book.narrator = n }
-        // The tags' series stands on an automatic match: Audible files a book under its own series
-        // names ("Vatta Universe", a "City Watch" sub-series) where the edition's tags say "Vatta's War".
-        if let s = hit.series, trust || book.seriesName == nil { book.seriesName = s; book.seriesIndex = hit.seriesIndex ?? (manual ? nil : book.seriesIndex) }
-        else if let mine = book.seriesName, book.seriesIndex == nil, let i = hit.seriesIndex, let theirs = hit.series, MediaItem.makeSortTitle(mine) == MediaItem.makeSortTitle(theirs) { book.seriesIndex = i }
-        else if manual { book.seriesName = nil; book.seriesIndex = nil }
-        if let y = hit.year, trust || book.year == nil { book.year = y }
-        if let s = hit.summary, !s.isEmpty { book.overview = s }
-        if let m = hit.runtimeMinutes { book.runtimeMinutes = m }
-        if !hit.genres.isEmpty { book.genres = hit.genres }
-        if let c = hit.coverURL { book.posterOverrideURL = c }
-        book.asin = hit.asin ?? (manual ? nil : book.asin)
-        book.bookLookup = manual ? "manual" : "matched"
-        book.pendingSync = true; book.updatedAt = Date()
-        try? context.save()
-        invalidateCaches(); objectWillChange.send(); notifySync()
-    }
-    /// Once per device: books matched by an earlier build, whose catalogue series overwrote the
-    /// tags', read their tags again and are looked up again under the current rules.
-    public func redoBookLookupsOnce(key: String) {
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        var n = 0
-        for book in items(kind: .audiobook, includeHidden: true) where book.bookLookup == "matched" || book.bookLookup == "manual" {
-            // With an ASIN the lookup refreshes the same edition; without, the tags are read again first.
-            if book.asin == nil { book.tagsRead = false }
-            book.bookLookup = book.bookLookup == "manual" ? "redo-manual" : nil
-            book.pendingSync = true; book.updatedAt = Date(); n += 1
-        }
-        if n > 0 { try? context.save(); Diagnostics.log("library", "redoing tags and catalogue lookups for \(n) books") }
-        UserDefaults.standard.set(true, forKey: key)
-    }
-    /// Nothing in the catalogues was close enough; the names and tags stand, and Fix match waits.
-    public func markBookUnmatched(_ book: MediaItem) {
-        book.bookLookup = "none"; book.pendingSync = true; book.updatedAt = Date()
-        try? context.save()
-    }
-    /// Forget a lookup so the next pass asks again (a title corrected by hand, say).
-    public func resetBookLookup(_ book: MediaItem) {
-        book.bookLookup = nil; book.pendingSync = true; book.updatedAt = Date()
-        try? context.save()
-    }
-
-    /// Books whose tags have not been read yet, with the file to read them from.
-    public func booksNeedingTags() -> [(MediaItem, MediaFile)] {
-        audiobooks().filter { !$0.tagsRead }.compactMap { b in
-            b.episodes.sorted { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) }.first?.files.first.map { (b, $0) }
-        }
-    }
+    // MARK: - Stored for the extensions (Audiobooks, Review)
     /// Called on the main actor when a scan finishes, with the source scanned.
     public var scanFinished: ((SourceRecord) -> Void)?
-
-    public func item(_ key: String) -> MediaItem? {
-        var d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey == key }); d.fetchLimit = 1
-        return try? context.fetch(d).first
-    }
-
-    public func search(_ query: String) -> [MediaItem] {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return [] }
-        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.title.localizedStandardContains(q) && !$0.hidden }, sortBy: [SortDescriptor(\.sortTitle)])
-        return ((try? context.fetch(d)) ?? []).filter(Self.playable)
-    }
-
-    /// Files the classifier accepted that still have no TMDb item: scanned without a key, or the matcher failed.
-    public func unmatchedFileCount() -> Int {
-        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.item == nil && !$0.ignored && !$0.reviewed && ($0.classificationRaw == "episode" || $0.classificationRaw == "film") })
-        return (try? context.fetchCount(d)) ?? 0
-    }
-
-    /// The last matcher error from any finished scan, if the matcher gave up on files.
-    public var lastMatchError: String? {
-        scanProgress.values.first { $0.phase == .done && $0.skipped > 0 && $0.lastError != nil }?.lastError
-    }
-
-    /// Reviewed files whose decision left them unmatched (a placeholder, or nothing) come back to
-    /// the list: see `MediaFile.needsReview`.
-    public func filesNeedingReview() -> [MediaFile] {
-        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.classificationRaw == "review" && !$0.ignored && (!$0.reviewed || $0.item == nil || $0.item?.confidenceRaw == "unmatched") }, sortBy: [SortDescriptor(\.relativePath)])
-        return (try? context.fetch(d)) ?? []
-    }
-
-    public func allGenres(kind: MediaKind) -> [String] { Array(Set(items(kind: kind).flatMap(\.genres))).sorted() }
-
-    public func hide(_ item: MediaItem) throws {
-        item.hidden = true
-        item.pendingSync = true; item.updatedAt = Date()
-        for f in item.files { let o = override(for: f); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true }
-        try context.save()
-        notifySync()
-    }
-
-    // MARK: - Review and fix match
-
-    public func resolveReview(_ file: MediaFile, as kind: MediaKind?, tmdbID: Int?, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws {
-        let o = override(for: file)
-        o.forcedKindRaw = kind?.rawValue
-        o.forcedTMDbID = tmdbID
-        o.forcedAniDBID = anidbID
-        o.updatedAt = Date(); o.pendingSync = true
-        file.reviewed = true
-        file.classificationRaw = kind == .episode ? "episode" : "film"
-        file.pendingSync = true; file.updatedAt = Date()
-        try context.save()
-        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
-        let outcome = await matcher.match(file)
-        try context.save()
-        Diagnostics.log("library", "review: \(file.fileName.prefix(50)) set to \(kind?.rawValue ?? "auto")\(tmdbID.map { " tmdb \($0)" } ?? "") → \(outcome)\(file.item.map { ", item \($0.itemKey)" } ?? ", no item")")
-        notifySync()
-    }
-
-    /// Same decision for a whole folder of review items: one TMDb lookup per file, one save, one sync.
-    public func resolveReview(_ files: [MediaFile], as kind: MediaKind?, tmdbID: Int?, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws {
-        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
-        for file in files {
-            let o = override(for: file)
-            o.forcedKindRaw = kind?.rawValue
-            o.forcedTMDbID = tmdbID
-            o.forcedAniDBID = anidbID
-            o.updatedAt = Date(); o.pendingSync = true
-            file.reviewed = true
-            file.classificationRaw = kind == .episode ? "episode" : "film"
-            file.pendingSync = true; file.updatedAt = Date()
-        }
-        try context.save()
-        for file in files { _ = await matcher.match(file) }
-        try context.save()
-        Diagnostics.log("library", "review: \(files.count) files set to \(kind?.rawValue ?? "auto")\(tmdbID.map { " tmdb \($0)" } ?? "")")
-        notifySync()
-    }
-
-    public func ignoreFiles(_ files: [MediaFile]) throws {
-        for file in files {
-            file.ignored = true
-            file.pendingSync = true; file.updatedAt = Date()
-            let o = override(for: file); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true
-        }
-        try context.save()
-        notifySync()
-    }
-
-    public func ignoreFile(_ file: MediaFile) throws {
-        file.ignored = true
-        file.pendingSync = true; file.updatedAt = Date()
-        let o = override(for: file); o.hidden = true; o.updatedAt = Date(); o.pendingSync = true
-        try context.save()
-        notifySync()
-    }
-
     /// Re-points every file of an item at a different TMDb entry. Used by Fix Match.
     /// Old item key → the key of the title it was rematched to this launch, so an open page can follow.
-    public private(set) var rematched: [String: String] = [:]
-
-    /// Returns the key of the item the files now belong to. For a show, every episode's file moves.
-    @discardableResult
-    public func fixMatch(_ item: MediaItem, tmdbID: Int, kind: MediaKind, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws -> String? {
-        try await fixMatch(item, files: item.kind == .show ? item.episodes.flatMap(\.files) : item.files, tmdbID: tmdbID, kind: kind, anidbID: anidbID, tmdb: tmdb, providers: providers)
-    }
-
-    /// Re-points just `files` (some of a show's episodes, or one episode's file) at `tmdbID`. `item` is
-    /// the page the sheet was opened from; it is retired only if it ends up with nothing.
-    @discardableResult
-    public func fixMatch(_ item: MediaItem, files: [MediaFile], tmdbID: Int, kind: MediaKind, anidbID: Int? = nil, tmdb: TMDbClient, providers: MetadataProviders? = nil) async throws -> String? {
-        var previous: [MediaItem] = []
-        for f in files {
-            if let p = f.item, !previous.contains(where: { $0 === p }) { previous.append(p) }
-            let o = override(for: f)
-            o.forcedTMDbID = tmdbID
-            o.forcedKindRaw = kind.rawValue
-            o.forcedAniDBID = anidbID
-            o.updatedAt = Date(); o.pendingSync = true
-            f.item = nil
-        }
-        try context.save()
-        let matcher = providers.map { Matcher(context: context, tmdb: tmdb, providers: $0) } ?? Matcher(context: context, tmdb: tmdb)
-        for f in files { _ = await matcher.match(f) }
-        // Only now, with the new title in place, retire the old one. The page under the sheet redraws
-        // on every save; flagging the orphan before its replacement existed left it with nothing to show.
-        var deleted: [String] = []
-        var orphans = previous.filter { $0.files.isEmpty && !$0.pendingDeletion }
-        for p in previous {
-            if let show = p.show, !orphans.contains(where: { $0 === show }), show.episodes.allSatisfy({ $0.files.isEmpty || $0.pendingDeletion }) { orphans.append(show) }
-        }
-        if item.kind == .show, !orphans.contains(where: { $0 === item }), item.episodes.allSatisfy({ $0.files.isEmpty || $0.pendingDeletion }) { orphans.append(item) }
-        let itemRetired = orphans.contains { $0 === item } || (item.kind == .episode && orphans.contains { $0 === item.show })
-        for o in orphans {
-            // Not deleted here: the detail page under the Fix Match sheet still holds this object.
-            deleted.append(SyncKeys.item(o.itemKey))
-            o.pendingDeletion = true
-            o.hidden = true
-        }
-        let target = files.first?.item.map { $0.kind == .episode ? ($0.show?.itemKey ?? $0.itemKey) : $0.itemKey }
-        if let target, itemRetired {
-            rematched[item.itemKey] = target
-            if let show = item.show { rematched[show.itemKey] = target }
-            // The user's collections follow the title to its new identity.
-            for c in collections() where c.itemKeys.contains(item.itemKey) {
-                c.itemKeys = c.itemKeys.map { $0 == item.itemKey ? target : $0 }
-                c.updatedAt = Date(); c.pendingSync = true
-            }
-        }
-        try context.save()
-        if !deleted.isEmpty { syncHooks?.deleted(deleted) }
-        notifySync()
-        objectWillChange.send()
-        Diagnostics.log("library", "fix match: \(item.title.prefix(40)) → tmdb \(tmdbID) (\(files.count) files) now \(target ?? "unmatched")")
-        return target
-    }
-
-    /// Deletes the orphans Fix Match left behind. Called once at launch, before any page can hold one.
-    public func purgePendingDeletions() {
-        let d = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.pendingDeletion })
-        var orphans = (try? context.fetch(d)) ?? []
-        // Placeholders (titles TMDb did not know) whose files have gone are not worth keeping either.
-        let local = FetchDescriptor<MediaItem>(predicate: #Predicate { $0.itemKey.starts(with: "local-") })
-        for p in (try? context.fetch(local)) ?? [] where p.kind != .show && p.files.isEmpty && !orphans.contains(where: { $0 === p }) { orphans.append(p) }
-        for p in (try? context.fetch(local)) ?? [] where p.kind == .show && p.episodes.allSatisfy({ $0.files.isEmpty }) && !orphans.contains(where: { $0 === p }) { orphans.append(p) }
-        guard !orphans.isEmpty else { return }
-        for o in orphans where o.files.isEmpty { context.delete(o) }
-        try? context.save()
-        Diagnostics.log("library", "purged \(orphans.count) orphaned items")
-    }
-
-    private func override(for file: MediaFile) -> ItemOverride {
-        let key = ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: file.duration)
-        var d = FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key }); d.fetchLimit = 1
-        if let o = try? context.fetch(d).first { return o }
-        let o = ItemOverride(fileKey: key)
-        context.insert(o)
-        return o
-    }
-
-    /// Films and shows in the library with this person in the cast (by name: cast lists are short).
-    public func items(withCastMember name: String) -> [MediaItem] {
-        (items(kind: .film) + items(kind: .show)).filter { $0.cast.contains(name) }.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-    }
-
-    /// Library items by TMDb id, to mark which of a person's credits are owned.
-    public func items(tmdbIDs: Set<Int>) -> [Int: MediaItem] {
-        var out: [Int: MediaItem] = [:]
-        for i in items(kind: .film) + items(kind: .show) where i.tmdbID.map(tmdbIDs.contains) == true { out[i.tmdbID!] = i }
-        return out
-    }
-
-    /// What the player found in a file once it opened; shown on the film page and the Versions list.
-    public func recordProbe(itemKey: String, fileID: UUID?, videoCodec: String?, audio: String?, subtitles: String?, duration: TimeInterval) {
-        guard let item = item(itemKey) else { return }
-        guard let file = fileID.flatMap({ id in item.files.first { $0.id == id } }) ?? preferredFile(item) else { return }
-        var changed = false
-        if let v = videoCodec, v != file.videoCodec { file.videoCodec = v; changed = true }
-        if let a = audio, a != file.audioSummary { file.audioSummary = a; changed = true }
-        if let s = subtitles, s != file.subtitleSummary { file.subtitleSummary = s; changed = true }
-        if duration > 0, abs((file.duration ?? 0) - duration) > 1 { file.duration = duration; changed = true }
-        if changed { file.pendingSync = true; file.updatedAt = Date(); try? context.save() }
-    }
-
-    /// What the player has learned about the files so far: codecs by count, 4K and HDR (from the file
-    /// names) counts, and how many files have not been played yet, so nothing is known about them.
-    /// Files are only probed when they play; a scan never opens them.
-    public struct CodecSummary: Sendable {
-        public var codecs: [(name: String, count: Int)] = []
-        public var uhd = 0
-        public var hdr = 0
-        public var probed = 0
-        public var unprobed = 0
-        public init() {}
-    }
-    public func codecSummary() -> CodecSummary {
-        let d = FetchDescriptor<MediaFile>(predicate: #Predicate { !$0.ignored && $0.item != nil })
-        let files = (try? context.fetch(d)) ?? []
-        var out = CodecSummary()
-        var counts: [String: Int] = [:]
-        for f in files {
-            if f.resolution == "2160p" { out.uhd += 1 }
-            if f.qualityTags.contains(where: { ["hdr", "hdr10", "hdr10+", "dv", "dolby vision", "dovi"].contains($0.lowercased()) }) { out.hdr += 1 }
-            if let v = f.videoCodec, !v.isEmpty {
-                out.probed += 1
-                let name = v.lowercased().contains("hevc") || v.lowercased().contains("h265") || v.lowercased().contains("x265") ? "HEVC" :
-                           v.lowercased().contains("h264") || v.lowercased().contains("avc") || v.lowercased().contains("x264") ? "H.264" :
-                           v.lowercased().contains("av1") ? "AV1" : v.uppercased()
-                counts[name, default: 0] += 1
-            } else {
-                out.unprobed += 1
-            }
-        }
-        out.codecs = counts.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
-        return out
-    }
-
-    /// Keeps a file's chapter list once VLC has read it. Not synced; each device learns it on play.
-    public func recordChapters(fileID: UUID, chapters: [Chapter]) {
-        guard !chapters.isEmpty else { return }
-        var d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.id == fileID }); d.fetchLimit = 1
-        guard let file = try? context.fetch(d).first, file.chapterStarts != chapters.map(\.start) else { return }
-        file.chapterStarts = chapters.map(\.start)
-        file.chapterTitles = chapters.map(\.title)
-        try? context.save()
-    }
-
-    public func recordAudioTracks(fileID: UUID, names: [String], languages: [String]) {
-        guard !names.isEmpty else { return }
-        var d = FetchDescriptor<MediaFile>(predicate: #Predicate { $0.id == fileID }); d.fetchLimit = 1
-        guard let file = try? context.fetch(d).first, file.audioTrackNames != names else { return }
-        file.audioTrackNames = names
-        file.audioTrackLanguages = languages
-        try? context.save()
-    }
-
-    /// The text of each sidecar subtitle next to `file` (SRT, VTT), read from its share.
-    public func sidecarSubtitles(for file: MediaFile) async -> [(name: String, data: Data)] {
-        guard !file.sidecars.isEmpty, let record = file.source else { return [] }
-        let source = SourceFactory.make(record.config)
-        guard (try? await source.connect(credentials: CredentialStore.shared.load(for: record.id))) != nil else { return [] }
-        defer { Task { await source.disconnect() } }
-        var out: [(String, Data)] = []
-        for path in file.sidecars where ["srt", "vtt"].contains((path as NSString).pathExtension.lowercased()) {
-            var data = Data()
-            var offset: Int64 = 0
-            while data.count < 4 * 1024 * 1024 {
-                guard let chunk = try? await source.read(path, offset: offset, length: 256 * 1024), !chunk.isEmpty else { break }
-                data.append(chunk); offset += Int64(chunk.count)
-                if chunk.count < 256 * 1024 { break }
-            }
-            if !data.isEmpty { out.append(((path as NSString).lastPathComponent, data)) } else { Diagnostics.log("airplay", "sidecar \(path) could not be read") }
-        }
-        return out
-    }
-
-    /// Remembers which copy to play for a title with several; nil goes back to the best resolution.
-    public func setPreferredFile(_ file: MediaFile?, for item: MediaItem) {
-        item.preferredFileID = file?.id
-        item.updatedAt = Date(); item.pendingSync = true
-        try? context.save()
-        notifySync(); objectWillChange.send()
-    }
+    public internal(set) var rematched: [String: String] = [:]
 
     // MARK: - Artwork overrides
 
@@ -1185,8 +789,27 @@ public final class LibraryStore: ObservableObject {
 
     // MARK: - Collections
 
+    /// Hand-made collections. Smart collections (a rule, `smartRules` set) are kept as collections
+    /// too so they sync, but listed by `smartCollections()`.
     public func collections() -> [MediaCollection] {
-        (try? context.fetch(FetchDescriptor<MediaCollection>(sortBy: [SortDescriptor(\.name)]))) ?? []
+        ((try? context.fetch(FetchDescriptor<MediaCollection>(sortBy: [SortDescriptor(\.name)]))) ?? []).filter { $0.smartRules == nil }
+    }
+    public func smartCollections() -> [MediaCollection] {
+        ((try? context.fetch(FetchDescriptor<MediaCollection>(sortBy: [SortDescriptor(\.name)]))) ?? []).filter { $0.smartRules != nil }
+    }
+    /// Saves a smart collection's rule (JSON) under its id, new or changed, and syncs it.
+    public func saveSmartCollection(id: UUID, name: String, rules: String) {
+        let c = (try? context.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == id })))?.first ?? {
+            let n = MediaCollection(name: name); n.id = id; context.insert(n); return n
+        }()
+        c.name = name; c.smartRules = rules; c.updatedAt = Date(); c.pendingSync = true
+        try? context.save(); notifySync()
+    }
+    public func removeCollection(id: UUID) {
+        guard let c = (try? context.fetch(FetchDescriptor<MediaCollection>(predicate: #Predicate { $0.id == id })))?.first else { return }
+        context.delete(c); try? context.save()
+        syncHooks?.deleted([SyncKeys.collection(id)])
+        notifySync()
     }
 
     public func addCollection(named name: String) { context.insert(MediaCollection(name: name)); try? context.save(); notifySync() }

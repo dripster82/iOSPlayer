@@ -87,5 +87,6 @@ let package = Package(
 
         .testTarget(name: "MediaCoreTests", dependencies: ["MediaCore", "MediaSources", "Playback"]),
         .testTarget(name: "MetadataTests", dependencies: ["Metadata"]),
+        .testTarget(name: "LibraryTests", dependencies: ["Library", "Metadata", "MediaCore", "MediaSources"]),
     ] + (hasVLCKit ? [.binaryTarget(name: "VLCKit", path: vlcKitPath)] : [])
 )

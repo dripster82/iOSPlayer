@@ -16,7 +16,7 @@ struct ReelApp: App {
     @StateObject private var player: PlayerCoordinator
     @StateObject private var downloads: DownloadManager
     @StateObject private var groupArt: GroupArtStore
-    @StateObject private var smart = SmartCollectionStore()
+    @StateObject private var smart: SmartCollectionStore
     @StateObject private var nav = AppNavigation()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -43,12 +43,13 @@ struct ReelApp: App {
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
         _downloads = StateObject(wrappedValue: DownloadManager(library: store))
         _groupArt = StateObject(wrappedValue: GroupArtStore(library: store))
+        _smart = StateObject(wrappedValue: SmartCollectionStore(library: store))
         // Every local write pushes straight away, so putting one device down and picking up another just works.
         store.syncHooks = SyncHooks(changed: { [weak sync] in sync?.pushPendingChanges() },
                                     deleted: { [weak sync] keys in sync?.deleteRecords(named: keys) })
         sync.onChangesApplied = { [weak store] in store?.invalidateCaches(); store?.objectWillChange.send() }
         // Books found by a scan get their embedded tags (title, author, cover) read afterwards.
-        store.scanFinished = { [weak store] _ in if let store { AudiobookTags.readPending(library: store) } }
+        store.scanFinished = { [weak store] _ in if let store { AudiobookTags.readPending(library: store); FileProbe.probePending(library: store) } }
         // Must happen before launch finishes, so here rather than in a view.
         BackgroundScans.register(library: store, settings: settings)
         #if canImport(VLCKit)
@@ -213,7 +214,7 @@ struct ReelApp: App {
                         hasActivated = true
                         Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
                         // Books whose tags were not read (the app was put away mid-scan) get them now.
-                        Task { try? await Task.sleep(for: .seconds(8)); library.tidyBookTitles(); library.redoBookLookupsOnce(key: "bookLookupRedo3"); AudiobookTags.readPending(library: library) }
+                        Task { try? await Task.sleep(for: .seconds(8)); library.tidyBookTitles(); library.dedupeFolderRules(); library.redoBookLookupsOnce(key: "bookLookupRedo3"); AudiobookTags.readPending(library: library); FileProbe.probePending(library: library) }
                         // A scan publishes progress every second and every screen rebuilds on it; on a
                         // cold launch Home gets several seconds to itself first.
                         Task { try? await Task.sleep(for: delay == .zero ? .zero : .seconds(6)); scanForNewMediaIfDue() }

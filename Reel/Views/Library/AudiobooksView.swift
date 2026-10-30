@@ -5,19 +5,43 @@ import Library
 /// Audiobooks: every book the scan found, in series order, as a list with cover, author and how
 /// far along it is. Appears in the sidebar and the Files tab only once there is a book.
 struct AudiobooksView: View {
+    enum Sort: String, CaseIterable { case author = "Author, then series", title = "Title", added = "Date added" }
+    enum Show: String, CaseIterable { case all = "All", inProgress = "In progress", unstarted = "Not started", finished = "Finished" }
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var player: PlayerCoordinator
     @EnvironmentObject private var settings: AppSettings
+    @AppStorage("audiobooksSort") private var sort: Sort = .author
+    @AppStorage("audiobooksShow") private var show: Show = .all
     @State private var refresh = 0
     @State private var fixing: MediaItem?
 
+    private func passes(_ book: MediaItem) -> Bool {
+        let f = BookProgress.fraction(book, library: library)
+        switch show {
+        case .all: return true
+        case .finished: return (f ?? 0) >= 0.99
+        case .inProgress: return f != nil && f! < 0.99
+        case .unstarted: return f == nil
+        }
+    }
+
     var body: some View {
-        let books = library.audiobooks()
+        let all = library.audiobooks()
+        let books = all.filter(passes)
         let _ = refresh
         List {
-            if books.isEmpty {
+            if all.isEmpty {
                 ContentUnavailableView("No audiobooks yet", systemImage: "headphones", description: Text("Tag a folder as Audiobooks on a source (Settings → Libraries → the source → its folders) and scan. One m4b per book, or a folder of parts, both work."))
             }
+            if !all.isEmpty, books.isEmpty {
+                ContentUnavailableView("No books match", systemImage: "headphones", description: Text("Try another filter."))
+            }
+            if sort != .author {
+                ForEach(sort == .title ? books.sorted { $0.sortTitle.localizedStandardCompare($1.sortTitle) == .orderedAscending } : books.sorted { $0.addedAt > $1.addedAt }, id: \.itemKey) { book in
+                    NavigationLink(value: book.itemKey) { BookRow(book: book) }
+                        .contextMenu { Button { fixing = book } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") } }
+                }
+            } else {
             ForEach(groupedByAuthor(books), id: \.name) { author in
                 Section {
                     ForEach(author.series, id: \.name) { series in
@@ -34,8 +58,15 @@ struct AudiobooksView: View {
                     }
                 } header: { Text(author.name) }
             }
+            }
         }
         .navigationTitle("Audiobooks")
+        .toolbar {
+            Menu {
+                Picker("Sort", selection: $sort) { ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+                Picker("Show", selection: $show) { ForEach(Show.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+            } label: { Image(systemName: show == .all ? "arrow.up.arrow.down" : "line.3.horizontal.decrease.circle.fill") }
+        }
         .sheet(item: $fixing) { BookMatchView(book: $0) }
         .searchButton()
         .itemNavigation()
@@ -210,21 +241,7 @@ struct AudiobookDetailView: View {
             }
             Section {
                 ForEach(parts, id: \.itemKey) { part in
-                    let ws = library.watchState(part.itemKey)
-                    Button { player.play(part, settings: settings) } label: {
-                        HStack {
-                            Image(systemName: ws?.watched == true ? "checkmark.circle.fill" : ws?.isInProgress == true ? "play.circle.fill" : "circle").foregroundStyle(ws?.watched == true ? .green : Color.accentColor)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(part.title).foregroundStyle(.primary)
-                                Text(partDetail(part, ws: ws)).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if let p = ws?.progress, ws?.watched != true { ProgressView(value: p).frame(width: 60) }
-                        }
-                    }
-                    .contextMenu {
-                        Button { library.setWatched(!(ws?.watched ?? false), itemKey: part.itemKey); refresh += 1 } label: { Label(ws?.watched == true ? "Mark as unfinished" : "Mark as finished", systemImage: ws?.watched == true ? "circle" : "checkmark.circle") }
-                    }
+                    BookPartRow(part: part, detail: partDetail(part, ws: library.watchState(part.itemKey)), refresh: $refresh)
                 }
             } header: { Text(parts.count == 1 ? "File" : "Parts") } footer: {
                 if let f = parts.first?.files.first, let s = f.source { Text("\(s.name) · \(((f.relativePath as NSString).deletingLastPathComponent))").font(.caption) }
@@ -263,5 +280,49 @@ struct AudiobookDetailView: View {
         if let f = part.files.first { bits.append(MediaFormat.bytes(f.size)) }
         if ws?.isInProgress == true, let p = ws?.position { bits.append("at \(MediaFormat.clock(p))") }
         return bits.joined(separator: " · ")
+    }
+}
+
+/// One part of a book: play it, mark it, and its chapters once VLC has read them.
+private struct BookPartRow: View {
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var player: PlayerCoordinator
+    @EnvironmentObject private var settings: AppSettings
+    let part: MediaItem
+    let detail: String
+    @Binding var refresh: Int
+
+    var body: some View {
+        let ws = library.watchState(part.itemKey)
+        Button { player.play(part, settings: settings) } label: {
+            HStack {
+                Image(systemName: ws?.watched == true ? "checkmark.circle.fill" : ws?.isInProgress == true ? "play.circle.fill" : "circle").foregroundStyle(ws?.watched == true ? .green : Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(part.title).foregroundStyle(.primary)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let p = ws?.progress, ws?.watched != true { ProgressView(value: p).frame(width: 60) }
+            }
+        }
+        .contextMenu {
+            Button { library.setWatched(!(ws?.watched ?? false), itemKey: part.itemKey); refresh += 1 } label: { Label(ws?.watched == true ? "Mark as unfinished" : "Mark as finished", systemImage: ws?.watched == true ? "circle" : "checkmark.circle") }
+        }
+        if let f = part.files.first, !f.chapterStarts.isEmpty {
+            // Chapters VLC read when the part played; a tap opens the part there.
+            DisclosureGroup("\(f.chapterStarts.count) chapters") {
+                ForEach(Array(f.chapterStarts.enumerated()), id: \.offset) { i, start in
+                    Button { player.play(part, startAt: start, settings: settings) } label: { chapterLine(i, start: start, titles: f.chapterTitles) }
+                }
+            }.font(.subheadline)
+        }
+    }
+
+    private func chapterLine(_ i: Int, start: Double, titles: [String]) -> some View {
+        HStack {
+            Text(i < titles.count && !titles[i].isEmpty ? titles[i] : "Chapter \(i + 1)").foregroundStyle(.primary).lineLimit(1)
+            Spacer()
+            Text(MediaFormat.clock(start)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
     }
 }

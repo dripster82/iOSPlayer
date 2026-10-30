@@ -622,7 +622,7 @@ struct TrackSheet: View {
                     ForEach(engine.chapters) { c in row(c.title, sub: MediaFormat.clock(c.start), on: engine.time >= c.start && engine.time < c.start + c.duration) { engine.seek(to: c.start); dismiss() } }
                 case .speed:
                     ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { r in row("\(r.formatted())×", sub: r == 1 ? "Normal" : nil, on: engine.rate == Float(r)) { engine.setRate(Float(r)); player.rememberRate(Float(r)); dismiss() } }
-                    Text("Remembered for this show.").font(.footnote).foregroundStyle(.secondary)
+                    Text(player.current?.isAudiobookPart == true ? "Remembered for this book." : "Remembered for this show.").font(.footnote).foregroundStyle(.secondary)
                 case .more:
                     Toggle("Fill screen", isOn: $fill).onChange(of: fill) { _, f in onFill(); player.rememberFill(f) }
                     Toggle(isOn: Binding(get: { settings.dialogueBoost }, set: { settings.dialogueBoost = $0; player.reapplyOptions(settings: settings) })) {

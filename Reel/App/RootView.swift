@@ -77,6 +77,8 @@ struct RootView: View {
                             .tag(s)
                     }
                 }
+                // The last book removed while its tab is up: the tab goes, so the selection must too.
+                .onChange(of: hasBooks) { _, has in if !has, nav.section == .audiobooks { nav.section = .home } }
             }
         }
         .onAppear { nav.searchIsAPage = sizeClass == .compact }

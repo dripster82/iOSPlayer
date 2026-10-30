@@ -54,6 +54,8 @@ final class AppSettings: ObservableObject {
     private static let openSubtitlesCredentialID = UUID(uuidString: "6F9B2E1C-5D0A-4C4B-9A1E-0B5E4C3D2A11")!
     @Published var animeMatching: Bool { didSet { d.set(animeMatching, forKey: "animeMatching") } }
     @Published var metadataLanguage: String { didSet { d.set(metadataLanguage, forKey: "metadataLanguage") } }
+    /// Audible store the audiobook catalogue lookups use ("uk", "us", …): editions and narrators differ between stores.
+    @Published var audibleRegion: String { didSet { d.set(audibleRegion, forKey: "audibleRegion") } }
     @Published var hardwareDecoding: Bool { didSet { d.set(hardwareDecoding, forKey: "hardwareDecoding") } }
     @Published var networkCachingMS: Int { didSet { d.set(networkCachingMS, forKey: "networkCachingMS") } }
     @Published var skipInterval: Int { didSet { d.set(skipInterval, forKey: "skipInterval") } }
@@ -92,6 +94,7 @@ final class AppSettings: ObservableObject {
         openSubtitlesPassword = CredentialStore.shared.load(for: Self.openSubtitlesCredentialID)?.password ?? ""
         animeMatching = d.object(forKey: "animeMatching") as? Bool ?? true
         metadataLanguage = d.string(forKey: "metadataLanguage") ?? "en-GB"
+        audibleRegion = d.string(forKey: "audibleRegion") ?? "uk"
         hardwareDecoding = d.object(forKey: "hardwareDecoding") as? Bool ?? true
         networkCachingMS = d.object(forKey: "networkCachingMS") as? Int ?? 3000
         skipInterval = d.object(forKey: "skipInterval") as? Int ?? 10

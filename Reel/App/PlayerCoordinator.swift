@@ -387,7 +387,8 @@ final class PlayerCoordinator: ObservableObject {
         }
     }
 
-    func play(_ item: MediaItem, file: MediaFile? = nil, fromStart: Bool = false, settings: AppSettings) {
+    /// `startAt` opens at that time (a chapter); otherwise the saved place, or the start with `fromStart`.
+    func play(_ item: MediaItem, file: MediaFile? = nil, fromStart: Bool = false, startAt: TimeInterval? = nil, settings: AppSettings) {
         guard let file = file ?? library.preferredFile(item) else { loadError = "No file for \(item.title) yet. If the library is still syncing from iCloud, try again in a moment."; return }
         if nativePlayback != nil {
             // A Siri intent or a tap while Apple's player is up: one playback at a time.
@@ -417,7 +418,7 @@ final class PlayerCoordinator: ObservableObject {
                     }
                 }
                 loadingMessage = nil
-                let resume = fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0)
+                let resume = startAt ?? (fromStart ? 0 : (library.watchState(item.itemKey).map { $0.watched ? 0 : $0.position } ?? 0))
                 // The audio route only reports AirPlay once the session is active; activating it here
                 // means a title opened with AirPlay already chosen goes straight to Apple's player,
                 // rather than starting VLC and handing over a moment later.

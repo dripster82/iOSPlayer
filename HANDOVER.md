@@ -460,3 +460,28 @@ tags gave them; narrator, series, year, summary, genres, cover and ASIN are fill
 `posterOverrideURL`), otherwise `bookLookup = "none"`. **Fix match** on a book (row long-press, the
 page's … menu, or any Fix match on a book) opens `BookMatchView`, which searches and applies the
 chosen edition in full. New item fields `asin` and `bookLookup` sync.
+
+## Review pass (30 Oct 2026, evening)
+- **Search** (`LibraryStore.search`) matches title, author, series, narrator and episode titles; whole
+  titles first, then episodes. Book parts are never results.
+- **LibraryStore is split**: `LibraryStore+Audiobooks.swift` and `LibraryStore+Review.swift` are
+  extensions; stored properties stay in `LibraryStore.swift`. `notifySync` and `override(for:)` are
+  internal for that reason.
+- **Tests**: new `LibraryTests` target (`Tests/LibraryTests/LibraryStoreTests.swift`) runs the store
+  against `LibrarySchema.container(inMemory: true)`: tags, Needs Review, search, Recently Added, book
+  lookups, smart collections, probes. DLNA/FTP integration tests still need their local servers.
+- **File probe**: `Playback/MediaProbe` reads length, codec, resolution, audio and subtitle counts
+  through VLC without playing; `Reel/App/FileProbe` runs it after scans and at launch for files the
+  player has not opened (`filesNeedingProbe`), 25 at a time, not in Low Power Mode or when hot.
+- **Missing files**: `MediaFile.missedScans` counts scans that should have shown a file while its
+  folder would not list; three running and the file is treated as gone (`LibraryScanner`).
+- **Smart collections sync**: rules are `MediaCollection` rows with `smartRules` (JSON), so they
+  travel with CloudKit; `SmartCollectionStore` reads them from the store and migrated the old
+  UserDefaults rules once. `collections()` hides them; `smartCollections()` lists them.
+- **Audiobooks**: Settings → Metadata → Audible store (`AppSettings.audibleRegion`); Audiobooks
+  sort (author/title/added) and filter (all/in progress/not started/finished); chapters VLC read on
+  play are listed under each part and open the part there (`PlayerCoordinator.play(startAt:)`);
+  the tab bar falls back to Home if the last book goes; duplicate folder rules are removed at launch.
+- **Settings** is a short top level (Library, Preferences, iCloud, Storage, About, Reset) with pages
+  in `Settings/SettingsPages.swift`: Metadata, Playback, Subtitles, Scanning.
+- Still per device: nothing of note. Widgets still wait on the App Group entitlement (Developer portal).
