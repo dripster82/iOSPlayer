@@ -80,6 +80,7 @@ struct ReelApp: App {
         // frame grab and the precise thumbnail on a bundled sample, logging what came back.
         if scheme == "reel", url.host == "debug-grab" { DebugGrab.run(url); return }
         if scheme == "reel", url.host == "debug-grab-current" { DebugGrab.runCurrent(url, player: player, library: library); return }
+        if scheme == "reel", url.host == "debug-list" { DebugList.run(url, library: library); return }
         #endif
         if scheme == "reel", DeepLinks.handle(url, nav: nav, library: library, player: player, settings: settings) { return }
         if scheme != "reel", !settings.acceptVLCLinks {

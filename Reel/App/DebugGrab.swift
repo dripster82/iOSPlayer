@@ -4,6 +4,7 @@ import UIKit
 import Playback
 import MediaCore
 import Library
+import MediaSources
 
 /// A debug hook for the frame grab: `reel://debug-grab?file=<path under Demo>&from=<seconds>`.
 /// Takes ten frames a second apart from one open at 8×, then one precise thumbnail, and logs
@@ -81,6 +82,40 @@ enum DebugGrab {
             Diagnostics.log("debug", "precise thumbnail: \(thumb.map { "mean \(Int(FrameFingerprint($0)?.brightness ?? -1))" } ?? "nil") in \(String(format: "%.1f", Date().timeIntervalSince(t3)))s")
             let vlc = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
             Diagnostics.log("debug", "vlc grab log (\(vlc.count) chars): " + vlc.split(separator: "\n").suffix(40).joined(separator: " | "))
+        }
+    }
+}
+#endif
+
+#if DEBUG
+/// A debug hook that lists a source folder into the log: `reel://debug-list?path=Torrents&depth=2`
+/// (`source=<name>` picks a source; the first otherwise). For looking at how a library is laid out
+/// without the NAS's credentials ever leaving the device.
+@MainActor enum DebugList {
+    static func run(_ url: URL, library: LibraryStore) {
+        let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let path = q.first { $0.name == "path" }?.value ?? ""
+        let depth = q.first { $0.name == "depth" }?.value.flatMap(Int.init) ?? 1
+        let name = q.first { $0.name == "source" }?.value
+        let sources = library.sources()
+        guard let record = name.flatMap({ n in sources.first { $0.name.localizedCaseInsensitiveContains(n) } }) ?? sources.first else { Diagnostics.log("debug", "list: no source"); return }
+        let config = record.config, id = record.id, sourceName = record.name
+        Task.detached {
+            let src = SourceFactory.make(config)
+            do {
+                try await src.connect(credentials: CredentialStore.shared.load(for: id))
+                var lines: [String] = []
+                func walk(_ p: String, _ level: Int) async throws {
+                    let entries = try await src.list(p).sorted { ($0.isDirectory ? 0 : 1, $0.name) < ($1.isDirectory ? 0 : 1, $1.name) }
+                    for e in entries where !(e.isDirectory && DirectoryEntry.isSystemFolder(e.name)) {
+                        lines.append(String(repeating: "  ", count: level) + (e.isDirectory ? "[\(e.name)]" : "\(e.name) (\(e.size.map(MediaFormat.bytes) ?? "?"))"))
+                        if e.isDirectory, level + 1 < depth { try await walk(e.relativePath, level + 1) }
+                    }
+                }
+                try await walk(path, 0)
+                await src.disconnect()
+                Diagnostics.log("debug", "list \(sourceName):\(path) depth \(depth): \(lines.count) entries\n" + lines.joined(separator: "\n"))
+            } catch { Diagnostics.log("debug", "list \(sourceName):\(path) failed: \(error.localizedDescription)") }
         }
     }
 }
