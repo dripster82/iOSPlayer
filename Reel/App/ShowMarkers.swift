@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import UIKit
 import MediaCore
 import Playback
 import Sync
@@ -74,15 +75,50 @@ enum ShowMarkers {
             if let end = s.episodes[itemKey]?.introEnd { s.introLength = end - time }
             s.introPrints = []
         }
+        Diagnostics.log("player", "intro marked at \(Int(time))s for \(showKey.prefix(40))")
+        fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: time, softwareDecoding: softwareDecoding)
+    }
+
+    private static var fingerprinting: Set<String> = []
+
+    /// The marked episode whose intro still has no prints (the app was put away before they were
+    /// taken), so they can be taken when it next plays.
+    static func needsFingerprints(showKey: String, itemKey: String) -> TimeInterval? {
+        guard let s = show(showKey), s.introPrints.isEmpty, !fingerprinting.contains(showKey) else { return nil }
+        return s.episodes[itemKey]?.introStart
+    }
+
+    /// Takes the fingerprints of the intro from `time`: a frame every two seconds, each an open of
+    /// the file over the share, a couple of minutes in all. A background assertion keeps the app
+    /// running if it is put away meanwhile; the prints are stored only when all are in.
+    @MainActor
+    static func fingerprintIntro(showKey: String, itemKey: String, url: URL, time: TimeInterval, softwareDecoding: Bool) {
+        guard !fingerprinting.contains(showKey) else { return }
+        fingerprinting.insert(showKey)
+        let began = Date()
+        var assertion = UIBackgroundTaskIdentifier.invalid
+        assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro fingerprints") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
+        Diagnostics.log("player", "fingerprinting the intro of \(itemKey.prefix(40)) from \(Int(time))s: \(IntroLocator.count) frames")
         Task {
+            defer {
+                fingerprinting.remove(showKey)
+                if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
+            }
             var prints: [FrameFingerprint] = []
             for i in 0..<IntroLocator.count {
                 let at = time + TimeInterval(i) * IntroLocator.spacing
                 if let image = await ScrubThumbnails.frame(url: url, at: at, softwareDecoding: softwareDecoding), let p = FrameFingerprint(image) { prints.append(p) }
             }
             let usable = prints.filter { !$0.isFlat }.count
-            Diagnostics.log("player", "intro marked at \(Int(time))s for \(showKey.prefix(40)): \(prints.count) prints, \(usable) usable")
-            update(showKey: showKey) { $0.introPrints = prints }
+            guard prints.count >= IntroLocator.count / 2, usable >= 3 else {
+                Diagnostics.log("player", "intro prints for \(showKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
+                return
+            }
+            // Trim to the intro's length when the end is already marked.
+            var kept = prints
+            if let length = show(showKey)?.introLength { let keep = Int(length / IntroLocator.spacing); if keep >= 3, kept.count > keep { kept = Array(kept.prefix(keep)) } }
+            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(kept.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s")
+            update(showKey: showKey) { $0.introPrints = kept }
         }
     }
 
@@ -209,9 +245,14 @@ enum ShowMarkers {
         if !known.isEmpty { times.sort { a, b in let da = known.map { abs($0 - a) }.min()!, db = known.map { abs($0 - b) }.min()!; return da != db ? da < db : a < b } }
         searching.insert(itemKey)
         let began = Date()
+        var assertion = UIBackgroundTaskIdentifier.invalid
+        assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro search") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
         Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): \(times.count) frames up to \(Int(limit))s, every \(Int(step))s, nearest \(known.map { "\(Int($0))s" }.joined(separator: ", ")) first")
         Task {
-            defer { searching.remove(itemKey) }
+            defer {
+                searching.remove(itemKey)
+                if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
+            }
             var estimate: TimeInterval?
             var looked = 0
             for t in times {
@@ -236,7 +277,7 @@ enum ShowMarkers {
                     let d = p.distance(to: first)
                     if best == nil || d < best!.1 { best = (at, d) }
                 }
-                if let best, best.1 < IntroLocator.threshold { start = best.0 }
+                if let best, best.1 < IntroLocator.allowance(first, first) { start = best.0 }
             }
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
             Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")

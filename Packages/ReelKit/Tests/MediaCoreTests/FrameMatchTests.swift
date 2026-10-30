@@ -34,4 +34,17 @@ final class FrameMatchTests: XCTestCase {
         XCTAssertEqual(IntroLocator.estimateStart(samples: samples, targets: targets), 116)
         XCTAssertNil(IntroLocator.estimateStart(samples: Array(samples[0..<10]), targets: targets), "nothing close enough: no start")
     }
+
+    func testDarkCardsNeedACloserMatch() {
+        // Two credits cards: mostly black, a few light pixels in different places. Their mean
+        // difference is small in absolute terms but large against their own brightness.
+        let n = FrameFingerprint.width * FrameFingerprint.height
+        var a = [UInt8](repeating: 4, count: n), b = a
+        for i in stride(from: 40, to: 120, by: 3) { a[i] = 200 }
+        for i in stride(from: 300, to: 380, by: 3) { b[i] = 200 }
+        let pa = FrameFingerprint(luma: a), pb = FrameFingerprint(luma: b)
+        XCTAssertLessThan(pa.distance(to: pb), IntroLocator.threshold, "mostly black: a small absolute difference")
+        XCTAssertNil(IntroLocator.matches(pa, in: [pb]), "but not the same card")
+        XCTAssertNotNil(IntroLocator.matches(pa, in: [pa]))
+    }
 }

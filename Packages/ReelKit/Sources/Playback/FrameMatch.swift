@@ -32,6 +32,9 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
         guard let lo = luma.min(), let hi = luma.max() else { return true }
         return hi - lo < 24
     }
+
+    /// Mean grey level: how much picture there is to compare.
+    public var brightness: Double { luma.isEmpty ? 0 : Double(luma.reduce(0) { $0 + Int($1) }) / Double(luma.count) }
 }
 
 /// Finds a marked intro in another episode. The marks give `count` fingerprints `spacing` seconds
@@ -52,6 +55,14 @@ public enum IntroLocator {
     /// apart in the same sequence score 5–20; frames from different scenes score 40 and up.
     public static let threshold: Double = 24
 
+    /// The difference two frames may have and still be the same picture: the fixed threshold, or
+    /// half the brighter frame's mean level when that is less. Two credits cards, names on black,
+    /// differ by less than the threshold simply because both are mostly black; against their own
+    /// brightness (a mean of 15 or so) a different card is still far apart and the same card close.
+    public static func allowance(_ a: FrameFingerprint, _ b: FrameFingerprint) -> Double {
+        min(threshold, 0.5 * max(a.brightness, b.brightness))
+    }
+
     public struct Sample: Sendable { public var time: TimeInterval; public var print: FrameFingerprint; public init(time: TimeInterval, print: FrameFingerprint) { self.time = time; self.print = print } }
 
     /// The fingerprint nearest to `sample`, with its distance.
@@ -64,12 +75,18 @@ public enum IntroLocator {
         return best
     }
 
+    /// Whether `sample` shows the same picture as one of the fingerprints.
+    public static func matches(_ sample: FrameFingerprint, in targets: [FrameFingerprint]) -> (index: Int, distance: Double)? {
+        guard let (i, d) = nearest(sample, in: targets), d < allowance(sample, targets[i]) else { return nil }
+        return (i, d)
+    }
+
     /// Where the intro starts, from coarse samples: the sample closest to a fingerprint, when it
     /// is close enough, shifted back by that fingerprint's offset from the start.
     public static func estimateStart(samples: [Sample], targets: [FrameFingerprint]) -> TimeInterval? {
         var best: (time: TimeInterval, distance: Double)?
         for s in samples {
-            guard let (i, d) = nearest(s.print, in: targets), d < threshold else { continue }
+            guard let (i, d) = matches(s.print, in: targets) else { continue }
             let start = max(0, s.time - TimeInterval(i) * spacing)
             if best == nil || d < best!.distance { best = (start, d) }
         }

@@ -483,6 +483,11 @@ final class PlayerCoordinator: ObservableObject {
     /// The marked intro, looked for in this episode as soon as it plays: its answer is wanted
     /// before the titles come round, a minute or more in.
     private func scheduleIntroSearch(showKey: String, key: String, url: URL) {
+        // A marked episode whose prints were never taken (the app was put away too soon): take them now.
+        if let start = ShowMarkers.needsFingerprints(showKey: showKey, itemKey: key) {
+            ShowMarkers.fingerprintIntro(showKey: showKey, itemKey: key, url: url, time: start, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
+            return
+        }
         guard ShowMarkers.needsIntroSearch(showKey: showKey, itemKey: key) else { return }
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
