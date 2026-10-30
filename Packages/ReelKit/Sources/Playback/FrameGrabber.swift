@@ -11,6 +11,8 @@ import VLCKit
 /// one per step as they come off the decoder; a single frame comes from a precise seek.
 public final class FrameGrabber: @unchecked Sendable {
     public static var isAvailable: Bool { reel_thumb_available() }
+    /// Where the grabber reports what it gave up on; the app points it at its diagnostics log.
+    nonisolated(unsafe) public static var log: ((String) -> Void)?
     /// Sends the grab's libvlc messages (warnings and up) to a file, for diagnosis.
     public static func setLogPath(_ path: String?) { reel_grab_set_log_path(path) }
 
@@ -21,13 +23,26 @@ public final class FrameGrabber: @unchecked Sendable {
     private var unmanaged: Unmanaged<FrameGrabber>?
 
     /// Opens the file; nil when libvlc is not available or the stream cannot be set up.
+    private let url: URL
+
     public init?(url: URL, width: Int = 320, height: Int = 180, softwareDecoding: Bool = false) {
+        self.url = url
         #if canImport(VLCKit)
         self.width = width; self.height = height
-        // Pictures must reach memory as plain pixels: the hardware decoder's surfaces arrive blank
-        // through the memory output, so the grab always decodes in software (cheap at this size).
+        _ = softwareDecoding   // the grab always decodes in software: hardware surfaces arrive blank through the memory output
+        guard reel_thumb_available() else { return nil }
+        #else
+        return nil
+        #endif
+    }
+
+    /// A player of its own for each run. Restarting or seeking a player on an AVI whose index lies
+    /// about keyframes gives frozen or garbage pictures; a fresh input from a fresh player, started
+    /// before the wanted time, is the one way that has proved clean.
+    private func openSession() -> Bool {
+        #if canImport(VLCKit)
+        closeSession()
         let options = [":no-audio", ":network-caching=1500", ":no-spu", ":no-osd", ":avcodec-hw=none", ":no-videotoolbox"]
-        _ = softwareDecoding
         let cOptions = options.map { strdup($0) }
         defer { cOptions.forEach { free($0) } }
         let me = Unmanaged.passRetained(self)
@@ -38,12 +53,22 @@ public final class FrameGrabber: @unchecked Sendable {
                 grabber.deliver(pixels: pixels, width: Int(w), height: Int(h), stride: Int(stride), time: TimeInterval(time) / 1000)
             }, me.toOpaque())
         }
-        guard let handle else { me.release(); return nil }
-        session = handle
-        unmanaged = me
+        guard let handle else { me.release(); return false }
+        lock.lock(); session = handle; unmanaged = me; lock.unlock()
+        return true
         #else
-        return nil
+        return false
         #endif
+    }
+
+    private func closeSession() {
+        lock.lock()
+        let s = session; session = nil; onFrame = nil
+        let u = unmanaged; unmanaged = nil
+        lock.unlock()
+        guard let s else { return }
+        reel_grab_close(s)
+        u?.release()
     }
 
     private func deliver(pixels: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int, time: TimeInterval) {
@@ -52,46 +77,70 @@ public final class FrameGrabber: @unchecked Sendable {
         handler(image, time)
     }
 
-    /// Frames from `from`, one every `spacing` seconds, `count` of them, playing at `rate`. Returns
-    /// what arrived (in order) once the run is covered, or when nothing more comes for a while.
-    public func frames(from: TimeInterval, count: Int, spacing: TimeInterval, rate: Float = 8) async -> [(time: TimeInterval, image: CGImage)] {
-        guard let session else { return [] }
+    /// How far before a wanted time playback starts. Seeking into an AVI lands on whatever its index
+    /// calls a keyframe, which is not always one: the decoder then gives a garbage frame and a frozen
+    /// picture until the next real keyframe, up to ten seconds on. Every grab therefore starts a
+    /// fresh input this far back and discards the run-up, leaving only clean frames.
+    public static let leadIn: TimeInterval = 20   // XviD puts keyframes up to 12.5 s apart (300 frames at 23.976 fps)
+
+    /// VLC's output while the decoder has nothing yet (after a seek, until the next keyframe): a
+    /// uniform mid-grey. Not a picture from the file, so never kept.
+    static func isPlaceholder(_ image: CGImage) -> Bool {
+        guard let p = FrameFingerprint(image), let lo = p.luma.min(), let hi = p.luma.max() else { return false }
+        return hi - lo < 8 && p.brightness > 118 && p.brightness < 138
+    }
+
+    /// Frames from `from`, one every `spacing` seconds, `count` of them, playing at `rate`, from a
+    /// fresh start of the input. `each` sees every kept frame as it arrives and may return true to
+    /// stop early. Returns what arrived once the run is covered, or when nothing more comes for a while.
+    @discardableResult
+    public func frames(from: TimeInterval, count: Int, spacing: TimeInterval, rate: Float = 8, each: (@Sendable (TimeInterval, CGImage) -> Bool)? = nil) async -> [(time: TimeInterval, image: CGImage)] {
+        // The previous run's player is torn down off the main thread (libvlc blocks for it).
+        let opened: Bool = await Task.detached(priority: .utility) { [self] in openSession() }.value
+        guard opened, let session = lock.withLock({ session }) else { return [] }
         let targets = (0..<count).map { from + TimeInterval($0) * spacing }
         let end = targets.last ?? from
+        let begin = max(0, from - Self.leadIn)
         return await withCheckedContinuation { (continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>) in
             let state = RunState(continuation: continuation)
             lock.lock()
             onFrame = { [weak self] image, time in
                 guard let self else { return }
+                var stop = false
                 state.lock.lock()
-                defer { state.lock.unlock() }
-                guard !state.done else { return }
+                guard !state.done else { state.lock.unlock(); return }
                 state.lastFrameAt = Date()
-                // The start-time option is not always honoured; a first frame well before the run's
-                // start means the stream began at 0, so seek there once (the rate keeps up with it).
-                if !state.sought, time < from - 1.5 { state.sought = true; if let session = self.session { _ = reel_grab_seek(session, Int64(from * 1000)) }; return }
-                // The first frame at or past each target; frames before the first target are skipped.
-                // A frame that covers two targets is kept for both: every slot must have a print, or
-                // the prints after it sit at the wrong offsets.
+                state.delivered += 1
+                if state.delivered <= 3 || state.delivered % 50 == 0 { state.seen.append(time) }
+                // The start-time request is sometimes dropped and playback begins at 0: seek once.
+                if !state.sought, time < begin - 1.5 { state.sought = true; state.lock.unlock(); if let s = self.lock.withLock({ self.session }) { _ = reel_grab_seek(s, Int64(begin * 1000), true) }; return }
+                if Self.isPlaceholder(image) { state.placeholders += 1; state.lock.unlock(); return }
+                // The first frame at or past each target; the run-up before the first is skipped. A
+                // frame that covers two targets is kept for both, so every slot has a print.
                 while state.next < targets.count, time >= targets[state.next] - 0.05 {
                     state.collected.append((targets[state.next], image))
                     state.next += 1
+                    if let each, each(targets[state.next - 1], image) { stop = true; break }
                 }
-                if state.next >= targets.count || time >= end + spacing { state.finish(); self.clearHandler() }
+                if stop || state.next >= targets.count || time >= end + spacing { state.finish() }
+                state.lock.unlock()
+                if stop || state.next >= targets.count || time >= end + spacing { self.clearHandler() }
             }
             lock.unlock()
-            playing = true
-            if reel_grab_play(session, Int64(from * 1000), rate) != 0 { state.lock.withLock { state.finish() }; clearHandler(); return }
+            if reel_grab_play(session, Int64(begin * 1000), rate) != 0 { state.lock.withLock { state.finish() }; clearHandler(); return }
             // Give up when frames stop arriving (a stream that will not open, a stuck decoder).
             Task.detached { [weak self] in
-                let budget = max(20, (end - from) / TimeInterval(max(rate, 1)) + 20)
+                let budget = max(20, (end - begin) / TimeInterval(max(rate, 1)) + 20)
                 let started = Date()
                 while true {
                     try? await Task.sleep(for: .seconds(2))
                     let outcome: Int = state.lock.withLock {
                         if state.done { return 0 }
                         let stale = Date().timeIntervalSince(state.lastFrameAt ?? started) > 15 || Date().timeIntervalSince(started) > budget
-                        if stale { state.finish(); return 1 }
+                        if stale {
+                            Self.log?("grab from \(Int(begin))s gave up after \(Int(Date().timeIntervalSince(started)))s: \(state.delivered) frames delivered (\(state.placeholders) placeholders), \(state.collected.count) kept, times seen \(state.seen.map { Int($0) })")
+                            state.finish(); return 1
+                        }
                         return 2
                     }
                     if outcome == 0 { return }
@@ -101,66 +150,31 @@ public final class FrameGrabber: @unchecked Sendable {
         }
     }
 
-    /// Seeks precisely to `seconds` and returns the next frame that arrives from there, or nil
-    /// after a timeout. The session must be playing (`frames` or a prior `frame`).
-    public func frame(at seconds: TimeInterval, timeout: TimeInterval = 15) async -> CGImage? {
-        guard let session else { return nil }
-        if !playing { if reel_grab_play(session, Int64(seconds * 1000), 1) != 0 { return nil }; playing = true }
-        return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
-            let one = OneState(continuation: continuation)
-            lock.lock()
-            onFrame = { [weak self] image, time in
-                // A frame from before the seek landed (the old position) is not the one.
-                guard time >= seconds - 1.5, time <= seconds + 4 else { return }
-                // The first picture or two after a seek can be the output's flush (all black); a
-                // flat frame is only taken once a few have come, in case the scene really is black.
-                let arrived: Int = one.lock.withLock { one.arrived += 1; return one.arrived }
-                if arrived < 4, let p = FrameFingerprint(image), p.isFlat { return }
-                let first: Bool = one.lock.withLock { let f = !one.done; one.done = true; return f }
-                if first { continuation.resume(returning: image); self?.clearHandler() }
-            }
-            lock.unlock()
-            _ = reel_grab_seek(session, Int64(seconds * 1000))
-            Task.detached { [weak self] in
-                try? await Task.sleep(for: .seconds(timeout))
-                let first: Bool = one.lock.withLock { let f = !one.done; one.done = true; return f }
-                if first { continuation.resume(returning: nil); self?.clearHandler() }
-            }
-        }
+    /// The first clean frame at or after `seconds`, with its time: a fresh start 12 s back, the
+    /// run-up discarded. About two seconds over a share.
+    public func frame(at seconds: TimeInterval) async -> (time: TimeInterval, image: CGImage)? {
+        await frames(from: seconds, count: 1, spacing: 1).first
     }
-    private var playing = false
-
     private func clearHandler() { lock.lock(); onFrame = nil; lock.unlock() }
 
     /// Stops and releases the stream. Blocks for libvlc's teardown; run it off the main thread.
-    public func close() {
-        lock.lock()
-        let s = session; session = nil; onFrame = nil
-        lock.unlock()
-        guard let s else { return }
-        reel_grab_close(s)
-        unmanaged?.release(); unmanaged = nil
-    }
-    deinit { if session != nil { close() } }
+    public func close() { closeSession() }
+    deinit { closeSession() }
 
     private final class RunState: @unchecked Sendable {
         let lock = NSLock()
         var collected: [(TimeInterval, CGImage)] = []
         var next = 0
         var done = false
-        var sought = false
         var lastFrameAt: Date?
+        var delivered = 0
+        var placeholders = 0
+        var sought = false
+        var seen: [TimeInterval] = []
         private var continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>?
         init(continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>) { self.continuation = continuation }
         /// Caller holds `lock`.
         func finish() { guard !done else { return }; done = true; let c = continuation; continuation = nil; c?.resume(returning: collected) }
-    }
-    private final class OneState: @unchecked Sendable {
-        let lock = NSLock()
-        var done = false
-        var arrived = 0
-        let continuation: CheckedContinuation<CGImage?, Never>
-        init(continuation: CheckedContinuation<CGImage?, Never>) { self.continuation = continuation }
     }
 
     static func image(rgba: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int) -> CGImage? {

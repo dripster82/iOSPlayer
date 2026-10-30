@@ -36,6 +36,7 @@ struct ReelApp: App {
         _library = StateObject(wrappedValue: store)
         let sync = SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID)
         SyncEngine.documents = ShowMarkersSync()
+        FrameGrabber.log = { Diagnostics.log("player", $0) }
         ShowMarkers.retryEarlySearchesOnce()
         ShowMarkers.onChange = { [weak sync] in Task { @MainActor in sync?.pushPendingChanges() } }
         _sync = StateObject(wrappedValue: sync)
@@ -78,6 +79,7 @@ struct ReelApp: App {
         // reel://debug-grab?file=Films/Aurora%20Over%20the%20Fjord%20(2021).mp4&from=30 — exercises the one-open
         // frame grab and the precise thumbnail on a bundled sample, logging what came back.
         if scheme == "reel", url.host == "debug-grab" { DebugGrab.run(url); return }
+        if scheme == "reel", url.host == "debug-grab-current" { DebugGrab.runCurrent(url, player: player, library: library); return }
         #endif
         if scheme == "reel", DeepLinks.handle(url, nav: nav, library: library, player: player, settings: settings) { return }
         if scheme != "reel", !settings.acceptVLCLinks {

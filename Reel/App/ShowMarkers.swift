@@ -115,11 +115,12 @@ enum ShowMarkers {
         /// Where sampled frames are written as JPEGs for a look (Debug builds), or nil.
         var dumpFolder: URL?
 
-        func frame(at seconds: TimeInterval) async -> FrameFingerprint? {
-            if let grabber, let image = await grabber.frame(at: seconds), let p = FrameFingerprint(image), !p.isFlat { usedSession = true; dump(image, at: seconds, how: "grab"); return p }
-            guard let image = await ScrubThumbnails.frame(url: url, at: seconds, softwareDecoding: software, precise: true) else { return nil }
+        /// A clean frame at or just after `seconds`, with the time it is really from.
+        func frame(at seconds: TimeInterval) async -> (time: TimeInterval, print: FrameFingerprint)? {
+            if let grabber, let got = await grabber.frame(at: seconds), let p = FrameFingerprint(got.image) { usedSession = true; dump(got.image, at: got.time, how: "grab"); return (got.time, p) }
+            guard let image = await ScrubThumbnails.frame(url: url, at: seconds, softwareDecoding: software, precise: true), let p = FrameFingerprint(image) else { return nil }
             dump(image, at: seconds, how: "thumb")
-            return FrameFingerprint(image)
+            return (seconds, p)
         }
 
         private func dump(_ image: CGImage, at seconds: TimeInterval, how: String) {
@@ -130,10 +131,30 @@ enum ShowMarkers {
             #endif
         }
 
+        /// A frame a second from `from`, each handed to `each` (return true to stop) as it comes off
+        /// a fresh start of the input. Returns false when no session could give frames.
+        func scan(from: TimeInterval, count: Int, each: @escaping @Sendable (TimeInterval, FrameFingerprint) -> Bool) async -> Bool {
+            guard let grabber else { return false }
+            let dumpFolder = self.dumpFolder
+            let got = await grabber.frames(from: from, count: count, spacing: 1, rate: 12) { time, image in
+                guard let p = FrameFingerprint(image) else { return false }
+                if let dumpFolder, Int(time) % 10 == 0 { Self.dumpImage(image, at: time, how: "scan", to: dumpFolder) }
+                return each(time, p)
+            }
+            usedSession = !got.isEmpty
+            return !got.isEmpty
+        }
+        static func dumpImage(_ image: CGImage, at seconds: TimeInterval, how: String, to folder: URL) {
+            #if DEBUG
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) { try? data.write(to: folder.appendingPathComponent("\(Int(seconds))s-\(how).jpg")) }
+            #endif
+        }
+
         /// libvlc's teardown blocks, so it runs off the main thread.
         func close() async { guard let grabber else { return }; await Task.detached(priority: .utility) { grabber.close() }.value }
     }
-    static let printsVersion = 4   // 4: every slot kept, so the offsets are right
+    static let printsVersion = 6   // 6: taken after a 20 s run-up, past the decoder's grey placeholder
 
     /// The marked episode whose intro still has no prints (the app was put away before they were
     /// taken), so they can be taken when it next plays.
@@ -217,7 +238,7 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v6"
+        let key = "reel.showMarkers.retrySearch.v9"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
@@ -245,10 +266,8 @@ enum ShowMarkers {
             while searching.contains(itemKey), waited < 120 { try? await Task.sleep(for: .seconds(5)); waited += 1 }
             var samples: [IntroLocator.Sample] = []
             let grab = Grab(url: url, softwareDecoding: softwareDecoding)
-            for dt in stride(from: -20.0, through: 20, by: 4) {
-                guard DeviceConditions.allowsBackgroundWork else { await grab.close(); return }
-                if let p = await grab.frame(at: max(0, estimate + dt)) { samples.append(.init(time: max(0, estimate + dt), print: p)) }
-            }
+            guard DeviceConditions.allowsBackgroundWork else { await grab.close(); return }
+            _ = await grab.scan(from: max(0, estimate - 20), count: 41) { time, p in samples.append(.init(time: time, print: p)); return false }
             await grab.close()
             let exact = IntroLocator.estimateStart(samples: samples, targets: prints, spacing: IntroLocator.provisionalSpacing)
             Diagnostics.log("player", "credits prints in \(itemKey.prefix(40)): \(exact.map { "matched at \(Int($0))s" } ?? "no match"), estimate \(Int(estimate))s")
@@ -286,6 +305,12 @@ enum ShowMarkers {
     }
 
     private static var searching: Set<String> = []
+    /// What the continuous pass has seen so far: the last three matching frames and the start they imply.
+    private final class Found: @unchecked Sendable {
+        var recent: [(TimeInterval, TimeInterval, Double)] = []
+        var start: TimeInterval?
+        var looked = 0
+    }
     /// True while the marked intro is being looked for in this episode; the heavier scans wait.
     static func isSearchingIntro(itemKey: String) -> Bool { searching.contains(itemKey) }
 
@@ -299,75 +324,63 @@ enum ShowMarkers {
         // Intros start within the first few minutes, after a cold open of any length. The file's
         // duration is often still unknown this early, so it only ever shrinks the window.
         let limit = duration > 0 ? min(600, max(120, duration / 4)) : 600
-        // A frame every step through the window (the step is just under the span the prints cover,
-        // so one frame per step is enough), taken nearest the marked episodes' intro starts first:
-        // each frame is an open of the file over the share, seconds apart, and the answer is wanted
-        // before the titles arrive.
         let spacing = s.printSpacing ?? IntroLocator.provisionalSpacing
-        let step = IntroLocator.coarseStep(forPrints: prints.count, spacing: spacing)
+        // One continuous pass, a frame a second against the prints: from a little before the nearest
+        // marked start (an episode's cold open is usually about the same length), then from the top.
         let known = s.episodes.values.compactMap { $0.introStart ?? $0.locatedIntro }.sorted()
-        var times = Array(stride(from: 0, through: limit, by: step))
-        if !known.isEmpty { times.sort { a, b in let da = known.map { abs($0 - a) }.min()!, db = known.map { abs($0 - b) }.min()!; return da != db ? da < db : a < b } }
+        let nearestKnown = known.min() ?? 0
+        let firstFrom = max(0, nearestKnown - length - 20)
         searching.insert(itemKey)
         let began = Date()
         var assertion = UIBackgroundTaskIdentifier.invalid
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro search") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
-        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): \(times.count) frames up to \(Int(limit))s, every \(Int(step))s, nearest \(known.map { "\(Int($0))s" }.joined(separator: ", ")) first")
+        Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): a frame a second from \(Int(firstFrom))s to \(Int(limit))s, then from the top")
         Task {
             defer {
                 searching.remove(itemKey)
                 if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
             }
-            var estimate: TimeInterval?
-            var looked = 0
             let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             #if DEBUG
             let dump = Diagnostics.fileURL.deletingLastPathComponent().appendingPathComponent("intro-search", isDirectory: true).appendingPathComponent(String(itemKey.suffix(8)), isDirectory: true)
             try? FileManager.default.removeItem(at: dump)
             grab.dumpFolder = dump
             #endif
-            for t in times {
+            // A start is accepted when three frames in a row agree on it to within 1.5 s: one
+            // matching picture can be a coincidence, three consistent ones are the titles.
+            let seen = Found()
+            let stretches: [(TimeInterval, TimeInterval)] = firstFrom > 0 ? [(firstFrom, limit), (0, firstFrom)] : [(0, limit)]
+            var looked = 0
+            for (from, to) in stretches where seen.start == nil {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
-                if let p = await grab.frame(at: t) {
-                    looked += 1
-                    let near = IntroLocator.nearest(p, in: prints)
-                    Diagnostics.log("player", "  \(Int(t))s: nearest print \(near?.index ?? -1) (\(String(format: "%.1f", TimeInterval(near?.index ?? 0) * spacing))s in) at \(String(format: "%.2f", near?.similarity ?? 0)), frame mean \(Int(p.brightness))\(p.isFlat ? " flat" : "")")
-                    guard let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) else { continue }
-                    // One picture can be a coincidence (a dark frame, a face in close-up); a second,
-                    // ten seconds further into the titles, must match its own print too.
-                    let checkIndex = min(prints.count - 1, Int(10 / spacing))
-                    let checkAt = start + TimeInterval(checkIndex) * spacing
-                    if let q = await grab.frame(at: checkAt), let (i, sim) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(3 / spacing) {
-                        // Two readings of the start: the second is usually the sharper one.
-                        let second = checkAt - TimeInterval(i) * spacing
-                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed at \(Int(checkAt))s (print \(i), similarity \(String(format: "%.2f", sim))); start \(String(format: "%.1f", (start + second) / 2))s")
-                        estimate = (start + second) / 2; break
+                let count = Int(to - from) + 1
+                guard count > 0 else { continue }
+                let got = await grab.scan(from: from, count: count) { time, print in
+                    seen.looked += 1
+                    guard let (i, sim) = IntroLocator.matches(print, in: prints) else { seen.recent = []; return false }
+                    let start = time - TimeInterval(i) * spacing
+                    seen.recent.append((time, start, sim))
+                    if seen.recent.count > 3 { seen.recent.removeFirst() }
+                    let starts = seen.recent.map(\.1)
+                    if starts.count == 3, (starts.max()! - starts.min()!) <= 1.5 {
+                        seen.start = starts.sorted()[1]
+                        Diagnostics.log("player", "intro frames at " + seen.recent.map { "\(Int($0.0))s (print \(Int(($0.0 - $0.1) / spacing)), \(String(format: "%.2f", $0.2)))" }.joined(separator: ", ") + " agree")
+                        return true
                     }
-                    Diagnostics.log("player", "intro candidate at \(Int(start))s not confirmed at \(Int(checkAt))s; looking on")
+                    return false
                 }
+                looked = seen.looked
+                if !got { Diagnostics.log("player", "intro pass \(Int(from))–\(Int(to))s gave no frames") }
             }
-            guard var start = estimate else {
-                await grab.close()
+            await grab.close()
+            guard let start = seen.start else {
                 updateEpisode(showKey: showKey, itemKey: itemKey) { $0.introSearched = true }
                 Diagnostics.log("player", "intro not found in \(itemKey.prefix(40)) after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
                 found(nil)
                 return
             }
-            // Settle the start against the first fingerprint, either side of the estimate (only
-            // worth a look for the coarse provisional prints).
-            if spacing >= 1, let first = prints.first, !first.isFlat {
-                var best: (TimeInterval, Double)?
-                for dt in [-1.0, 0, 1] {
-                    let at = max(0, start + dt)
-                    guard let p = await grab.frame(at: at) else { continue }
-                    let sim = p.similarity(to: first)
-                    if best == nil || sim > best!.1 { best = (at, sim) }
-                }
-                if let best, best.1 >= IntroLocator.minimumSimilarity { start = best.0 }
-            }
-            await grab.close()
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
-            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
+            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(String(format: "%.1f", start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s")
             found(.init(start: start, end: start + length))
         }
     }

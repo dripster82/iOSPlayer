@@ -36,8 +36,9 @@ void *reel_grab_open(void *libvlc_instance, const char *mrl, const char *const *
                      unsigned width, unsigned height, reel_grab_frame_cb callback, void *context);
 /// Starts playing from `from_ms` at `rate` (1 is normal). Returns 0 on success.
 int reel_grab_play(void *session, long long from_ms, float rate);
-/// A precise seek while playing. Returns 0 on success.
-int reel_grab_seek(void *session, long long time_ms);
+/// A seek while playing: `fast` lands on the keyframe before the time (the decoder then plays
+/// cleanly from there), precise asks for the exact time. Returns 0 on success.
+int reel_grab_seek(void *session, long long time_ms, bool fast);
 void reel_grab_set_rate(void *session, float rate);
 /// Stops and releases the session. Blocks until libvlc has let go; call off the main thread.
 void reel_grab_close(void *session);

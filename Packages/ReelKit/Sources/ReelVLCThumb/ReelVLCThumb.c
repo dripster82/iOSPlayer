@@ -172,10 +172,10 @@ int reel_grab_play(void *session, long long from_ms, float rate) {
     return r;
 }
 
-int reel_grab_seek(void *session, long long time_ms) {
+int reel_grab_seek(void *session, long long time_ms, bool fast) {
     reel_grab_session *s = session;
     if (s == NULL) return -1;
-    return libvlc_media_player_set_time(s->player, (libvlc_time_t)time_ms, false);
+    return libvlc_media_player_set_time(s->player, (libvlc_time_t)time_ms, fast);
 }
 
 void reel_grab_set_rate(void *session, float rate) {
@@ -202,7 +202,7 @@ void *reel_grab_open(void *instance, const char *mrl, const char *const *options
     return NULL;
 }
 int reel_grab_play(void *session, long long from_ms, float rate) { (void)session; (void)from_ms; (void)rate; return -1; }
-int reel_grab_seek(void *session, long long time_ms) { (void)session; (void)time_ms; return -1; }
+int reel_grab_seek(void *session, long long time_ms, bool fast) { (void)session; (void)time_ms; (void)fast; return -1; }
 void reel_grab_set_rate(void *session, float rate) { (void)session; (void)rate; }
 void reel_grab_close(void *session) { (void)session; }
 void reel_grab_set_log_path(const char *path) { (void)path; }
