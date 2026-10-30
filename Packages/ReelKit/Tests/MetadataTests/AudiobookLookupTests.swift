@@ -16,7 +16,7 @@ final class AudiobookLookupTests: XCTestCase {
        "product_images":{"500":"https://m.media-amazon.com/images/I/51sj8Te8iZL._SL500_.jpg","1000":"https://m.media-amazon.com/images/I/51sj8Te8iZL._SL1000_.jpg"},
        "publisher_name":"Transworld Digital","publisher_summary":"<p>Mars &amp; beyond.<br/>A tale.</p>"},
       {"asin":"B008646FZ6","title":"The Long Earth","subtitle":"The astonishing number one bestseller",
-       "authors":[{"name":"Terry Pratchett"},{"name":"Stephen Baxter"}],"narrators":[{"name":"Michael Fenton Stevens"}],
+       "authors":[{"name":"Terry Pratchett"},{"name":"Stephen Baxter"},{"name":"Ben Aaronovitch - introduction"}],"narrators":[{"name":"Michael Fenton Stevens"}],
        "series":[{"sequence":"1","title":"The Long Earth"}],"release_date":"2012-06-21","runtime_length_min":690,
        "product_images":{"500":"https://m.media-amazon.com/images/I/51fNpFSZRmL._SL500_.jpg"}}
     ]}
@@ -38,6 +38,7 @@ final class AudiobookLookupTests: XCTestCase {
         XCTAssertEqual(mars.coverURL, "https://m.media-amazon.com/images/I/51sj8Te8iZL._SL1000_.jpg", "the largest image offered")
         XCTAssertEqual(mars.summary, "Mars & beyond.\nA tale.")
         XCTAssertEqual(hits[1].subtitle, "The astonishing number one bestseller")
+        XCTAssertEqual(hits[1].authors, ["Terry Pratchett", "Stephen Baxter"], "a contributor with a role is not an author")
         XCTAssertTrue(t.calls[0].host?.hasSuffix("audible.co.uk") ?? false)
         XCTAssertTrue(t.calls[0].query?.contains("author=Terry") ?? false)
     }

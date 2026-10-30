@@ -103,7 +103,11 @@ public actor AudibleCatalogClient {
 
     static func hit(_ p: [String: Any]) -> AudiobookHit? {
         guard let asin = p["asin"] as? String, let title = p["title"] as? String else { return nil }
-        func names(_ key: String) -> [String] { ((p[key] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String } }
+        // "Ben Aaranovitch - introduction", "X - translator": contributors with a role are not the author.
+        func names(_ key: String) -> [String] {
+            ((p[key] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
+                .filter { $0.range(of: #"(?i)\s[-–]\s*(introduction|foreword|afterword|translator|editor|illustrator|contributor|adapt\w*)\s*$"#, options: .regularExpression) == nil }
+        }
         let series = (p["series"] as? [[String: Any]])?.first
         let images = p["product_images"] as? [String: Any]
         let cover = (images?["1000"] ?? images?["500"]) as? String

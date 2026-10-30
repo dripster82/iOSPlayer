@@ -391,7 +391,10 @@ public final class LibraryStore: ObservableObject {
         if trust || book.title.isEmpty { book.title = hit.title; book.sortTitle = MediaItem.makeSortTitle(hit.title) }
         if let a = hit.authorLine, trust || book.author == nil { book.author = a }
         if let n = hit.narratorLine, trust || book.narrator == nil { book.narrator = n }
-        if let s = hit.series { book.seriesName = s; book.seriesIndex = hit.seriesIndex ?? (manual ? nil : book.seriesIndex) }
+        // The tags' series stands on an automatic match: Audible files a book under its own series
+        // names ("Vatta Universe", a "City Watch" sub-series) where the edition's tags say "Vatta's War".
+        if let s = hit.series, trust || book.seriesName == nil { book.seriesName = s; book.seriesIndex = hit.seriesIndex ?? (manual ? nil : book.seriesIndex) }
+        else if let mine = book.seriesName, book.seriesIndex == nil, let i = hit.seriesIndex, let theirs = hit.series, MediaItem.makeSortTitle(mine) == MediaItem.makeSortTitle(theirs) { book.seriesIndex = i }
         else if manual { book.seriesName = nil; book.seriesIndex = nil }
         if let y = hit.year, trust || book.year == nil { book.year = y }
         if let s = hit.summary, !s.isEmpty { book.overview = s }
@@ -403,6 +406,17 @@ public final class LibraryStore: ObservableObject {
         book.pendingSync = true; book.updatedAt = Date()
         try? context.save()
         invalidateCaches(); objectWillChange.send(); notifySync()
+    }
+    /// Once per device: books matched by an earlier build, whose catalogue series overwrote the
+    /// tags', read their tags again and are looked up again under the current rules.
+    public func redoBookLookupsOnce(key: String) {
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        var n = 0
+        for book in items(kind: .audiobook, includeHidden: true) where book.bookLookup == "matched" {
+            book.tagsRead = false; book.bookLookup = nil; book.pendingSync = true; book.updatedAt = Date(); n += 1
+        }
+        if n > 0 { try? context.save(); Diagnostics.log("library", "redoing tags and catalogue lookups for \(n) books") }
+        UserDefaults.standard.set(true, forKey: key)
     }
     /// Nothing in the catalogues was close enough; the names and tags stand, and Fix match waits.
     public func markBookUnmatched(_ book: MediaItem) {
