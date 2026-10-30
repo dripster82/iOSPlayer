@@ -33,6 +33,12 @@ final class FrameMatchTests: XCTestCase {
         samples[15] = IntroLocator.Sample(time: 120, print: print(seed: 12))   // same picture as fingerprint 2
         XCTAssertEqual(IntroLocator.estimateStart(samples: samples, targets: targets, spacing: 2), 116)
         XCTAssertEqual(IntroLocator.coarseStep(forPrints: 55, spacing: 1), 52, "a 54 s set of prints: one sample every 52 s lands in it")
+        XCTAssertEqual(IntroLocator.coarseStep(forPrints: 221, spacing: 0.25), 53)
+        let encoded = try! JSONEncoder().encode(print(seed: 3))
+        XCTAssertLessThan(encoded.count, 900, "a print is stored as bytes, not an array of numbers")
+        XCTAssertEqual(try! JSONDecoder().decode(FrameFingerprint.self, from: encoded), print(seed: 3))
+        let old = Data("{\"luma\":[\(Array(repeating: "7", count: 32 * 18).joined(separator: ","))]}".utf8)
+        XCTAssertEqual(try! JSONDecoder().decode(FrameFingerprint.self, from: old).luma.count, 32 * 18, "the earlier array form still reads")
         XCTAssertEqual(IntroLocator.coarseStep(forPrints: 20, spacing: 2), 36)
         XCTAssertNil(IntroLocator.estimateStart(samples: Array(samples[0..<10]), targets: targets), "nothing close enough: no start")
     }

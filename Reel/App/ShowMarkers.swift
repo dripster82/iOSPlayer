@@ -121,7 +121,7 @@ enum ShowMarkers {
         /// libvlc's teardown blocks, so it runs off the main thread.
         func close() async { guard let grabber else { return }; await Task.detached(priority: .utility) { grabber.close() }.value }
     }
-    static let printsVersion = 2
+    static let printsVersion = 3   // 3: four prints a second over the whole intro
 
     /// The marked episode whose intro still has no prints (the app was put away before they were
     /// taken), so they can be taken when it next plays.
@@ -203,7 +203,7 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v2"
+        let key = "reel.showMarkers.retrySearch.v3"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
@@ -330,8 +330,9 @@ enum ShowMarkers {
                 found(nil)
                 return
             }
-            // Settle the start against the first fingerprint, either side of the estimate.
-            if let first = prints.first, !first.isFlat {
+            // Settle the start against the first fingerprint, either side of the estimate (only
+            // worth a look for the coarse provisional prints).
+            if spacing >= 1, let first = prints.first, !first.isFlat {
                 var best: (TimeInterval, Double)?
                 for dt in [-1.0, 0, 1] {
                     let at = max(0, start + dt)

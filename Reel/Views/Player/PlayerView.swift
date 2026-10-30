@@ -654,7 +654,7 @@ struct TrackSheet: View {
                 if let show, let l = show.introLength, l >= 10 {
                     let state = show.introPrints.isEmpty
                         ? (player.current?.show.map { ShowMarkers.isFingerprinting(showKey: $0.itemKey) } ?? false ? ", fingerprinting…" : ", no frames yet: play the marked episode again")
-                        : ", \(show.introPrints.count) frames \(Int(show.printSpacing ?? 2)) s apart to look for"
+                        : ", \(show.introPrints.count) frames to look for"
                     Text("Intro: \(Int(l)) s long" + state)
                 }
                 if let show, let l = show.creditsLength { Text("Credits: \(Int(l)) s long") }

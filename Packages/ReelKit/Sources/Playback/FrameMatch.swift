@@ -10,6 +10,19 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
 
     public init(luma: [UInt8]) { self.luma = luma }
 
+    // Stored as bytes (base64 in JSON): a few hundred prints per show must stay small enough to
+    // sync. Earlier builds wrote the array of numbers, which still reads.
+    private enum Keys: String, CodingKey { case luma, bytes }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        if let data = try c.decodeIfPresent(Data.self, forKey: .bytes) { luma = [UInt8](data) }
+        else { luma = try c.decode([UInt8].self, forKey: .luma) }
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(Data(luma), forKey: .bytes)
+    }
+
     public init?(_ image: CGImage) {
         let w = Self.width, h = Self.height
         var pixels = [UInt8](repeating: 0, count: w * h)
@@ -41,15 +54,16 @@ public struct FrameFingerprint: Codable, Equatable, Sendable {
 /// apart from the intro's start; a scan of the episode's opening minutes supplies samples, and the
 /// best sample that matches one of the fingerprints places the start.
 public enum IntroLocator {
-    /// Seconds between the fingerprints taken from a marked intro whose length is known: a frame a
-    /// second over the whole of it, so a sample from another episode that lands anywhere in the
-    /// titles is within half a second of a print.
-    public static let spacing: TimeInterval = 1
+    /// Seconds between the fingerprints taken from a marked intro whose length is known: four a
+    /// second over the whole of it. Title sequences cut fast (frames a second apart differ by 40–80
+    /// grey levels), so a sample from another episode must land within an eighth of a second of a
+    /// print to be recognised. The frames come off the decoder anyway; keeping more costs nothing.
+    public static let spacing: TimeInterval = 0.25
     /// Spacing when only the start is marked (the length is not known yet): 2 s over `count` frames.
     public static let provisionalSpacing: TimeInterval = 2
     public static let count = 20
-    /// The most prints a show keeps: two minutes of titles at a second each.
-    public static let maxCount = 120
+    /// The most prints a show keeps: a hundred seconds of titles at four a second.
+    public static let maxCount = 400
     /// Coarse scan step for a set of prints: two seconds short of the span they cover, so one
     /// sample per step is enough to land in the intro, and never under 8 s. Every frame of the
     /// scan is an open of the file over the share, seconds each, so the span sets the pace.
