@@ -77,6 +77,8 @@ enum LibraryRoute: Hashable {
     case smart(UUID)
     /// Search as a page: on the phone it is a button in every tab's top bar, not a tab of its own.
     case search
+    /// Watch history: a sidebar item on the iPad, the clock beside Search on the phone's Home.
+    case history
 }
 
 /// Who was tapped in a cast row. The TMDb id is 0 for cast recorded before ids were kept; the
@@ -98,6 +100,7 @@ struct LibraryRouteDestination: View {
         case .collections: CollectionsView()
         case .settings: SettingsView()
         case .needsReview: NeedsReviewView()
+        case .history: HistoryView()
         case .person(let p): PersonView(person: p)
         case .universe(let name): UniverseView(name: name)
         case .filmCollection(let id): FilmCollectionView(id: id)
@@ -140,17 +143,20 @@ struct ItemDestination: View {
 /// The magnifier in a tab's top bar on the phone, where Search has no tab. The iPad has it in the sidebar.
 struct SearchButton: ViewModifier {
     @Environment(\.horizontalSizeClass) private var sizeClass
+    var history = false
     func body(content: Content) -> some View {
         content.toolbar {
             if sizeClass == .compact {
                 ToolbarItem(placement: .topBarLeading) { NavigationLink(value: LibraryRoute.search) { Image(systemName: "magnifyingglass") } }
+                if history { ToolbarItem(placement: .topBarTrailing) { NavigationLink(value: LibraryRoute.history) { Image(systemName: "clock") } } }
             }
         }
     }
 }
 
 extension View {
-    func searchButton() -> some View { modifier(SearchButton()) }
+    /// The magnifier on compact widths; `history` adds the clock (Home only).
+    func searchButton(history: Bool = false) -> some View { modifier(SearchButton(history: history)) }
 
     /// Attach once per NavigationStack so `NavigationLink(value: itemKey)` works everywhere beneath.
     func itemNavigation() -> some View {

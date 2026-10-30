@@ -89,7 +89,6 @@ struct SettingsView: View {
                 NavigationLink { NeedsReviewView() } label: { LabeledContent("Needs Review", value: "\(reviewCount) items") }
                 NavigationLink { CodecsView() } label: { Label("Codecs and formats", systemImage: "waveform.badge.magnifyingglass") }
                 NavigationLink { HiddenItemsView() } label: { LabeledContent("Hidden items", value: "\(hiddenCount)") }
-                NavigationLink { HistoryView() } label: { Text("Watch history") }
             }
 
             Section {
@@ -199,9 +198,10 @@ struct HistoryView: View {
                 if let item = library.item(ws.itemKey) {
                     NavigationLink(value: item.itemKey) {
                         HStack(spacing: 12) {
-                            ArtworkImage.Placeholder(title: item.title).frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 6))
-                            VStack(alignment: .leading) {
+                            ArtworkImage(url: (item.kind == .episode ? item.show : item)?.posterURL ?? item.posterURL, title: item.title, aspect: item.isAudiobookPart || item.kind == .audiobook ? 1 : 2 / 3, cornerRadius: 6).frame(width: 44, height: item.isAudiobookPart || item.kind == .audiobook ? 44 : 66)
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text(item.kind == .episode ? (item.show?.title ?? item.title) : item.title).font(.subheadline.weight(.semibold))
+                                if item.kind == .episode, !item.isAudiobookPart { Text(item.title).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                                 Text([item.episodeCode, ws.watched ? "Finished" : ws.progress.map { "\(Int($0 * 100))%" }, ws.lastPlayedAt?.formatted(.relative(presentation: .named))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -210,8 +210,9 @@ struct HistoryView: View {
             }
         }
         .overlay { if states.isEmpty { ContentUnavailableView("No history yet", systemImage: "clock") } }
-        .navigationTitle("Watch history")
+        .navigationTitle("History")
         .toolbar { Button("Clear") { confirmClear = true }.disabled(states.isEmpty) }
+        .searchButton()
         .confirmationDialog("Clear watch history?", isPresented: $confirmClear) {
             Button("Clear history", role: .destructive) { states.forEach { library.context.delete($0) }; try? library.context.save() }
         }

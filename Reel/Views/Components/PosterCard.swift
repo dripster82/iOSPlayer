@@ -34,7 +34,7 @@ struct PosterCard: View {
                         .foregroundStyle(.black).padding(6)
                 }
             }
-            Text(item.title).font(.footnote.weight(.semibold)).lineLimit(1)
+            Text(item.kind == .episode ? (item.show?.title ?? item.title) : item.title).font(.footnote.weight(.semibold)).lineLimit(1)
             Text(subtitle ?? defaultSubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .contentShape(Rectangle())
@@ -44,7 +44,7 @@ struct PosterCard: View {
         switch item.kind {
         case .show: item.seasonsLabel
         case .film: [item.year.map(String.init), library.preferredFile(item)?.resolution].compactMap { $0 }.joined(separator: " · ")
-        case .episode: item.show?.kind == .audiobook ? "Part \(item.episodeNumber ?? 0)" : (item.episodeCode ?? "")
+        case .episode: item.show?.kind == .audiobook ? "Part \(item.episodeNumber ?? 0)" : [item.episodeCode, item.title].compactMap { $0 }.joined(separator: " · ")
         case .audiobook: item.author ?? ""
         }
     }

@@ -40,7 +40,7 @@ struct HomeView: View {
                     let prefix = item.isAudiobookPart ? "Part \(item.episodeNumber ?? 0) · " : item.kind == .episode ? (item.episodeCode ?? "") + " · " : ""
                     return prefix + MediaFormat.minutesLeft(ws.duration - ws.position)
                 }, onTap: { player.play($0, settings: settings) }, isContinueWatching: true, fixMatchTarget: $fixMatchTarget)
-                ItemRow(title: "Next Up", items: rows.nextUp, wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)
+                ItemRow(title: "Next Up", items: rows.nextUp, wide: true, subtitle: { [$0.episodeCode, $0.title].compactMap { $0 }.joined(separator: " · ") }, onTap: { player.play($0, settings: settings) }, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Favourites", items: rows.favourites, fixMatchTarget: $fixMatchTarget)
                 ItemRow(title: "Recently Added", items: rows.recentlyAdded, subtitle: { _ in "Added recently" }, fixMatchTarget: $fixMatchTarget)
                 if !rows.loaded {
@@ -66,7 +66,7 @@ struct HomeView: View {
             refreshRows()
         }
         .navigationTitle("Home")
-        .searchButton()
+        .searchButton(history: true)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 let n = rows.reviewCount

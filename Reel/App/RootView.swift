@@ -3,17 +3,17 @@ import Sync
 import Library
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home, tv, films, audiobooks, downloads, files, favourites, collections, sources, search, settings
+    case home, tv, films, audiobooks, downloads, files, favourites, history, collections, sources, search, settings
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .home: "Home"; case .tv: "TV Shows"; case .films: "Films"; case .audiobooks: "Audiobooks"; case .downloads: "Downloads"; case .files: "Files"; case .favourites: "Favourites"
+        case .home: "Home"; case .tv: "TV Shows"; case .films: "Films"; case .audiobooks: "Audiobooks"; case .downloads: "Downloads"; case .files: "Files"; case .favourites: "Favourites"; case .history: "History"
         case .collections: "Collections"; case .sources: "Sources"; case .search: "Search"; case .settings: "Settings"
         }
     }
     var icon: String {
         switch self {
-        case .home: "house"; case .tv: "tv"; case .films: "film"; case .audiobooks: "headphones"; case .downloads: "arrow.down.circle"; case .files: "folder"; case .favourites: "heart"
+        case .home: "house"; case .tv: "tv"; case .films: "film"; case .audiobooks: "headphones"; case .downloads: "arrow.down.circle"; case .files: "folder"; case .favourites: "heart"; case .history: "clock"
         case .collections: "rectangle.stack"; case .sources: "externaldrive.connected.to.line.below"; case .search: "magnifyingglass"; case .settings: "gearshape"
         }
     }
@@ -26,6 +26,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .downloads: DownloadsView()
         case .files: FilesView()
         case .favourites: FavouritesView()
+        case .history: HistoryView()
         case .collections: CollectionsView()
         case .sources: SourcesView()
         case .search: SearchView()
@@ -54,7 +55,7 @@ struct RootView: View {
                     // Audiobooks shows only once a scan has found a book.
                     let hasBooks = !library.audiobooks().isEmpty
                     List(selection: $nav.section) {
-                        ForEach([AppSection.home, .tv, .films] + (hasBooks ? [.audiobooks] : []) + [.downloads, .files, .favourites, .collections, .sources, .search]) { s in
+                        ForEach([AppSection.home, .tv, .films] + (hasBooks ? [.audiobooks] : []) + [.downloads, .files, .favourites, .history, .collections, .sources, .search]) { s in
                             Label(s.title, systemImage: s.icon).tag(s)
                         }
                         Spacer()
