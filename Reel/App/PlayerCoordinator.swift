@@ -521,7 +521,7 @@ final class PlayerCoordinator: ObservableObject {
     }
     func markCreditsStart() {
         guard let c = markContext else { return }
-        ShowMarkers.markCreditsStart(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, duration: engine.duration, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
+        ShowMarkers.markCreditsStart(showKey: c.showKey, itemKey: c.itemKey, season: c.season, url: c.url, time: engine.time, duration: engine.duration, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
         creditsStart = engine.time; creditsGrace = 0
     }
     /// Forgets what the app worked out on its own for this show and episode (the scanned credits,
@@ -557,12 +557,12 @@ final class PlayerCoordinator: ObservableObject {
             Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
             return
         }
-        if let show = current.show, let marked = ShowMarkers.creditsStart(showKey: show.itemKey, itemKey: key, duration: duration) {
+        if let show = current.show, let marked = ShowMarkers.creditsStart(showKey: show.itemKey, itemKey: key, season: current.seasonNumber, duration: duration) {
             let exact = ShowMarkers.episode(showKey: show.itemKey, itemKey: key)?.creditsStart != nil
             creditsStart = marked; creditsGrace = exact ? 0 : 5
-            Diagnostics.log("player", "credits \(exact ? "marked" : "by the show's credits length") at \(Int(marked))s")
+            Diagnostics.log("player", "credits \(exact ? "marked" : "by the season's credits length") at \(Int(marked))s")
             if !exact {
-                ShowMarkers.confirmCredits(showKey: show.itemKey, itemKey: key, url: url, estimate: marked, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec)) { [weak self] found in
+                ShowMarkers.confirmCredits(showKey: show.itemKey, itemKey: key, season: current.seasonNumber, url: url, estimate: marked, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec)) { [weak self] found in
                     guard let self, self.current?.itemKey == key, let found else { return }
                     self.creditsStart = found; self.creditsGrace = 0
                 }

@@ -660,7 +660,7 @@ struct TrackSheet: View {
                     }
                     Text((show.patterns.count == 1 ? "Intro pattern " : "Intro patterns, one per title sequence; mark one episode of a season whose titles differ. ") + parts.joined(separator: "; "))
                 }
-                if let show, let l = show.creditsLength { Text("Credits: \(Int(l)) s long") }
+                if let show, !show.credits.isEmpty { Text("Credits: " + show.credits.map { "\($0.label) \(Int($0.length)) s" }.joined(separator: ", ") + (show.credits.count == 1 ? "; mark a season whose credits run longer or shorter" : "")) }
             }
         }
     }

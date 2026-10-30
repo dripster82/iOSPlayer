@@ -44,16 +44,34 @@ enum ShowMarkers {
         var needsPrints: Bool { prints.isEmpty || (version ?? 1) < ShowMarkers.printsVersion || (length != nil && isProvisional) }
         var label: String { season.map { "S\($0)" } ?? "one episode" }
     }
-    struct Show: Codable, Equatable {
-        var patterns: [IntroPattern] = []
-        var creditsLength: TimeInterval?
+    /// The credits as marked in one episode: how long they run from the file's end, and prints of
+    /// the card they open on. Credits grow between seasons too (SG-1's run 41 s in S10, 71 s in
+    /// S3), so a show keeps one per marked season and another episode uses its nearest season's.
+    struct CreditsPattern: Codable, Equatable {
+        var itemKey: String
+        var season: Int?
+        var length: TimeInterval
         /// Taken at the marked credits start: a show that opens its credits on the same card every
         /// week lets another episode's credits be placed exactly rather than by length alone.
-        var creditsPrints: [FrameFingerprint] = []
+        var prints: [FrameFingerprint] = []
+        var label: String { season.map { "S\($0)" } ?? "one episode" }
+    }
+    struct Show: Codable, Equatable {
+        var patterns: [IntroPattern] = []
+        var credits: [CreditsPattern] = []
         var episodes: [String: Episode] = [:]
         var updatedAt = Date.distantPast
         var pendingSync = false
-        var isEmpty: Bool { patterns.isEmpty && creditsLength == nil && episodes.values.allSatisfy { $0.introStart == nil && $0.introEnd == nil && $0.creditsStart == nil } }
+        var isEmpty: Bool { patterns.isEmpty && credits.isEmpty && episodes.values.allSatisfy { $0.introStart == nil && $0.introEnd == nil && $0.creditsStart == nil } }
+
+        /// The credits pattern for an episode of `season`: its own season's, else the nearest
+        /// season's, with one of unknown season last.
+        func credits(nearest season: Int?) -> CreditsPattern? {
+            guard let season else { return credits.first }
+            return credits.min { a, b in
+                (a.season == season ? 0 : 1, a.season.map { abs($0 - season) } ?? 1000) < (b.season == season ? 0 : 1, b.season.map { abs($0 - season) } ?? 1000)
+            }
+        }
 
         /// The pattern marked in an episode.
         func pattern(for itemKey: String) -> IntroPattern? { patterns.first { $0.itemKey == itemKey } }
@@ -68,12 +86,11 @@ enum ShowMarkers {
         init() {}
         // Earlier builds kept one set of prints per show; it becomes a pattern of unknown season,
         // attached to the episode the start was marked in.
-        private enum Keys: String, CodingKey { case patterns, creditsLength, creditsPrints, episodes, updatedAt, pendingSync, introPrints, printSpacing, printsVersion, introLength }
+        private enum Keys: String, CodingKey { case patterns, credits, creditsLength, creditsPrints, episodes, updatedAt, pendingSync, introPrints, printSpacing, printsVersion, introLength }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: Keys.self)
             patterns = try c.decodeIfPresent([IntroPattern].self, forKey: .patterns) ?? []
-            creditsLength = try c.decodeIfPresent(TimeInterval.self, forKey: .creditsLength)
-            creditsPrints = try c.decodeIfPresent([FrameFingerprint].self, forKey: .creditsPrints) ?? []
+            credits = try c.decodeIfPresent([CreditsPattern].self, forKey: .credits) ?? []
             episodes = try c.decodeIfPresent([String: Episode].self, forKey: .episodes) ?? [:]
             updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
             pendingSync = try c.decodeIfPresent(Bool.self, forKey: .pendingSync) ?? false
@@ -84,11 +101,15 @@ enum ShowMarkers {
                                          spacing: try c.decodeIfPresent(TimeInterval.self, forKey: .printSpacing),
                                          version: try c.decodeIfPresent(Int.self, forKey: .printsVersion))]
             }
+            if credits.isEmpty, let length = try c.decodeIfPresent(TimeInterval.self, forKey: .creditsLength) {
+                let marked = episodes.first { $0.value.creditsStart != nil }?.key ?? ""
+                credits = [CreditsPattern(itemKey: marked, season: nil, length: length, prints: try c.decodeIfPresent([FrameFingerprint].self, forKey: .creditsPrints) ?? [])]
+            }
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: Keys.self)
-            try c.encode(patterns, forKey: .patterns); try c.encodeIfPresent(creditsLength, forKey: .creditsLength)
-            try c.encode(creditsPrints, forKey: .creditsPrints); try c.encode(episodes, forKey: .episodes)
+            try c.encode(patterns, forKey: .patterns); try c.encode(credits, forKey: .credits)
+            try c.encode(episodes, forKey: .episodes)
             try c.encode(updatedAt, forKey: .updatedAt); try c.encode(pendingSync, forKey: .pendingSync)
         }
     }
@@ -197,13 +218,13 @@ enum ShowMarkers {
 
         /// A frame a second from `from`, each handed to `each` (return true to stop) as it comes off
         /// a fresh start of the input. Returns false when no session could give frames.
-        func scan(from: TimeInterval, count: Int, each: @escaping @Sendable (TimeInterval, FrameFingerprint) -> Bool) async -> Bool {
+        func scan(from: TimeInterval, count: Int, each: @escaping @Sendable (TimeInterval, FrameFingerprint, CGImage) -> Bool) async -> Bool {
             guard let grabber else { return false }
             let dumpFolder = self.dumpFolder
             let got = await grabber.frames(from: from, count: count, spacing: 1, rate: 12) { time, image in
                 guard let p = FrameFingerprint(image) else { return false }
                 if let dumpFolder, Int(time) % 10 == 0 { Self.dumpImage(image, at: time, how: "scan", to: dumpFolder) }
-                return each(time, p)
+                return each(time, p, image)
             }
             usedSession = !got.isEmpty
             return !got.isEmpty
@@ -289,16 +310,24 @@ enum ShowMarkers {
         }
     }
     @MainActor
-    static func markCreditsStart(showKey: String, itemKey: String, url: URL, time: TimeInterval, duration: TimeInterval, softwareDecoding: Bool) {
+    /// The credits start at `time` in this episode. The length from the file's end becomes this
+    /// season's credits pattern (replacing an earlier mark in the same season or episode), and
+    /// prints of the opening card are taken so other episodes can pin the start exactly.
+    static func markCreditsStart(showKey: String, itemKey: String, season: Int?, url: URL, time: TimeInterval, duration: TimeInterval, softwareDecoding: Bool) {
         updateEpisode(showKey: showKey, itemKey: itemKey) { $0.creditsStart = time }
-        update(showKey: showKey) { s in if duration > time { s.creditsLength = duration - time }; s.creditsPrints = [] }
-        Diagnostics.log("player", "credits marked at \(Int(time))s for \(showKey.prefix(40)) (\(Int(duration - time))s long)")
+        guard duration > time else { return }
+        update(showKey: showKey) { s in
+            let pattern = CreditsPattern(itemKey: itemKey, season: season, length: duration - time)
+            if let i = s.credits.firstIndex(where: { $0.itemKey == itemKey || (season != nil && $0.season == season) }) { s.credits[i] = pattern } else { s.credits.append(pattern) }
+            s.credits.sort { ($0.season ?? 0, $0.itemKey) < ($1.season ?? 0, $1.itemKey) }
+        }
+        Diagnostics.log("player", "credits marked at \(Int(time))s for \(showKey.prefix(40)) (\(Int(duration - time))s long, \(season.map { "S\($0)" } ?? "season unknown"), \(show(showKey)?.credits.count ?? 0) patterns)")
         Task {
             let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             let prints = await grab.run(from: time, count: IntroLocator.count, spacing: IntroLocator.provisionalSpacing)
             await grab.close()
-            Diagnostics.log("player", "credits prints for \(showKey.prefix(40)): \(prints.filter { !$0.isFlat }.count) usable of \(prints.count)")
-            update(showKey: showKey) { $0.creditsPrints = prints }
+            Diagnostics.log("player", "credits prints for \(itemKey.prefix(40)): \(prints.filter { !$0.isFlat }.count) usable of \(prints.count)")
+            update(showKey: showKey) { s in if let i = s.credits.firstIndex(where: { $0.itemKey == itemKey }) { s.credits[i].prints = prints } }
         }
     }
 
@@ -319,24 +348,37 @@ enum ShowMarkers {
         update(showKey: showKey) { s in for k in s.episodes.keys { s.episodes[k]?.locatedIntro = nil; s.episodes[k]?.locatedPattern = nil; s.episodes[k]?.introSearched = false } }
     }
 
-    /// Looks around the estimated credits start (the file's end less the show's credits length) for
-    /// the pictures the credits were marked on. A match pins the start exactly; `found` gets it on
-    /// the main actor, or nothing when the credits open differently this week.
+    /// Looks around the estimated credits start (the file's end less the season's credits length)
+    /// for the pictures the credits were marked on, and failing that for the look of credits: light
+    /// lines of text on a dark picture, three seconds of it and then mostly so to the end of the
+    /// window. Either pins the start; `found` gets it on the main actor, or nothing when neither
+    /// shows. The window is wider when the length came from another season, since that is exactly
+    /// when it is likely to be off.
     @MainActor
-    static func confirmCredits(showKey: String, itemKey: String, url: URL, estimate: TimeInterval, softwareDecoding: Bool, found: @escaping @MainActor (TimeInterval?) -> Void) {
-        guard let s = show(showKey), s.creditsPrints.contains(where: { !$0.isFlat }), s.episodes[itemKey]?.creditsStart == nil else { return }
-        let prints = s.creditsPrints
+    static func confirmCredits(showKey: String, itemKey: String, season: Int?, url: URL, estimate: TimeInterval, softwareDecoding: Bool, found: @escaping @MainActor (TimeInterval?) -> Void) {
+        guard let s = show(showKey), let pattern = s.credits(nearest: season), s.episodes[itemKey]?.creditsStart == nil else { return }
+        let prints = pattern.prints.filter { !$0.isFlat }
+        let sameSeason = pattern.season != nil && pattern.season == season
+        let before: TimeInterval = sameSeason ? 20 : 60
+        let after: TimeInterval = min(sameSeason ? 20 : 60, max(5, pattern.length - 5))   // not past the file's end
         Task {
             // The intro search comes first; the credits are a long way off.
             var waited = 0
             while searching.contains(itemKey), waited < 120 { try? await Task.sleep(for: .seconds(5)); waited += 1 }
             var samples: [IntroLocator.Sample] = []
+            var looks: [CreditsScan.Sample] = []
             let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             guard DeviceConditions.allowsBackgroundWork else { await grab.close(); return }
-            _ = await grab.scan(from: max(0, estimate - 20), count: 41) { time, p in samples.append(.init(time: time, print: p)); return false }
+            _ = await grab.scan(from: max(0, estimate - before), count: Int(before + after) + 1) { time, p, image in
+                samples.append(.init(time: time, print: p))
+                looks.append(.init(time: time, credits: CreditsFrame.looksLikeCredits(image)))
+                return false
+            }
             await grab.close()
-            let exact = IntroLocator.estimateStart(samples: samples, targets: prints, spacing: IntroLocator.provisionalSpacing)
-            Diagnostics.log("player", "credits prints in \(itemKey.prefix(40)): \(exact.map { "matched at \(Int($0))s" } ?? "no match"), estimate \(Int(estimate))s")
+            let byPrints = prints.isEmpty ? nil : IntroLocator.estimateStart(samples: samples, targets: prints, spacing: IntroLocator.provisionalSpacing)
+            let byLook = CreditsScan.start(in: looks)
+            let exact = byPrints ?? byLook
+            Diagnostics.log("player", "credits in \(itemKey.prefix(40)) (\(pattern.label) length, estimate \(Int(estimate))s, \(looks.count) frames): prints \(byPrints.map { "matched at \(Int($0))s" } ?? "no match"), credits-like frames \(looks.filter(\.credits).count) \(byLook.map { "from \(Int($0))s" } ?? "with no run")")
             found(exact)
         }
     }
@@ -355,10 +397,10 @@ enum ShowMarkers {
 
     /// Where the credits start in an episode: its own mark, else the show's credits length from the
     /// end. Nil when nothing was marked.
-    static func creditsStart(showKey: String, itemKey: String, duration: TimeInterval) -> TimeInterval? {
+    static func creditsStart(showKey: String, itemKey: String, season: Int?, duration: TimeInterval) -> TimeInterval? {
         guard let s = show(showKey) else { return nil }
         if let marked = s.episodes[itemKey]?.creditsStart { return marked }
-        if let length = s.creditsLength, duration > length + 30 { return duration - length }
+        if let length = s.credits(nearest: season)?.length, duration > length + 30 { return duration - length }
         return nil
     }
 
@@ -428,7 +470,7 @@ enum ShowMarkers {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
                 let count = Int(to - from) + 1
                 guard count > 0 else { continue }
-                let got = await grab.scan(from: from, count: count) { time, print in
+                let got = await grab.scan(from: from, count: count) { time, print, _ in
                     seen.looked += 1
                     // The pattern this frame matches best, with the start it implies.
                     var best: (pattern: Int, start: TimeInterval, similarity: Double, print: Int)?
