@@ -67,6 +67,9 @@ struct ItemContextMenu: ViewModifier {
     @EnvironmentObject private var settings: AppSettings
     let item: MediaItem
     @Binding var fixMatchTarget: MediaItem?
+    /// In the Continue Watching row the destructive action is leaving that row, not hiding the
+    /// title from the library: a long press there is about the list, not the film or show.
+    var inContinueWatching = false
     @State private var artworkTarget: MediaItem?
 
     func body(content: Content) -> some View {
@@ -78,7 +81,7 @@ struct ItemContextMenu: ViewModifier {
                 let state = library.watchState(item.itemKey)
                 let watched = state?.watched == true
                 Button { library.setWatched(!watched, itemKey: item.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "checkmark.circle") }
-                if state?.isInProgress == true {
+                if state?.isInProgress == true, !inContinueWatching {
                     Button { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
                 }
             } else {
@@ -99,14 +102,18 @@ struct ItemContextMenu: ViewModifier {
                 Button { artworkTarget = item } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
             }
             Divider()
-            Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
+            if inContinueWatching {
+                Button(role: .destructive) { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
+            } else {
+                Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
+            }
         }
         .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
     }
 }
 
 extension View {
-    func itemContextMenu(_ item: MediaItem, fixMatchTarget: Binding<MediaItem?>) -> some View {
-        modifier(ItemContextMenu(item: item, fixMatchTarget: fixMatchTarget))
+    func itemContextMenu(_ item: MediaItem, fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
+        modifier(ItemContextMenu(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
     }
 }

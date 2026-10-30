@@ -29,6 +29,8 @@ struct ItemRow: View {
     var seeAll: (() -> Void)? = nil
     /// When set, tapping a card does this (e.g. resume playback) instead of navigating to the detail page.
     var onTap: ((MediaItem) -> Void)? = nil
+    /// The Continue Watching row: its long-press menu removes from the row rather than hiding the title.
+    var isContinueWatching = false
     @Binding var fixMatchTarget: MediaItem?
 
     var body: some View {
@@ -50,7 +52,7 @@ struct ItemRow: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .itemContextMenu(item, fixMatchTarget: $fixMatchTarget)
+                            .itemContextMenu(item, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
                         }
                     }.padding(.horizontal)
                 }
