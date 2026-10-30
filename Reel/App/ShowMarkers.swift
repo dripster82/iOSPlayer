@@ -203,11 +203,11 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v1"
+        let key = "reel.showMarkers.retrySearch.v2"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
-            for k in all.keys { for e in all[k]!.episodes.keys where all[k]!.episodes[e]?.locatedIntro == nil { all[k]!.episodes[e]?.introSearched = false } }
+            for k in all.keys { for e in all[k]!.episodes.keys where all[k]!.episodes[e]?.introStart == nil { all[k]!.episodes[e]?.introSearched = false; all[k]!.episodes[e]?.locatedIntro = nil } }
             save(all)
         }
         UserDefaults.standard.set(true, forKey: key)
@@ -311,7 +311,16 @@ enum ShowMarkers {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
                 if let p = await grab.frame(at: t) {
                     looked += 1
-                    if let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) { estimate = start; break }
+                    guard let start = IntroLocator.estimateStart(samples: [.init(time: t, print: p)], targets: prints, spacing: spacing) else { continue }
+                    // One picture can be a coincidence (a dark frame, a face in close-up); a second,
+                    // ten seconds further into the titles, must match its own print too.
+                    let checkIndex = min(prints.count - 1, Int(10 / spacing))
+                    let checkAt = start + TimeInterval(checkIndex) * spacing
+                    if let q = await grab.frame(at: checkAt), let (i, d) = IntroLocator.matches(q, in: prints), abs(i - checkIndex) <= Int(2 / spacing) {
+                        Diagnostics.log("player", "intro candidate at \(Int(start))s confirmed \(Int(checkAt))s (print \(i), difference \(Int(d)))")
+                        estimate = start; break
+                    }
+                    Diagnostics.log("player", "intro candidate at \(Int(start))s not confirmed at \(Int(checkAt))s; looking on")
                 }
             }
             guard var start = estimate else {
