@@ -112,10 +112,22 @@ enum ShowMarkers {
             return prints
         }
 
+        /// Where sampled frames are written as JPEGs for a look (Debug builds), or nil.
+        var dumpFolder: URL?
+
         func frame(at seconds: TimeInterval) async -> FrameFingerprint? {
-            if let grabber, let image = await grabber.frame(at: seconds), let p = FrameFingerprint(image), !p.isFlat { usedSession = true; return p }
+            if let grabber, let image = await grabber.frame(at: seconds), let p = FrameFingerprint(image), !p.isFlat { usedSession = true; dump(image, at: seconds, how: "grab"); return p }
             guard let image = await ScrubThumbnails.frame(url: url, at: seconds, softwareDecoding: software, precise: true) else { return nil }
+            dump(image, at: seconds, how: "thumb")
             return FrameFingerprint(image)
+        }
+
+        private func dump(_ image: CGImage, at seconds: TimeInterval, how: String) {
+            #if DEBUG
+            guard let dumpFolder else { return }
+            try? FileManager.default.createDirectory(at: dumpFolder, withIntermediateDirectories: true)
+            if let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) { try? data.write(to: dumpFolder.appendingPathComponent("\(Int(seconds))s-\(how).jpg")) }
+            #endif
         }
 
         /// libvlc's teardown blocks, so it runs off the main thread.
@@ -205,7 +217,7 @@ enum ShowMarkers {
 
     /// Searches made by the first build looked at the first minute only; let them run again, once.
     static func retryEarlySearchesOnce() {
-        let key = "reel.showMarkers.retrySearch.v5"
+        let key = "reel.showMarkers.retrySearch.v6"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         lock.withLock {
             var all = load()
@@ -309,6 +321,11 @@ enum ShowMarkers {
             var estimate: TimeInterval?
             var looked = 0
             let grab = Grab(url: url, softwareDecoding: softwareDecoding)
+            #if DEBUG
+            let dump = Diagnostics.fileURL.deletingLastPathComponent().appendingPathComponent("intro-search", isDirectory: true).appendingPathComponent(String(itemKey.suffix(8)), isDirectory: true)
+            try? FileManager.default.removeItem(at: dump)
+            grab.dumpFolder = dump
+            #endif
             for t in times {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
                 if let p = await grab.frame(at: t) {

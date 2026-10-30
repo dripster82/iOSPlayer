@@ -112,6 +112,10 @@ public final class FrameGrabber: @unchecked Sendable {
             onFrame = { [weak self] image, time in
                 // A frame from before the seek landed (the old position) is not the one.
                 guard time >= seconds - 1.5, time <= seconds + 4 else { return }
+                // The first picture or two after a seek can be the output's flush (all black); a
+                // flat frame is only taken once a few have come, in case the scene really is black.
+                let arrived: Int = one.lock.withLock { one.arrived += 1; return one.arrived }
+                if arrived < 4, let p = FrameFingerprint(image), p.isFlat { return }
                 let first: Bool = one.lock.withLock { let f = !one.done; one.done = true; return f }
                 if first { continuation.resume(returning: image); self?.clearHandler() }
             }
@@ -154,6 +158,7 @@ public final class FrameGrabber: @unchecked Sendable {
     private final class OneState: @unchecked Sendable {
         let lock = NSLock()
         var done = false
+        var arrived = 0
         let continuation: CheckedContinuation<CGImage?, Never>
         init(continuation: CheckedContinuation<CGImage?, Never>) { self.continuation = continuation }
     }
