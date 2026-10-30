@@ -3,17 +3,17 @@ import Sync
 import Library
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home, tv, films, downloads, favourites, collections, sources, search, settings
+    case home, tv, films, downloads, files, favourites, collections, sources, search, settings
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .home: "Home"; case .tv: "TV Shows"; case .films: "Films"; case .downloads: "Downloads"; case .favourites: "Favourites"
+        case .home: "Home"; case .tv: "TV Shows"; case .films: "Films"; case .downloads: "Downloads"; case .files: "Files"; case .favourites: "Favourites"
         case .collections: "Collections"; case .sources: "Sources"; case .search: "Search"; case .settings: "Settings"
         }
     }
     var icon: String {
         switch self {
-        case .home: "house"; case .tv: "tv"; case .films: "film"; case .downloads: "arrow.down.circle"; case .favourites: "heart"
+        case .home: "house"; case .tv: "tv"; case .films: "film"; case .downloads: "arrow.down.circle"; case .files: "folder"; case .favourites: "heart"
         case .collections: "rectangle.stack"; case .sources: "externaldrive.connected.to.line.below"; case .search: "magnifyingglass"; case .settings: "gearshape"
         }
     }
@@ -23,6 +23,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .tv: TVView()
         case .films: FilmsView()
         case .downloads: DownloadsView()
+        case .files: FilesView()
         case .favourites: FavouritesView()
         case .collections: CollectionsView()
         case .sources: SourcesView()
@@ -50,7 +51,7 @@ struct RootView: View {
             } else if sizeClass == .regular {
                 NavigationSplitView {
                     List(selection: $nav.section) {
-                        ForEach([AppSection.home, .tv, .films, .downloads, .favourites, .collections, .sources, .search]) { s in
+                        ForEach([AppSection.home, .tv, .films, .downloads, .files, .favourites, .collections, .sources, .search]) { s in
                             Label(s.title, systemImage: s.icon).tag(s)
                         }
                         Spacer()
@@ -61,10 +62,10 @@ struct RootView: View {
                     NavigationStack(path: nav.binding(for: nav.section ?? .home)) { (nav.section ?? .home).view }
                 }
             } else {
-                // Five tabs fit the phone's bar without a "More" tab. Sources moved to Settings →
-                // Libraries (and the Home banners) when Downloads took its place.
+                // Five tabs fit the phone's bar without a "More" tab. Files holds the plain view of
+                // every source and, as its first row, Downloads; Sources sits in Settings → Libraries.
                 TabView(selection: Binding(get: { nav.section ?? .home }, set: { nav.section = $0 })) {
-                    ForEach([AppSection.home, .tv, .films, .downloads, .search]) { s in
+                    ForEach([AppSection.home, .tv, .films, .files, .search]) { s in
                         NavigationStack(path: nav.binding(for: s)) { s.view }
                             .tabItem { Label(s.title, systemImage: s.icon) }
                             .tag(s)

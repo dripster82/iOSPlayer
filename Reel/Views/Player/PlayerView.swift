@@ -56,6 +56,15 @@ struct PlayerContentView: View {
                         Text("Playing on your TV").font(.headline).foregroundStyle(.white)
                         Text(player.current.map { $0.kind == .episode ? "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" : $0.title } ?? "").font(.footnote).foregroundStyle(.white.opacity(0.7))
                     }
+                } else if engine.isAudioOnly {
+                    // An audiobook or a song: nothing to paint, so the title stands in for the picture.
+                    VStack(spacing: 14) {
+                        Image(systemName: "waveform").font(.system(size: 56)).foregroundStyle(.white.opacity(0.8)).symbolEffect(.variableColor.iterative, isActive: engine.status == .playing)
+                        Text(player.current?.title ?? "").font(.title3.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(3)
+                        if let c = engine.chapters.first(where: { $0.start <= engine.clock.time && engine.clock.time < $0.start + $0.duration }) {
+                            Text(c.title).font(.footnote).foregroundStyle(.white.opacity(0.7))
+                        }
+                    }.padding(.horizontal, 40).allowsHitTesting(false)
                 }
                 gestureLayer(size: geo.size)
                 if engine.status == .opening || engine.status == .buffering || player.isLoading {

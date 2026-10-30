@@ -97,6 +97,15 @@ public struct DirectoryEntry: Hashable, Sendable {
 
     public var isVideo: Bool { VideoFile.videoExtensions.contains(fileExtension) }
     public var isSubtitle: Bool { VideoFile.subtitleExtensions.contains(fileExtension) }
+    /// An audio file: an audiobook (m4b, a folder of mp3s), music, a podcast. Playable from the
+    /// file browser; the library's scan is for video.
+    public var isAudio: Bool { AudioFile.audioExtensions.contains(fileExtension) }
+    public var isPlayable: Bool { isVideo || isAudio }
+}
+
+/// Extensions the file browser plays as audio.
+public enum AudioFile {
+    public static let audioExtensions: Set<String> = ["m4b", "m4a", "mp3", "aac", "flac", "ogg", "oga", "opus", "wma", "wav", "aiff", "aif", "alac"]
 }
 
 /// Extension lists used by the scanner.

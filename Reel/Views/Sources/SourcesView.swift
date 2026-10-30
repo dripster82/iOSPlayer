@@ -267,15 +267,15 @@ struct FileBrowserView: View {
                 } else {
                     Button { play(e) } label: {
                         HStack {
-                            Image(systemName: e.isVideo ? "film" : e.isSubtitle ? "captions.bubble" : "doc").foregroundStyle(.secondary)
+                            Image(systemName: e.isVideo ? "film" : e.isAudio ? "waveform" : e.isSubtitle ? "captions.bubble" : "doc").foregroundStyle(.secondary)
                             VStack(alignment: .leading) {
                                 Text(e.name).foregroundStyle(.primary).lineLimit(2)
-                                Text([e.size.map(MediaFormat.bytes), e.isSubtitle ? "Subtitle sidecar" : nil].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                Text([e.size.map(MediaFormat.bytes), e.isSubtitle ? "Subtitle sidecar" : e.isAudio ? "Audio" : nil].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if e.isVideo { Image(systemName: "play.fill").foregroundStyle(.secondary) }
+                            if e.isPlayable { Image(systemName: "play.fill").foregroundStyle(.secondary) }
                         }
-                    }.disabled(!e.isVideo)
+                    }.disabled(!e.isPlayable)
                 }
             }
         }
@@ -294,7 +294,9 @@ struct FileBrowserView: View {
         let src = SourceFactory.make(source.config)
         do {
             try await src.connect(credentials: CredentialStore.shared.load(for: source.id))
-            entries = try await src.list(path).filter { $0.isDirectory || $0.isVideo || $0.isSubtitle }
+            // Folders first, then files, each in name order (servers return them every which way).
+            entries = try await src.list(path).filter { ($0.isDirectory && !DirectoryEntry.isSystemFolder($0.name)) || $0.isPlayable || $0.isSubtitle }
+                .sorted { a, b in a.isDirectory != b.isDirectory ? a.isDirectory : a.name.localizedStandardCompare(b.name) == .orderedAscending }
             await src.disconnect()
         } catch { self.error = error.localizedDescription }
         loading = false

@@ -44,7 +44,8 @@ Reel/                   SwiftUI app target
   Views/Library/        HomeView, TVView (+FilmsView, FavouritesView, CollectionsView in TVView.swift),
                         DetailViews (HeroHeader, FilmDetailView, ShowDetailView, EpisodeRow, FlowLayout),
                         SearchView, NeedsReviewView (+FixMatchView)
-  Views/Sources/        SourcesView (+SourceDetailView, TagSheet, FileBrowserView), AddSourceView
+  Views/Sources/        SourcesView (+SourceDetailView, TagSheet, FileBrowserView), AddSourceView,
+                        FilesView (the Files tab: Downloads then every source as a plain folder tree; audio files play too)
   Views/Player/         PlayerView (PlayerView → PlayerContentView, Scrubber, TrackSheet, AirPlayButton, VolumeControl),
                         VLCVideoView (VLCDrawableView: the UIView VLC paints into + VLCPictureInPictureDrawable)
   Views/Settings/       SettingsView (+HiddenItemsView, HistoryView, LicencesView, AttributionView)

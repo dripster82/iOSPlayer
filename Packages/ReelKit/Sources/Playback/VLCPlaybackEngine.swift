@@ -71,6 +71,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public var duration: TimeInterval { clock.duration }
     @Published public private(set) var rate: Float = 1
     @Published public private(set) var audioTracks: [MediaTrack] = []
+    /// True once the stream has audio and no video at all (an audiobook, a song): the player shows a
+    /// title card in place of the picture.
+    @Published public private(set) var isAudioOnly = false
     @Published public private(set) var subtitleTracks: [MediaTrack] = []
     @Published public private(set) var currentAudioTrack: Int?
     @Published public private(set) var currentSubtitleTrack: Int?
@@ -236,6 +239,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         self.options = options
         verifyOnNextPlay = false
         tracksLoaded = false
+        isAudioOnly = false
         probed = false
         appliedStart = false
         resumeConfirmed = false
@@ -788,6 +792,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             MediaTrack(id: i, name: t.trackName, language: t.language ?? Self.language(in: t.trackName), isForced: t.trackName.localizedCaseInsensitiveContains("forced"))
         }
         if newAudio != audioTracks { audioTracks = newAudio }
+        let audioOnly = !newAudio.isEmpty && player.videoTracks.isEmpty
+        if audioOnly != isAudioOnly { isAudioOnly = audioOnly }
         if !probed, let key = item?.itemKey, !newAudio.isEmpty || !player.videoTracks.isEmpty {
             probed = true
             let video = player.videoTracks.first.map { $0.codecName() }
