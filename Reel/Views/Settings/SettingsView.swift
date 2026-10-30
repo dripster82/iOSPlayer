@@ -191,6 +191,15 @@ struct HiddenItemsView: View {
 struct HistoryView: View {
     @EnvironmentObject private var library: LibraryStore
     @State private var confirmClear = false
+
+    /// "Finished", "50%", or where it stopped when the fraction is unknown: a stop in the first half
+    /// minute, or a file whose length the player never learned, used to leave this blank.
+    static func progressLabel(_ ws: WatchState) -> String {
+        if ws.watched { return "Finished" }
+        if let p = ws.progress { return "\(Int(p * 100))%" }
+        if ws.position > 0 { return "Started · \(MediaFormat.clock(ws.position)) in" }
+        return "Started"
+    }
     var body: some View {
         let states = library.watchStates().filter { $0.lastPlayedAt != nil }
         List {
@@ -209,7 +218,7 @@ struct HistoryView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.kind == .episode ? (item.show?.title ?? item.title) : item.title).font(.subheadline.weight(.semibold))
                                 if item.kind == .episode, !item.isAudiobookPart { Text(item.title).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                Text([item.episodeCode, ws.watched ? "Finished" : ws.progress.map { "\(Int($0 * 100))%" }, ws.lastPlayedAt?.formatted(.relative(presentation: .named))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                Text([item.episodeCode, Self.progressLabel(ws), ws.lastPlayedAt?.formatted(.relative(presentation: .named))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
