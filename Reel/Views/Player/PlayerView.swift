@@ -651,7 +651,12 @@ struct TrackSheet: View {
         } header: { Text("Mark this show") } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pause at the spot, then mark it. The intro is the same pictures every week, so once its start and end are marked Reel looks for it in the other episodes, wherever their opening scene puts it. Credits run the same length every week, so one mark places them in every episode. Marks win over what Reel works out on its own; \"Forget\" drops the automatic intro and credits and scans again.")
-                if let show, let l = show.introLength, l >= 10 { Text("Intro: \(Int(l)) s long" + (show.introPrints.isEmpty ? ", fingerprinting…" : ", \(show.introPrints.count) frames \(Int(show.printSpacing ?? 2)) s apart to look for")) }
+                if let show, let l = show.introLength, l >= 10 {
+                    let state = show.introPrints.isEmpty
+                        ? (player.current?.show.map { ShowMarkers.isFingerprinting(showKey: $0.itemKey) } ?? false ? ", fingerprinting…" : ", no frames yet: play the marked episode again")
+                        : ", \(show.introPrints.count) frames \(Int(show.printSpacing ?? 2)) s apart to look for"
+                    Text("Intro: \(Int(l)) s long" + state)
+                }
                 if let show, let l = show.creditsLength { Text("Credits: \(Int(l)) s long") }
             }
         }

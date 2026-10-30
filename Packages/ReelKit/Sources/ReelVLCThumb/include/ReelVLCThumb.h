@@ -41,3 +41,5 @@ int reel_grab_seek(void *session, long long time_ms);
 void reel_grab_set_rate(void *session, float rate);
 /// Stops and releases the session. Blocks until libvlc has let go; call off the main thread.
 void reel_grab_close(void *session);
+/// Where the grab's libvlc writes its messages (warnings and up), or NULL for none.
+void reel_grab_set_log_path(const char *path);

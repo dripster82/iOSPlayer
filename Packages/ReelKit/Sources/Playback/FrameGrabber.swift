@@ -11,6 +11,8 @@ import VLCKit
 /// one per step as they come off the decoder; a single frame comes from a precise seek.
 public final class FrameGrabber: @unchecked Sendable {
     public static var isAvailable: Bool { reel_thumb_available() }
+    /// Sends the grab's libvlc messages (warnings and up) to a file, for diagnosis.
+    public static func setLogPath(_ path: String?) { reel_grab_set_log_path(path) }
 
     private var session: UnsafeMutableRawPointer?
     private let lock = NSLock()
@@ -22,8 +24,10 @@ public final class FrameGrabber: @unchecked Sendable {
     public init?(url: URL, width: Int = 320, height: Int = 180, softwareDecoding: Bool = false) {
         #if canImport(VLCKit)
         self.width = width; self.height = height
-        var options = [":no-audio", ":network-caching=1500", ":no-spu", ":no-osd"]
-        if softwareDecoding { options.append(":avcodec-hw=none") }
+        // Pictures must reach memory as plain pixels: the hardware decoder's surfaces arrive blank
+        // through the memory output, so the grab always decodes in software (cheap at this size).
+        let options = [":no-audio", ":network-caching=1500", ":no-spu", ":no-osd", ":avcodec-hw=none", ":no-videotoolbox"]
+        _ = softwareDecoding
         let cOptions = options.map { strdup($0) }
         defer { cOptions.forEach { free($0) } }
         let me = Unmanaged.passRetained(self)
@@ -63,6 +67,9 @@ public final class FrameGrabber: @unchecked Sendable {
                 defer { state.lock.unlock() }
                 guard !state.done else { return }
                 state.lastFrameAt = Date()
+                // The start-time option is not always honoured; a first frame well before the run's
+                // start means the stream began at 0, so seek there once (the rate keeps up with it).
+                if !state.sought, time < from - 1.5 { state.sought = true; if let session = self.session { _ = reel_grab_seek(session, Int64(from * 1000)) }; return }
                 // The first frame at or past each target; frames before the first target are skipped.
                 while state.next < targets.count, time >= targets[state.next] - 0.05 {
                     if state.collected.last?.1 !== image { state.collected.append((targets[state.next], image)) }
@@ -135,6 +142,7 @@ public final class FrameGrabber: @unchecked Sendable {
         var collected: [(TimeInterval, CGImage)] = []
         var next = 0
         var done = false
+        var sought = false
         var lastFrameAt: Date?
         private var continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>?
         init(continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>) { self.continuation = continuation }

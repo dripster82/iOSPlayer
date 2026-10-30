@@ -84,6 +84,8 @@ enum ShowMarkers {
     }
 
     private static var fingerprinting: Set<String> = []
+    /// True while a show's intro prints are being taken (the More sheet says so).
+    static func isFingerprinting(showKey: String) -> Bool { fingerprinting.contains(showKey) }
 
     /// One open of the file for a batch of frames: a run comes off the decoder at speed, single
     /// frames by precise seeks. When the session cannot be made (no libvlc on this platform, a
@@ -94,10 +96,14 @@ enum ShowMarkers {
         init(url: URL, softwareDecoding: Bool) { self.url = url; software = softwareDecoding; grabber = FrameGrabber(url: url, softwareDecoding: softwareDecoding) }
         var isSession: Bool { grabber != nil }
 
+        private(set) var usedSession = false
+
         func run(from: TimeInterval, count: Int, spacing: TimeInterval) async -> [FrameFingerprint] {
             if let grabber {
-                let got = await grabber.frames(from: from, count: count, spacing: spacing)
-                if got.count >= count / 2 { return got.compactMap { FrameFingerprint($0.image) } }
+                let got = await grabber.frames(from: from, count: count, spacing: spacing).compactMap { FrameFingerprint($0.image) }
+                let usable = got.filter { !$0.isFlat }.count
+                if got.count >= count / 2, usable >= max(3, got.count / 4) { usedSession = true; return got }
+                Diagnostics.log("player", "grab session gave \(got.count) frames, \(usable) usable (mean grey \(got.first.map { Int($0.brightness) } ?? -1)); taking them one at a time")
             }
             var prints: [FrameFingerprint] = []
             for i in 0..<count {
@@ -107,7 +113,7 @@ enum ShowMarkers {
         }
 
         func frame(at seconds: TimeInterval) async -> FrameFingerprint? {
-            if let grabber, let image = await grabber.frame(at: seconds) { return FrameFingerprint(image) }
+            if let grabber, let image = await grabber.frame(at: seconds), let p = FrameFingerprint(image), !p.isFlat { usedSession = true; return p }
             guard let image = await ScrubThumbnails.frame(url: url, at: seconds, softwareDecoding: software, precise: true) else { return nil }
             return FrameFingerprint(image)
         }
@@ -154,7 +160,7 @@ enum ShowMarkers {
                 Diagnostics.log("player", "intro prints for \(showKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
                 return
             }
-            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.isSession ? "from one open" : "a frame at a time")")
+            Diagnostics.log("player", "intro prints for \(showKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
             update(showKey: showKey) { $0.introPrints = prints; $0.printSpacing = spacing; $0.printsVersion = Self.printsVersion }
             // Episodes searched with the old prints are searched again with these.
             update(showKey: showKey) { s in for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false } }
@@ -328,7 +334,7 @@ enum ShowMarkers {
             }
             await grab.close()
             updateEpisode(showKey: showKey, itemKey: itemKey) { $0.locatedIntro = start; $0.introSearched = true }
-            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s \(grab.isSession ? "from one open" : "a frame at a time")")
+            Diagnostics.log("player", "intro found in \(itemKey.prefix(40)) at \(Int(start))s after \(looked) frames in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
             found(.init(start: start, end: start + length))
         }
     }
