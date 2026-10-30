@@ -40,6 +40,7 @@ struct FilesView: View {
             }
         }
         .navigationTitle("Files")
+        .itemNavigation()
         .onReceive(library.objectWillChange) { _ in refresh += 1 }
     }
 

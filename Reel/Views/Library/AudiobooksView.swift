@@ -26,6 +26,7 @@ struct AudiobooksView: View {
             }
         }
         .navigationTitle("Audiobooks")
+        .itemNavigation()
         .onReceive(library.objectWillChange) { _ in refresh += 1 }
     }
 

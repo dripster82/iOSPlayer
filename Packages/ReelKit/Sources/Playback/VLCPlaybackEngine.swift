@@ -353,6 +353,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Sound alone, likewise: a dead audio renderer leaves the picture moving in silence.
     private var lastAudio = 0
     private var lastAudioAt = Date.distantPast
+    /// The clock at the last check, for sound-only streams.
+    private var lastClock = -1
 
     /// Coming back to the foreground (after PiP, the lock screen or another app): if VLC says it is
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
@@ -408,7 +410,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             try? await Task.sleep(for: .seconds(4))
             guard let self, self.status == .playing, let now = self.player.media?.statistics else { return }
             let noPicture = hasVideo && Int(now.displayedPictures) == pictures
-            let noSound = hasAudio && Int(now.playedAudioBuffers) == audio
+            // The audio counter is only evidence once it has moved: some outputs never count.
+            let noSound = hasAudio && audio > 0 && Int(now.playedAudioBuffers) == audio
             guard noPicture || noSound else { return }
             log("no \([noPicture ? "picture" : nil, noSound ? "sound" : nil].compactMap { $0 }.joined(separator: " or ")) since returning to the foreground (shown \(now.displayedPictures), played \(now.playedAudioBuffers)); reconnecting at \(Int(position))s")
             self.reconnect(at: position)
@@ -443,10 +446,19 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 }
                 let pictures = Int(stats.displayedPictures)
                 let audio = Int(stats.playedAudioBuffers)
-                let count = pictures + audio
+                // Sound alone (an audiobook): the output takes buffers in bursts seconds apart and the
+                // reads come in bursts too, so between them nothing counts and a live stream would
+                // read as dead. The clock moving is progress there, with a longer threshold; a dead
+                // socket still shows as a clock that has stopped, since the audio clock follows the
+                // samples played.
+                let audioOnly = self.player.videoTracks.isEmpty
+                let clockNow = Int(self.clock.time)
+                let count = pictures + audio + (audioOnly ? Int(stats.decodedAudio) + Int(stats.demuxReadBytes / 1024) + (clockNow != self.lastClock ? 1 + self.lastProgressCount : 0) : 0)
+                self.lastClock = clockNow
+                let stallAfter: TimeInterval = audioOnly ? 20 : 8
                 if audio != self.lastAudio {
                     self.lastAudio = audio; self.lastAudioAt = Date()
-                } else if self.hasSelectedAudio, pictures != self.lastPictures,
+                } else if self.hasSelectedAudio, self.lastAudio > 0, pictures != self.lastPictures,
                           Date().timeIntervalSince(self.lastAudioAt) > 6, Date().timeIntervalSince(self.lastSeekAt) > 15 {
                     log("audio stalled: no sound for \(Int(Date().timeIntervalSince(self.lastAudioAt)))s while the picture ran (decoded \(stats.decodedAudio), played \(stats.playedAudioBuffers), lost \(stats.lostAudioBuffers)); reloading at \(Int(self.clock.time))s")
                     self.reconnect(at: self.clock.time)
@@ -467,8 +479,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                     self.lastProgressTime = self.clock.time
                     continue
                 }
-                if Date().timeIntervalSince(self.lastProgressAt) > 8, Date().timeIntervalSince(self.lastSeekAt) > 15 {
-                    log("stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s")
+                if Date().timeIntervalSince(self.lastProgressAt) > stallAfter, Date().timeIntervalSince(self.lastSeekAt) > 15 {
+                    log("stalled: no output for \(Int(Date().timeIntervalSince(self.lastProgressAt)))s, clock says \(Int(self.clock.time))s, last played \(Int(self.lastProgressTime))s (shown \(stats.displayedPictures), played \(stats.playedAudioBuffers), decoded audio \(stats.decodedAudio), read \(stats.demuxReadBytes / 1024) KB)")
                     self.reconnect(at: self.lastProgressTime)
                 }
             }
