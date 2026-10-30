@@ -154,7 +154,42 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         pictureInPictureMediaController = PiPMediaController(player: player)
         super.init()
         player.delegate = self
+        #if canImport(UIKit)
+        interruptionWatcher = NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in self?.handleAudioInterruption(note) }
+        #endif
     }
+
+    #if canImport(UIKit)
+    private var interruptionWatcher: AnyCancellable?
+    private var resumeAfterInterruption = false
+    /// A call, Siri, an alarm or another app's audio takes the audio session; iOS also reports one
+    /// on return when it suspended the session while the app was away. VLC's audio output does not
+    /// listen for these, so it would carry on "playing" into a session that is no longer ours and
+    /// the sound would be gone. Pause for the interruption; when it ends and iOS says to resume,
+    /// take the session back and play on.
+    private func handleAudioInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            let suspended = (note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt).map { AVAudioSession.InterruptionReason(rawValue: $0) == .appWasSuspended } ?? false
+            log("audio session interrupted\(suspended ? " (the app was suspended)" : "") while \(status)")
+            if suspended { sessionLostWhileAway = true; return }
+            resumeAfterInterruption = status == .playing
+            if status == .playing { player.pause() }
+        case .ended:
+            let options = AVAudioSession.InterruptionOptions(rawValue: (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
+            log("audio session interruption ended\(options.contains(.shouldResume) ? ", resuming" : "")")
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if resumeAfterInterruption, options.contains(.shouldResume) { play() }
+            resumeAfterInterruption = false
+        @unknown default: break
+        }
+    }
+    /// iOS took the audio session while the app was suspended; the output is checked once play resumes.
+    private var sessionLostWhileAway = false
+    #endif
 
     /// The UIView VLC paints into. Set by `VLCVideoView`.
     public var drawable: AnyObject? {
@@ -262,11 +297,20 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func play() {
         if verifyOnNextPlay { flushDisplayLayerIfNeeded() }
+        #if canImport(UIKit)
+        // The session may have been taken while we were paused (another app's audio, a suspension);
+        // activating an active session is free, and a dead one is why the sound goes.
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let check = verifyOnNextPlay || sessionLostWhileAway
+        sessionLostWhileAway = false
+        #else
+        let check = verifyOnNextPlay
+        #endif
         // The stall clock restarts here too: on a hot device the watchdog only looks every 15 s, which
         // is longer than its 8 s stall threshold.
-        lastProgressAt = Date(); lastPicturesAt = Date()
+        lastProgressAt = Date(); lastPicturesAt = Date(); lastAudioAt = Date()
         player.play()
-        if verifyOnNextPlay { verifyOnNextPlay = false; verifyOutput() }
+        if check { verifyOnNextPlay = false; verifyOutput() }
     }
     public func pause() { player.pause() }
     public func togglePlayPause() { player.isPlaying ? pause() : play() }
@@ -302,6 +346,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var lastPictures = 0
     private var lastPicturesAt = Date.distantPast
     private var lastPicturesTime: TimeInterval = 0
+    /// Sound alone, likewise: a dead audio renderer leaves the picture moving in silence.
+    private var lastAudio = 0
+    private var lastAudioAt = Date.distantPast
 
     /// Coming back to the foreground (after PiP, the lock screen or another app): if VLC says it is
     /// playing but nothing reaches the output within a few seconds, the socket died while we were away.
@@ -343,24 +390,28 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     #endif
 
-    /// Four seconds from now, playback must have put pictures on screen (sound alone is not enough:
-    /// a video output that died in the background leaves the picture black while the audio runs on).
-    /// If not, the item is reopened at the current position.
+    /// Four seconds from now, playback must have put pictures on screen and sound through the
+    /// speaker. The background kills either output on its own: the display layer is interrupted and
+    /// left black while VLC counts every frame as shown, and the audio renderer beside it is
+    /// interrupted the same way and swallows every buffer while the picture moves on in silence.
+    /// If either is stuck, the item is reopened at the current position.
     private func verifyOutput() {
         guard let stats = player.media?.statistics else { return }
-        let hasVideo = !player.videoTracks.isEmpty
+        let hasVideo = !player.videoTracks.isEmpty, hasAudio = hasSelectedAudio
         let pictures = Int(stats.displayedPictures), audio = Int(stats.playedAudioBuffers)
         let position = clock.time
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, self.status == .playing, let now = self.player.media?.statistics else { return }
-            let stuck = hasVideo ? Int(now.displayedPictures) == pictures : Int(now.playedAudioBuffers) == audio
-            if stuck {
-                log("no \(hasVideo ? "picture" : "sound") since returning to the foreground; reconnecting at \(Int(position))s")
-                self.reconnect(at: position)
-            }
+            let noPicture = hasVideo && Int(now.displayedPictures) == pictures
+            let noSound = hasAudio && Int(now.playedAudioBuffers) == audio
+            guard noPicture || noSound else { return }
+            log("no \([noPicture ? "picture" : nil, noSound ? "sound" : nil].compactMap { $0 }.joined(separator: " or ")) since returning to the foreground (shown \(now.displayedPictures), played \(now.playedAudioBuffers)); reconnecting at \(Int(position))s")
+            self.reconnect(at: position)
         }
     }
+    /// Whether an audio track is playing, so sound is expected along with the picture.
+    private var hasSelectedAudio: Bool { !player.audioTracks.isEmpty && player.audioTracks.contains { $0.isSelected } }
 
     /// If nothing has been shown or played for 8 s while VLC still claims to be playing, the connection
     /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
@@ -372,6 +423,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         lastProgressAt = Date()
         lastPictures = 0
         lastPicturesAt = Date()
+        lastAudio = 0
+        lastAudioAt = Date()
         stallWatchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 // Reading VLC's statistics is cheap, but a hot device gets left alone as much as possible.
@@ -381,11 +434,20 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 guard self.status == .playing, let stats = self.player.media?.statistics else {
                     // Paused, opening or buffering: no output is expected, so the stall clock starts again
                     // from here. Otherwise a long pause reads as "no output for 400s" the moment play resumes.
-                    self.lastProgressAt = Date(); self.lastPicturesAt = Date()
+                    self.lastProgressAt = Date(); self.lastPicturesAt = Date(); self.lastAudioAt = Date()
                     continue
                 }
                 let pictures = Int(stats.displayedPictures)
-                let count = pictures + Int(stats.playedAudioBuffers)
+                let audio = Int(stats.playedAudioBuffers)
+                let count = pictures + audio
+                if audio != self.lastAudio {
+                    self.lastAudio = audio; self.lastAudioAt = Date()
+                } else if self.hasSelectedAudio, pictures != self.lastPictures,
+                          Date().timeIntervalSince(self.lastAudioAt) > 6, Date().timeIntervalSince(self.lastSeekAt) > 15 {
+                    log("audio stalled: no sound for \(Int(Date().timeIntervalSince(self.lastAudioAt)))s while the picture ran (decoded \(stats.decodedAudio), played \(stats.playedAudioBuffers), lost \(stats.lostAudioBuffers)); reloading at \(Int(self.clock.time))s")
+                    self.reconnect(at: self.clock.time)
+                    continue
+                }
                 if pictures != self.lastPictures {
                     self.lastPictures = pictures; self.lastPicturesAt = Date(); self.lastPicturesTime = self.clock.time
                 } else if !self.player.videoTracks.isEmpty, count != self.lastProgressCount,
