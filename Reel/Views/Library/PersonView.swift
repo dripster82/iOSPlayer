@@ -12,6 +12,8 @@ struct PersonView: View {
     @State private var credits: [TMDbPersonCredit] = []
     /// The stored path, or the one TMDb's person record gives when the title was recorded without it.
     @State private var profile = ""
+    /// The TMDb id once known (stored, or found by name), for the link to their page.
+    @State private var tmdbID = 0
     @State private var owned: [Int: MediaItem] = [:]
     @State private var loading = true
     @State private var error: String?
@@ -34,6 +36,9 @@ struct PersonView: View {
                         if !credits.isEmpty {
                             Text("\(credits.count) credits · \(inLibrary.count) in your library").font(.footnote).foregroundStyle(.secondary)
                         }
+                        if tmdbID != 0, let url = URL(string: "https://www.themoviedb.org/person/\(tmdbID)") {
+                            Link(destination: url) { Label("View on TMDb", systemImage: "arrow.up.right.square").font(.footnote) }
+                        }
                     }
                 }.padding(.horizontal)
 
@@ -52,8 +57,9 @@ struct PersonView: View {
                     ForEach(shown) { c in
                         if let item = owned[c.id] {
                             NavigationLink(value: item.itemKey) { creditRow(c, owned: true) }.buttonStyle(.plain)
-                        } else {
-                            creditRow(c, owned: false)
+                        } else if let url = URL(string: "https://www.themoviedb.org/\(c.isFilm ? "movie" : "tv")/\(c.id)") {
+                            // Not in the library: read about it on TMDb.
+                            Link(destination: url) { creditRow(c, owned: false) }.buttonStyle(.plain)
                         }
                     }
                 }.padding(.horizontal)
@@ -102,6 +108,7 @@ struct PersonView: View {
                 id = found?.id ?? 0
             }
             guard id != 0 else { loading = false; error = "TMDb doesn't know this person."; return }
+            tmdbID = id
             if profile.isEmpty {
                 if found == nil { found = try? await tmdb.person(id: id) }
                 profile = found?.profilePath ?? ""
