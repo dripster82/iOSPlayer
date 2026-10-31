@@ -9,15 +9,18 @@
 <h2>Getting started</h2>
 <ol>
 <li>Open Reel and tap <strong>Get started</strong> to add a NAS share or a folder, or <strong>Try with sample media</strong> to look around first.</li>
-<li>For titles and artwork, add a free TMDB API key in Settings → Metadata (create an account at themoviedb.org, then Settings → API).</li>
-<li>Reel scans your source in the background and sorts what it finds into TV Shows and Films.</li>
+<li>Tell Reel what each top-level folder holds (films, TV, audiobooks) in the source's folder list, or let it work that out from the names.</li>
+<li>Reel scans your source in the background and sorts what it finds into TV Shows, Films and Audiobooks, with titles and artwork. Its own keys are built in; Settings → Metadata takes yours if you prefer.</li>
 </ol>
 
 <h2>Common questions</h2>
 <h3>A title is matched to the wrong thing</h3><p>Long-press it, or open its menu, and choose <strong>Fix match</strong>. For anime, use the Anime option in that sheet.</p>
 <h3>Some files are in Needs Review</h3><p>Reel was not sure what they are. Open Needs Review from Home and accept, fix or ignore them, one file or a whole folder at a time.</p>
 <h3>Playback stops or spins</h3><p>Reel reconnects on its own when a share drops. If it gives up, the error card has Retry and a Copy details button for the log. Check the NAS is awake; Reel can send Wake-on-LAN if you enter the NAS's MAC address in the source settings.</p>
-<h3>Another app offers to open a video in Reel</h3><p>Reel accepts files from Files, share sheets and reel:// links. Links in VLC's own format can be turned on in Settings → Library.</p>
+<h3>An audiobook has the wrong title, cover or series</h3><p>Open the book and choose <strong>Fix match</strong> to pick the right edition from Audible's catalogue. Reel reads the title, author and cover from the file's own tags first; a folder named for the author is not treated as a series. Settings → Metadata chooses the Audible store, since editions and narrators differ between them.</p>
+<h3>Where is search?</h3><p>The magnifier in the top bar. Search covers titles, episode names, books, authors, narrators, cast and collections, and keeps your recent searches.</p>
+<h3>Where did I get to?</h3><p>History, from Home on iPhone or the sidebar on iPad, lists everything played with how far you got. Film, show and person pages link out to TMDb, TheTVDB and AniDB if you want to read more.</p>
+<h3>Another app offers to open a video in Reel</h3><p>Reel accepts files from Files, share sheets and reel:// links. Links in VLC's own format can be turned on in Settings → Scanning.</p>
 
 <h2 id="data">Data providers</h2>
 <ul>
@@ -26,6 +29,8 @@
 <li><strong>TheTVDB.</strong> Optional fallback search for shows, with your own key and subscriber PIN. Metadata provided by TheTVDB. Please consider adding missing information or subscribing.</li>
 <li><strong>OpenSubtitles.</strong> Optional subtitle search and download, with your own key and account.</li>
 <li><strong>AniDB and Anime-Lists.</strong> Anime title matching, using AniDB's public titles list and the Anime-Lists mapping to TMDB.</li>
+<li><strong>Audible, Audnexus and Apple Books.</strong> Audiobook titles, authors, narrators, series, summaries and covers, looked up by title and author. No account or key is needed; nothing about your library is stored there.</li>
+<li><strong>Wikidata, TVmaze and Kitsu.</strong> Consulted without a key when TMDB's answer for a show is weak.</li>
 <li><strong>VLCKit</strong> by VideoLAN, LGPL 2.1, for playback.</li>
 </ul>
 <footer><p>© dripster82. <a href="privacy.html">Privacy policy</a> · <a href="terms.html">Terms of use</a></p></footer>
