@@ -15,7 +15,8 @@ struct SearchView: View {
     private var recent: [String] { recentRaw.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
     // Computed when the query or the library changes, not on every render.
     @State private var results: [MediaItem] = []
-    @State private var people: [String] = []
+    /// Names with the profile path and TMDb id the cast lists carry, so the row shows faces.
+    @State private var people: [(name: String, profile: String, id: Int)] = []
     @State private var groups: [GroupHit] = []
 
     /// A collection of any kind whose name matches: custom, smart, universe or film series.
@@ -31,7 +32,19 @@ struct SearchView: View {
     private func runSearch() {
         results = library.search(query)
         let q = query.trimmingCharacters(in: .whitespaces)
-        people = q.count >= 2 ? Array(Set((library.items(kind: .film) + library.items(kind: .show)).flatMap(\.cast).filter { $0.localizedCaseInsensitiveContains(q) })).sorted() : []
+        var found: [String: (profile: String, id: Int)] = [:]
+        if q.count >= 2 {
+            for item in library.items(kind: .film) + library.items(kind: .show) {
+                for (i, name) in item.cast.enumerated() where name.localizedCaseInsensitiveContains(q) {
+                    let profile = i < item.castProfiles.count ? item.castProfiles[i] : ""
+                    let id = i < item.castIDs.count ? item.castIDs[i] : 0
+                    // Keep the first entry that has a picture or an id over one with neither.
+                    if let have = found[name], !have.profile.isEmpty || have.id != 0 { continue }
+                    found[name] = (profile, id)
+                }
+            }
+        }
+        people = found.keys.sorted().map { (name: $0, profile: found[$0]!.profile, id: found[$0]!.id) }
         guard q.count >= 2 else { groups = []; return }
         var hits: [GroupHit] = []
         for c in library.collections() where c.name.localizedCaseInsensitiveContains(q) {
@@ -98,8 +111,11 @@ struct SearchView: View {
                     ItemRow(title: "Shows", items: shows, fixMatchTarget: $fixMatchTarget)
                     ItemRow(title: "Films", items: films, fixMatchTarget: $fixMatchTarget)
                     ItemRow(title: "Books", items: books, fixMatchTarget: $fixMatchTarget)
-                    ItemRow(title: "Episodes", items: episodes, wide: true, subtitle: { "\($0.show?.title ?? "") · \($0.episodeCode ?? "")" }, fixMatchTarget: $fixMatchTarget)
-                    if !people.isEmpty { CastRow(names: Array(people.prefix(20))).padding(.horizontal) }
+                    ItemRow(title: "Episodes", items: episodes, wide: true, subtitle: { [$0.episodeCode, $0.title].compactMap { $0 }.joined(separator: " · ") }, fixMatchTarget: $fixMatchTarget)
+                    if !people.isEmpty {
+                        let shown = people.prefix(20)
+                        CastRow(names: shown.map(\.name), profiles: shown.map(\.profile), ids: shown.map(\.id)).padding(.horizontal)
+                    }
                 }
             }.padding(.vertical)
         }
