@@ -6,6 +6,9 @@ struct SearchView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var smart: SmartCollectionStore
     @State private var query = ""
+    /// The field is the page's reason to exist: shown and focused on arrival, never folded away
+    /// (a pushed page's default placement hides it until the page is pulled down).
+    @State private var fieldShown = true
     @State private var fixMatchTarget: MediaItem?
     @AppStorage("recentSearches") private var recentRaw = ""
 
@@ -82,7 +85,7 @@ struct SearchView: View {
         .onChange(of: query) { _, _ in runSearch() }
         .refreshFromLibrary { runSearch() }
         .navigationTitle("Search")
-        .searchable(text: $query, prompt: "Shows, films, books, episodes, people")
+        .searchable(text: $query, isPresented: $fieldShown, placement: .navigationBarDrawer(displayMode: .always), prompt: "Shows, films, books, episodes, people")
         .onSubmit(of: .search) {
             var r = recent.filter { $0 != query }; r.insert(query, at: 0)
             recentRaw = r.prefix(6).joined(separator: "\n")
