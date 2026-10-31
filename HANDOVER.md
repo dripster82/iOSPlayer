@@ -489,7 +489,9 @@ chosen edition in full. New item fields `asin` and `bookLookup` sync.
 ## Screenshots (31 Oct 2026)
 
 The iPad set in `docs/screenshots`, `docs/app-store/screenshots/raw` and the framed `ipad-13` set
-were retaken on the iPad Pro 13-inch simulator (light mode, status bar overridden to 9:41). The
+were retaken on the iPad Pro 13-inch simulator (light mode, status bar overridden to 9:41), and the
+iPhone sets on the iPhone 17 Pro Max (raw and 6.9") and iPhone 17 Pro (6.1"); `seed.sh`, `finish.sh`
+and `shoot.sh` in that session's scratchpad did the seeding and the walk, as described here. The
 library is a stand-in corpus, since the old WebDAV test library is gone: ffmpeg clips from the
 demo backdrops named like real films and episodes, and tiny tagged `.m4b` files for the books, in
 a scratchpad folder served by wsgidav on 127.0.0.1:8080 without a password. The scanner reads only

@@ -73,6 +73,8 @@ enum DeepLinks {
             switch arg {
             case "collections": nav.show(.home); Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(route: .collections) }
             case "favourites": nav.show(.home); Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(route: .favourites) }
+            // History is a sidebar section on the iPad and a page over Home on the phone.
+            case "history" where nav.searchIsAPage: nav.show(.home); Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); nav.open(route: .history) }
             case "settings": nav.show(.settings)
             default: if let s = AppSection(rawValue: arg) { nav.show(s) } else { return false }
             }
