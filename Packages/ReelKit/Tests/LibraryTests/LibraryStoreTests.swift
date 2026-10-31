@@ -123,6 +123,17 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(thud.seriesName, "Discworld"); XCTAssertEqual(thud.seriesIndex, 34)
     }
 
+    func testAFolderNamedForTheAuthorIsNotASeries() throws {
+        // The folder parser files "Books/Terry Pratchett/Mort.m4b" under a series "Terry Pratchett".
+        let mort = book("Mort", author: nil, series: "Terry Pratchett")
+        store.applyBookTags(mort, title: "Mort", author: "Terry Pratchett", narrator: nil, year: nil, cover: nil)
+        XCTAssertNil(mort.seriesName, "the tags name the author, so the folder was not a series")
+        var hit = AudiobookHit(source: "Audible", asin: "B3", title: "Mort", authors: ["Terry Pratchett"])
+        hit.allSeries = [.init(name: "Discworld", position: "4")]; hit.chooseSeries(known: [])
+        store.applyBookLookup(mort, hit: hit, manual: false)
+        XCTAssertEqual(mort.seriesName, "Discworld"); XCTAssertEqual(mort.seriesIndex, 4)
+    }
+
     func testSmartCollectionsAreCollectionsWithRulesKeptApart() throws {
         store.addCollection(named: "Marvel")
         let id = UUID()

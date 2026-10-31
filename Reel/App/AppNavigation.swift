@@ -52,7 +52,7 @@ final class AppNavigation: ObservableObject {
 ///   reel://stop   (closes the player)
 ///   reel://scan
 ///   reel://demo
-///   reel://addsource?type=webdav&host=…&port=…&path=…&name=…&tls=0   (Debug builds only)
+///   reel://addsource?type=webdav&host=…&port=…&path=…&name=…&tls=0&tags=Films:films,TV:tv   (Debug builds only)
 enum DeepLinks {
     @MainActor
     static func handle(_ url: URL, nav: AppNavigation, library: LibraryStore, player: PlayerCoordinator, settings: AppSettings) -> Bool {
@@ -133,8 +133,14 @@ enum DeepLinks {
             if q["via"] == "vlc" { SourceFactory.preferVLCForFTP = true }
             let config = SourceConfig(name: q["name"] ?? host, type: type, host: host, port: q["port"].flatMap(Int.init), path: q["path"] ?? "", useTLS: q["tls"] != "0")
             let creds = q["user"].map { Credentials(username: $0, password: q["pass"] ?? "") }
+            // tags=Films:films,TV:tv,Books:audiobooks tags folders as the Sources screen would.
+            let rules: [(String, FolderTag)] = (q["tags"] ?? "").split(separator: ",").compactMap { pair in
+                let parts = pair.split(separator: ":", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let tag = FolderTag(rawValue: parts[1]) else { return nil }
+                return (parts[0], tag)
+            }
             do {
-                let record = try library.addSource(config, credentials: creds, folderRules: [])
+                let record = try library.addSource(config, credentials: creds, folderRules: rules)
                 library.scan(record, providers: settings.providers)
                 Diagnostics.log("app", "debug link added source \(config.name)")
             } catch {

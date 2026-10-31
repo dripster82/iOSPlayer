@@ -159,7 +159,9 @@ struct HistoryView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.kind == .episode ? (item.show?.title ?? item.title) : item.title).font(.subheadline.weight(.semibold))
                                 if item.kind == .episode, !item.isAudiobookPart { Text(item.title).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                Text([item.episodeCode, Self.progressLabel(ws), ws.lastPlayedAt?.formatted(.relative(presentation: .named))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                // A part of a book is "Part 3", an episode its code.
+                                let where_ = item.isAudiobookPart ? item.episodeNumber.map { "Part \($0)" } : item.episodeCode
+                                Text([where_, Self.progressLabel(ws), ws.lastPlayedAt?.formatted(.relative(presentation: .named))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }

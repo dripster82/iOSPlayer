@@ -302,6 +302,7 @@ public actor LibraryScanner {
             }
             // Tags trump names: once read, the names only fill what the tags left empty.
             if !book.tagsRead || book.seriesName == nil { book.seriesName = b.series ?? book.seriesName; book.seriesIndex = b.seriesIndex ?? book.seriesIndex }
+            LibraryStore.dropSeriesNamedAfterAuthor(book)
             if book.year == nil { book.year = b.year }
             book.pendingSync = true; book.updatedAt = Date()
             for (i, part) in b.parts.enumerated() {

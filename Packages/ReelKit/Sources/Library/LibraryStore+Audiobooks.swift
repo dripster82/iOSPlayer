@@ -33,6 +33,7 @@ extension LibraryStore {
             if let s = parsed.series { book.seriesName = s; book.seriesIndex = parsed.seriesIndex ?? book.seriesIndex }
         }
         if let author, !author.isEmpty { book.author = author }
+        Self.dropSeriesNamedAfterAuthor(book)
         if let narrator, !narrator.isEmpty { book.narrator = narrator }
         if let year, book.year == nil { book.year = year }
         if let cover, !cover.isEmpty {
@@ -65,11 +66,19 @@ extension LibraryStore {
 
     /// What a catalogue said about a book. Chosen by hand it replaces everything; taken on the
     /// names it fills what the files did not say, and the names' title and author stand when the
+    /// A single-file book in a folder named for its author ("Books/Terry Pratchett/Mort.m4b") is
+    /// filed by the folder parser under a series of that name. The author is not a series.
+    nonisolated static func dropSeriesNamedAfterAuthor(_ book: MediaItem) {
+        guard let s = book.seriesName, let a = book.author, MediaItem.makeSortTitle(s) == MediaItem.makeSortTitle(a) else { return }
+        book.seriesName = nil; book.seriesIndex = nil
+    }
+
     /// tags gave them (the tags are the edition on disk; the catalogue may be another).
     public func applyBookLookup(_ book: MediaItem, hit given: AudiobookHit, manual: Bool) {
         // Of the series the catalogue lists, the one this library already shelves the author's
         // other books under (or the tags named), else the parent series.
         var hit = given
+        Self.dropSeriesNamedAfterAuthor(book)
         let known = [book.seriesName].compactMap { $0 } + items(kind: .audiobook).filter { $0 !== book && $0.author == book.author }.compactMap(\.seriesName)
         hit.chooseSeries(known: known)
         let trust = manual || !book.tagsRead

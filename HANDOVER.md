@@ -485,3 +485,27 @@ chosen edition in full. New item fields `asin` and `bookLookup` sync.
 - **Settings** is a short top level (Library, Preferences, iCloud, Storage, About, Reset) with pages
   in `Settings/SettingsPages.swift`: Metadata, Playback, Subtitles, Scanning.
 - Still per device: nothing of note. Widgets still wait on the App Group entitlement (Developer portal).
+
+## Screenshots (31 Oct 2026)
+
+The iPad set in `docs/screenshots`, `docs/app-store/screenshots/raw` and the framed `ipad-13` set
+were retaken on the iPad Pro 13-inch simulator (light mode, status bar overridden to 9:41). The
+library is a stand-in corpus, since the old WebDAV test library is gone: ffmpeg clips from the
+demo backdrops named like real films and episodes, and tiny tagged `.m4b` files for the books, in
+a scratchpad folder served by wsgidav on 127.0.0.1:8080 without a password. The scanner reads only
+names, TMDb and Audible supply the rest. Steps:
+
+1. `reel://addsource?type=webdav&host=127.0.0.1&port=8080&path=/&name=Media&tls=0&tags=Films:films,TV:tv,Books:audiobooks`
+   written to `Documents/command.txt` (Debug builds). The new `tags` parameter sets folder rules.
+2. Watch states, favourites and plausible file sizes, lengths and codecs are written straight
+   into `Reel.store` with sqlite while the app is terminated (a hand-written collection row crashed
+   the app: SwiftData's encoding of `itemKeys` is not JSON, so collections stay empty).
+3. `reel://open/<section>` and `reel://item?title=` drive the pages; `xcrun simctl io screenshot`.
+   The player: `reel://play?title=Firefly` on a ten-minute `gradients` clip, one tap for controls.
+4. `Scripts/app-store-screenshot.sh` frames the raw PNGs with the captions on the old set, plus
+   "Audiobooks, by author and series".
+
+Two bugs the shots found and fixed: a single-file book in an author-named folder took the author
+as its series (`LibraryStore.dropSeriesNamedAfterAuthor`, applied by tags, lookup and the scanner),
+and a part of a book had no cover on Home or in History (the part now borrows the book's chosen
+cover). History says "Part 1" for a book, not "S01E01".
