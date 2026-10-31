@@ -374,7 +374,7 @@ Phase 4
 - [x] Picture in Picture — done via VLCKit 4 (§3.5). Auto-starts on swipe-home during playback; `pip.enter` button in the player.
 - [ ] Scrub thumbnails (`VLCMediaThumbnailer`, 10 s intervals, cached per file).
 - [ ] Subtitle style editor (size/colour/position) — VLC `--freetype-*` options at load time.
-- [ ] Accessibility pass: VoiceOver labels on player controls, Dynamic Type in grids, reduced motion.
+- [ ] Accessibility pass: VoiceOver through the grids, cards and sheets (the player controls are labelled, see above), Dynamic Type at the larger sizes, reduced motion.
 - [x] App icon (24 Oct): letter R in film strip, generated with Codex; see Design/README.md.
 
 Phase 5
