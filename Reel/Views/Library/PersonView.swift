@@ -37,7 +37,7 @@ struct PersonView: View {
                             Text("\(credits.count) credits · \(inLibrary.count) in your library").font(.footnote).foregroundStyle(.secondary)
                         }
                         if tmdbID != 0, let url = URL(string: "https://www.themoviedb.org/person/\(tmdbID)") {
-                            Link(destination: url) { Label("View on TMDb", systemImage: "arrow.up.right.square").font(.footnote) }
+                            LinkPill(name: "TMDb", url: url)
                         }
                     }
                 }.padding(.horizontal)
@@ -57,9 +57,8 @@ struct PersonView: View {
                     ForEach(shown) { c in
                         if let item = owned[c.id] {
                             NavigationLink(value: item.itemKey) { creditRow(c, owned: true) }.buttonStyle(.plain)
-                        } else if let url = URL(string: "https://www.themoviedb.org/\(c.isFilm ? "movie" : "tv")/\(c.id)") {
-                            // Not in the library: read about it on TMDb.
-                            Link(destination: url) { creditRow(c, owned: false) }.buttonStyle(.plain)
+                        } else {
+                            creditRow(c, owned: false)
                         }
                     }
                 }.padding(.horizontal)
@@ -91,6 +90,8 @@ struct PersonView: View {
             }
             Spacer()
             if owned { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor) }
+            // The row opens the title in Reel when owned; the pill reads about it on TMDb.
+            if let url = URL(string: "https://www.themoviedb.org/\(c.isFilm ? "movie" : "tv")/\(c.id)") { LinkPill(name: "TMDb", url: url) }
         }
         .padding(8)
         .background(owned ? Color.accentColor.opacity(0.08) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))

@@ -135,6 +135,17 @@ extension LibraryStore {
         Diagnostics.log("library", "purged \(orphans.count) orphaned items")
     }
 
+    /// The AniDB entry chosen in Fix Match for any of a show's files, if one was. Nothing is created.
+    public func aniDBID(for item: MediaItem) -> Int? {
+        let files = item.kind == .show ? item.episodes.flatMap(\.files) : item.files
+        for file in files {
+            let key = ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: file.duration)
+            var d = FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key }); d.fetchLimit = 1
+            if let id = try? context.fetch(d).first?.forcedAniDBID { return id }
+        }
+        return nil
+    }
+
     func override(for file: MediaFile) -> ItemOverride {
         let key = ItemKey.unmatched(fileName: file.fileName, size: file.size, duration: file.duration)
         var d = FetchDescriptor<ItemOverride>(predicate: #Predicate { $0.fileKey == key }); d.fetchLimit = 1

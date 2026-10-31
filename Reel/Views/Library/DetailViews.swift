@@ -107,6 +107,40 @@ struct Facts: View {
     }
 }
 
+/// Small pills opening the title on the databases that described it: TMDb always, TheTVDB when
+/// its id is known, AniDB when Fix Match named an entry. For reading further, outside the app.
+struct SourceLinks: View {
+    @EnvironmentObject private var library: LibraryStore
+    let item: MediaItem
+    var body: some View {
+        let isShow = item.kind == .show
+        let links: [(String, URL?)] = [
+            ("TMDb", item.tmdbID.flatMap { URL(string: "https://www.themoviedb.org/\(isShow ? "tv" : "movie")/\($0)") }),
+            ("TheTVDB", isShow ? item.tvdbID.flatMap { URL(string: "https://thetvdb.com/dereferrer/series/\($0)") } : nil),
+            ("AniDB", library.aniDBID(for: item).flatMap { URL(string: "https://anidb.net/anime/\($0)") }),
+        ]
+        let shown = links.compactMap { l in l.1.map { (l.0, $0) } }
+        if !shown.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(shown, id: \.0) { name, url in LinkPill(name: name, url: url) }
+            }
+        }
+    }
+}
+
+/// A bordered caption pill that opens a web page: "TMDb ↗".
+struct LinkPill: View {
+    let name: String
+    let url: URL
+    var body: some View {
+        Link(destination: url) {
+            Label(name, systemImage: "arrow.up.right").labelStyle(.titleAndIcon).font(.caption)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor.opacity(0.6)))
+        }
+    }
+}
+
 struct CastRow: View {
     let names: [String]
     /// TMDb profile paths parallel to `names`; "" or missing falls back to the initial.
@@ -182,6 +216,7 @@ struct FilmDetailView: View {
                     film.confidence == .autoLow ? ("Low-confidence match", .yellow) : film.confidence == .unmatched ? ("Not matched yet · Needs Review", .orange) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = film.overview { Text(o).font(.subheadline).padding(.horizontal) }
+                SourceLinks(item: film).padding(.horizontal)
                 CastRow(names: film.cast, profiles: film.castProfiles, ids: film.castIDs).padding(.horizontal)
                 MoreLikeThisRow(item: film).loading()
                 if let cid = film.collectionID {
@@ -337,6 +372,7 @@ struct ShowDetailView: View {
                     show.confidence == .autoLow ? ("Low-confidence match", .yellow) : show.confidence == .unmatched ? ("Not matched yet · Needs Review", .orange) : nil,
                 ].compactMap { $0 }).padding(.horizontal)
                 if let o = show.overview { Text(o).font(.subheadline).padding(.horizontal) }
+                SourceLinks(item: show).padding(.horizontal)
                 CastRow(names: show.cast, profiles: show.castProfiles, ids: show.castIDs).padding(.horizontal)
                 MoreLikeThisRow(item: show).loading()
                 VStack(alignment: .leading, spacing: 8) {
