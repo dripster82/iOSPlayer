@@ -6,9 +6,9 @@ struct SearchView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var smart: SmartCollectionStore
     @State private var query = ""
-    /// The field is the page's reason to exist: shown and focused on arrival, never folded away
-    /// (a pushed page's default placement hides it until the page is pulled down).
-    @State private var fieldShown = true
+    /// The field sits in the page under the title, like every other page's content, and takes
+    /// focus on arrival. The system search bar would replace the title with a Cancel button.
+    @FocusState private var fieldFocused: Bool
     @State private var fixMatchTarget: MediaItem?
     @AppStorage("recentSearches") private var recentRaw = ""
 
@@ -20,6 +20,13 @@ struct SearchView: View {
 
     /// A collection of any kind whose name matches: custom, smart, universe or film series.
     struct GroupHit: Identifiable { var id: String; var title: String; var subtitle: String; var icon: String; var route: LibraryRoute }
+
+    private func remember(_ q: String) {
+        let q = q.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return }
+        var r = recent.filter { $0 != q }; r.insert(q, at: 0)
+        recentRaw = r.prefix(6).joined(separator: "\n")
+    }
 
     private func runSearch() {
         results = library.search(query)
@@ -49,6 +56,20 @@ struct SearchView: View {
         let books = results.filter { $0.kind == .audiobook }
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Shows, films, books, episodes, people", text: $query)
+                        .focused($fieldFocused)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .onSubmit { remember(query) }
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                    }
+                }
+                .padding(10)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal)
                 if query.isEmpty {
                     if !recent.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -85,11 +106,7 @@ struct SearchView: View {
         .onChange(of: query) { _, _ in runSearch() }
         .refreshFromLibrary { runSearch() }
         .navigationTitle("Search")
-        .searchable(text: $query, isPresented: $fieldShown, placement: .navigationBarDrawer(displayMode: .always), prompt: "Shows, films, books, episodes, people")
-        .onSubmit(of: .search) {
-            var r = recent.filter { $0 != query }; r.insert(query, at: 0)
-            recentRaw = r.prefix(6).joined(separator: "\n")
-        }
+        .onAppear { fieldFocused = true }
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
     }
