@@ -17,7 +17,7 @@ Read in this order: this file → `PLAN.md` §6, §10, §11, §12 → `BUILDING.
 | Product | iPhone + iPad video player. Plays ~99% of files including MKV via VLCKit. Streams from SMB / WebDAV / local folders. Sorts into TV and Films with TMDb artwork. iCloud sync of watch state and favourites. Think Infuse. |
 | Name | **Reel** (placeholder, change freely) |
 | Owner | Paul (paul@ketelle.co.uk). Has a paid Apple Developer account. |
-| Distribution | Sideload now → TestFlight later. **Not** App Store yet. |
+| Distribution | TestFlight (build 4 uploaded 31 Oct 2026); App Store listing filled in, not submitted. |
 | Pricing | Free. No in-app purchases, no adverts. This keeps TMDb and friends on their non-commercial terms. |
 | Licence route | **LGPL.** VLCKit linked dynamically as an xcframework, credited in Settings → About → Licences. Do not switch to a static VLC build. Do not add GPL-only modules. |
 | Min iOS | 17.0 (needed for `CKSyncEngine`, SwiftData, modern SwiftUI navigation). |
@@ -511,3 +511,27 @@ Two bugs the shots found and fixed: a single-file book in an author-named folder
 as its series (`LibraryStore.dropSeriesNamedAfterAuthor`, applied by tags, lookup and the scanner),
 and a part of a book had no cover on Home or in History (the part now borrows the book's chosen
 cover). History says "Part 1" for a book, not "S01E01".
+
+## TestFlight upload (31 Oct 2026)
+
+No Xcode Cloud workflow exists; builds are archived on Paul's Mac and uploaded by `xcodebuild`. Xcode is
+signed into Paul's Apple ID, so automatic signing fetches the distribution certificate and profile on
+demand (`-allowProvisioningUpdates`); nothing is in the keychain beyond the development identity. Bump
+`CURRENT_PROJECT_VERSION` in `project.yml`, `xcodegen generate`, then:
+
+```sh
+xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Release -destination 'generic/platform=iOS' \
+  -archivePath /tmp/Reel.xcarchive -allowProvisioningUpdates archive
+xcodebuild -exportArchive -archivePath /tmp/Reel.xcarchive -exportOptionsPlist ExportOptions.plist \
+  -exportPath /tmp/export -allowProvisioningUpdates
+```
+
+`ExportOptions.plist`: method `app-store-connect`, destination `upload`, teamID `834D8P4J32`, signingStyle
+`automatic`, uploadSymbols true, manageAppVersionAndBuildNumber false. The export step uploads and waits
+for "Upload succeeded"; processing takes a few minutes before the build appears under TestFlight.
+
+The App Store Connect listing (version 1.0, "Prepare for Submission") was filled from
+`docs/app-store/listing.md` on 31 Oct: subtitle, promo text, description, keywords, URLs on
+reel.ketelle.co.uk, six iPhone shots (6.1" set) and seven iPad shots (13" set). The site's React form
+ignores programmatic value changes; fields were filled by typing. The 6.9" iPhone set is not uploaded
+separately: App Store Connect scales the medium-display set to every iPhone size.
