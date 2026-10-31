@@ -10,6 +10,8 @@ struct PersonView: View {
     @EnvironmentObject private var settings: AppSettings
     let person: PersonRef
     @State private var credits: [TMDbPersonCredit] = []
+    /// The stored path, or the one TMDb's person record gives when the title was recorded without it.
+    @State private var profile = ""
     @State private var owned: [Int: MediaItem] = [:]
     @State private var loading = true
     @State private var error: String?
@@ -22,8 +24,8 @@ struct PersonView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 16) {
-                    if !person.profilePath.isEmpty {
-                        ArtworkImage(url: ArtworkURL.profile(person.profilePath), title: person.name, aspect: 1, cornerRadius: 44).frame(width: 88, height: 88).clipShape(Circle())
+                    if !profile.isEmpty {
+                        ArtworkImage(url: ArtworkURL.profile(profile), title: person.name, aspect: 1, cornerRadius: 44).frame(width: 88, height: 88).clipShape(Circle())
                     } else {
                         ArtworkImage.Placeholder(title: person.name).frame(width: 88, height: 88).clipShape(Circle())
                     }
@@ -90,14 +92,21 @@ struct PersonView: View {
 
     private func load() async {
         guard let tmdb = settings.tmdb else { loading = false; error = "Add a TMDb API key in Settings to see a filmography."; return }
-        loading = true; error = nil
+        loading = true; error = nil; profile = person.profilePath
         do {
             var id = person.id
+            var found: TMDbPersonSummary?
             if id == 0 {
                 // Cast recorded before ids were kept: take TMDb's best match for the name.
-                id = try await tmdb.searchPeople(query: person.name).first?.id ?? 0
+                found = try await tmdb.searchPeople(query: person.name).first
+                id = found?.id ?? 0
             }
             guard id != 0 else { loading = false; error = "TMDb doesn't know this person."; return }
+            if profile.isEmpty {
+                if found == nil { found = try? await tmdb.person(id: id) }
+                profile = found?.profilePath ?? ""
+            }
+            if profile != person.profilePath || person.id == 0 { library.recordCastProfile(name: person.name, profilePath: profile, id: id) }
             credits = try await tmdb.personCredits(id: id).filter { ($0.voteCount ?? 0) > 0 || $0.posterPath != nil }
             owned = library.items(tmdbIDs: Set(credits.map(\.id)))
         } catch {

@@ -145,6 +145,11 @@ public actor TMDbClient {
         return credits.cast
     }
 
+    /// One person: the name and current profile photo, for cast recorded without a photo.
+    public func person(id: Int) async throws -> TMDbPersonSummary {
+        try await get("person/\(id)", [], label: "person")
+    }
+
     /// For cast members recorded before their TMDb ids were kept: find the person by name.
     public func searchPeople(query: String) async throws -> [TMDbPersonSummary] {
         let page: TMDbSearchPage<TMDbPersonSummary> = try await get("search/person", [URLQueryItem(name: "query", value: query), URLQueryItem(name: "include_adult", value: "false")], label: "person search")

@@ -1,10 +1,12 @@
 import SwiftUI
 import MediaCore
 import Library
+import Metadata
 
 struct SearchView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var smart: SmartCollectionStore
+    @EnvironmentObject private var settings: AppSettings
     @State private var query = ""
     /// The field sits in the page under the title, like every other page's content, and takes
     /// focus on arrival. The system search bar would replace the title with a Cancel button.
@@ -29,6 +31,27 @@ struct SearchView: View {
         recentRaw = r.prefix(6).joined(separator: "\n")
     }
 
+    /// Matches recorded without a photo: ask TMDb for the person (by id, or by name for cast kept
+    /// before ids were), write the answer into the library, and redraw. A handful at most.
+    @State private var facesAsked = Set<String>()
+    private func fetchMissingFaces() {
+        guard let tmdb = settings.tmdb else { return }
+        let missing = people.filter { $0.profile.isEmpty && !facesAsked.contains($0.name) }.prefix(8)
+        guard !missing.isEmpty else { return }
+        for m in missing { facesAsked.insert(m.name) }
+        Task {
+            var any = false
+            for m in missing {
+                let found: TMDbPersonSummary?
+                if m.id != 0 { found = try? await tmdb.person(id: m.id) } else { found = try? await tmdb.searchPeople(query: m.name).first }
+                guard let found, let path = found.profilePath, !path.isEmpty else { continue }
+                library.recordCastProfile(name: m.name, profilePath: path, id: found.id)
+                any = true
+            }
+            if any { runSearch() }
+        }
+    }
+
     private func runSearch() {
         results = library.search(query)
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -45,6 +68,7 @@ struct SearchView: View {
             }
         }
         people = found.keys.sorted().map { (name: $0, profile: found[$0]!.profile, id: found[$0]!.id) }
+        fetchMissingFaces()
         guard q.count >= 2 else { groups = []; return }
         var hits: [GroupHit] = []
         for c in library.collections() where c.name.localizedCaseInsensitiveContains(q) {

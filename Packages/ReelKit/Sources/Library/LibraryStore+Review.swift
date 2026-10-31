@@ -149,6 +149,20 @@ extension LibraryStore {
         (items(kind: .film) + items(kind: .show)).filter { $0.cast.contains(name) }.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     }
 
+    /// A photo and id found for a cast member whose titles were recorded without them: written to
+    /// every title that lists the name, so the film page and Search show the face from now on.
+    public func recordCastProfile(name: String, profilePath: String, id: Int) {
+        var changed = false
+        for item in items(withCastMember: name) {
+            guard let i = item.cast.firstIndex(of: name) else { continue }
+            while item.castProfiles.count < item.cast.count { item.castProfiles.append("") }
+            while item.castIDs.count < item.cast.count { item.castIDs.append(0) }
+            if item.castProfiles[i].isEmpty, !profilePath.isEmpty { item.castProfiles[i] = profilePath; changed = true }
+            if item.castIDs[i] == 0, id != 0 { item.castIDs[i] = id; changed = true }
+        }
+        if changed { try? context.save(); objectWillChange.send() }
+    }
+
     /// Library items by TMDb id, to mark which of a person's credits are owned.
     public func items(tmdbIDs: Set<Int>) -> [Int: MediaItem] {
         var out: [Int: MediaItem] = [:]
