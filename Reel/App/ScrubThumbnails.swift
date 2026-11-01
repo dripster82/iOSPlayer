@@ -6,13 +6,14 @@ import Playback
 
 /// Preview frames for the scrubber: one per 20 s of runtime (at least 9, at most 150), made with
 /// VLC's thumbnailer a minute into a play (so they never compete with the opening buffer) and kept
-/// in Caches/scrub-v3/<item>/. Each frame is a separate open of the stream, a second or two over
+/// in Caches/scrub-v6/<item>/. Each frame is a separate open of the stream, a second or two over
 /// SMB, so they are made one at a time, coarse first (every ninth, then the gaps) so the scrubber
 /// is useful within seconds and exact to the minute once the pass is done.
 ///
-/// The thumbnailer's own `snapshotPosition` is a seek issued as playback starts, which libvlc 4
-/// drops (the engine's resume has the same fight), so every frame came out as the first picture.
-/// Each media is opened with `:start-time` instead, so its position zero *is* the wanted time.
+/// Each media is opened with `:start-time` at the wanted time. libvlc 4 makes positions relative
+/// to that range, and VLCKit's thumbnailer reads a `snapshotPosition` of 0 as unset and uses 0.3,
+/// which put every frame 30% of the way from its start time to the end of the file (the v5 cache);
+/// a hair above 0 keeps the snapshot at the start time.
 @MainActor
 final class ScrubThumbnails: ObservableObject {
     static let shared = ScrubThumbnails()
@@ -90,10 +91,11 @@ final class ScrubThumbnails: ObservableObject {
 
     private static var root: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        // Earlier caches: identical frames (before the start-time fix), then nine per title.
-        // scrub-v4 held frames the hardware decoder got wrong (black, green); v3 is kept as the stand-in set.
-        for old in ["scrub", "scrub-v2", "scrub-v4"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
-        let dir = caches.appendingPathComponent("scrub-v5", isDirectory: true)
+        // Earlier caches: identical frames (before the start-time fix), then nine per title; scrub-v4
+        // held frames the hardware decoder got wrong (black, green); v3 and v5 held frames tens of
+        // seconds late (the thumbnailer's 0.3 default position inside the start-time range).
+        for old in ["scrub", "scrub-v2", "scrub-v3", "scrub-v4", "scrub-v5"] { try? FileManager.default.removeItem(at: caches.appendingPathComponent(old, isDirectory: true)) }
+        let dir = caches.appendingPathComponent("scrub-v6", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -182,7 +184,10 @@ final class ScrubThumbnails: ObservableObject {
     /// the fingerprints, which must line up between episodes; the scrubber's own frames take the
     /// keyframe before, which VLCMediaThumbnailer hands back faster.
     static func frame(url: URL, at seconds: TimeInterval, softwareDecoding: Bool, precise: Bool = false) async -> CGImage? {
-        if precise, PreciseThumbnail.isAvailable, let image = await PreciseThumbnail.frame(url: url, at: seconds, softwareDecoding: softwareDecoding) { return image }
+        // libvlc's own thumbnailer, at an absolute time. VLCKit's VLCMediaThumbnailer below is the
+        // fallback where the shim is not built: it places its frame relative to the start-time
+        // range (30% of the way to the end), so its frames come out tens of seconds late.
+        if PreciseThumbnail.isAvailable { return await PreciseThumbnail.frame(url: url, at: seconds, softwareDecoding: softwareDecoding, fast: !precise) }
         guard let media = VLCMedia(url: url) else { return nil }
         media.addOption(":start-time=\(Int(seconds))")
         media.addOption(":no-audio")
@@ -191,7 +196,10 @@ final class ScrubThumbnails: ObservableObject {
         return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
             let job = ThumbJob(continuation: continuation)
             let thumbnailer = VLCMediaThumbnailer(media: media, andDelegate: job)
-            thumbnailer.snapshotPosition = 0
+            // Not 0: VLCKit reads 0 as "unset" and falls back to its default of 0.3, and with a
+            // start-time that is 30% of the way from the start time to the end of the file, so
+            // every frame in the strip came out tens of seconds late. A hair above 0 lands at the start time.
+            thumbnailer.snapshotPosition = 0.001
             thumbnailer.thumbnailWidth = 320
             thumbnailer.thumbnailHeight = 180
             // The thumbnailer's delegate is weak, so the job must be held here until it reports.

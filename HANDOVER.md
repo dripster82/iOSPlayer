@@ -575,3 +575,16 @@ canvas over a frame the strip already had. The preview is a still: after each se
 until the first new picture after the seek has landed, then pauses. It used to wait on time ticks plus
 a delay, which with the hardware decoder showed up to a second of motion in the bubble; the settle now
 counts displayed pictures, and logs "scrub preview did not hold" if pictures keep coming after the pause.
+
+Two more findings from the same afternoon, both about `:start-time` in libvlc 4. Seeks and reported
+times are relative to the start-time range: the preview opened at 50 s and seeked to 90 s showed the
+picture from 140 s while reporting 90, so the preview no longer uses `:start-time` and applies the
+wanted time as its first seek instead (the canvas stays hidden until a picture from after that seek
+has shown). VLCKit's `VLCMediaThumbnailer` places its frame at its default position 0.3 inside that
+range whatever `snapshotPosition` says, so every strip frame sat 30% of the way from its start time
+to the end of the file (the scrub-v3 and v5 caches, now deleted on launch; the strip is scrub-v6).
+The strip now comes from the shim's `libvlc_media_thumbnail_request_by_time` with a fast seek
+(`PreciseThumbnail.frame(fast:)`), which takes an absolute time; checked in the simulator against a
+clip with a burned-in clock: frames at 0:10, 0:50, 1:30, 2:10, 2:50 for a 3-minute file, and the
+preview at 1:30.8 for the 1:31 mark. `Packages/ReelKit` tests: the DLNA integration test fails when
+a MiniDLNA on 127.0.0.1:8200 serves a library without the demo film; it is unrelated to playback.

@@ -12,8 +12,11 @@ import VLCKit
 public enum PreciseThumbnail {
     public static var isAvailable: Bool { reel_thumb_available() }
 
-    /// The frame at `seconds`, or nil when it could not be made within the timeout.
-    public static func frame(url: URL, at seconds: TimeInterval, width: Int = 320, height: Int = 180, softwareDecoding: Bool = false, timeout: TimeInterval = 20) async -> CGImage? {
+    /// The frame at `seconds`, or nil when it could not be made within the timeout. `fast` takes the
+    /// keyframe before the time instead of decoding up to it: right for a scrubber strip, where the
+    /// time is an absolute one in the file (VLCKit's own thumbnailer places its frames relative to
+    /// a start-time range and lands tens of seconds late).
+    public static func frame(url: URL, at seconds: TimeInterval, width: Int = 320, height: Int = 180, softwareDecoding: Bool = false, fast: Bool = false, timeout: TimeInterval = 20) async -> CGImage? {
         #if canImport(VLCKit)
         let instance = VLCLibrary.shared().instance
         var options = [":no-audio", ":network-caching=500"]
@@ -24,7 +27,7 @@ public enum PreciseThumbnail {
             let cOptions = options.map { strdup($0) }
             defer { cOptions.forEach { free($0) } }
             let handle = cOptions.map { UnsafePointer($0) }.withUnsafeBufferPointer { ptr in
-                reel_thumb_request(instance, url.absoluteString, ptr.baseAddress, Int32(options.count), Int64(seconds * 1000), UInt32(width), UInt32(height), Int64(timeout * 1000), { context, pixels, w, h, stride, _ in
+                reel_thumb_request(instance, url.absoluteString, ptr.baseAddress, Int32(options.count), Int64(seconds * 1000), fast, UInt32(width), UInt32(height), Int64(timeout * 1000), { context, pixels, w, h, stride, _ in
                     guard let context else { return }
                     let box = Unmanaged<Box>.fromOpaque(context).takeUnretainedValue()
                     box.finish(pixels.flatMap { Self.image(rgba: $0, width: Int(w), height: Int(h), stride: Int(stride)) })

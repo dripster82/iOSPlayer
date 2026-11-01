@@ -31,7 +31,7 @@ static void on_thumbnail(const libvlc_event_t *event, void *data) {
 }
 
 void *reel_thumb_request(void *instance, const char *mrl, const char *const *options, int option_count,
-                         long long time_ms, unsigned width, unsigned height, long long timeout_ms,
+                         long long time_ms, bool fast, unsigned width, unsigned height, long long timeout_ms,
                          reel_thumb_callback callback, void *context) {
     (void)instance;
     if (mrl == NULL || callback == NULL) return NULL;
@@ -44,7 +44,7 @@ void *reel_thumb_request(void *instance, const char *mrl, const char *const *opt
     job->media = media; job->callback = callback; job->context = context;
     libvlc_event_attach(libvlc_media_event_manager(media), libvlc_MediaThumbnailGenerated, on_thumbnail, job);
     job->request = libvlc_media_thumbnail_request_by_time(lib, media, (libvlc_time_t)time_ms,
-                                                          libvlc_media_thumbnail_seek_precise, width, height, false,
+                                                          fast ? libvlc_media_thumbnail_seek_fast : libvlc_media_thumbnail_seek_precise, width, height, false,
                                                           libvlc_picture_Rgba, (libvlc_time_t)timeout_ms);
     if (grab_log) { fprintf(grab_log, "[shim] thumbnail request at %lld ms -> %s\n", time_ms, job->request ? "queued" : "NULL"); fflush(grab_log); }
     if (job->request == NULL) {
@@ -71,9 +71,9 @@ bool reel_thumb_available(void) { return true; }
 #else
 
 void *reel_thumb_request(void *instance, const char *mrl, const char *const *options, int option_count,
-                         long long time_ms, unsigned width, unsigned height, long long timeout_ms,
+                         long long time_ms, bool fast, unsigned width, unsigned height, long long timeout_ms,
                          reel_thumb_callback callback, void *context) {
-    (void)instance; (void)mrl; (void)options; (void)option_count; (void)time_ms; (void)width; (void)height; (void)timeout_ms; (void)callback; (void)context;
+    (void)instance; (void)mrl; (void)options; (void)option_count; (void)time_ms; (void)fast; (void)width; (void)height; (void)timeout_ms; (void)callback; (void)context;
     return NULL;
 }
 void reel_thumb_finish(void *handle) { (void)handle; }

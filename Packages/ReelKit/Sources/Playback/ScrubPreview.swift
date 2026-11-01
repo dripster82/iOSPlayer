@@ -45,6 +45,7 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Pictures VLC has displayed for the current open; the settle waits for this to move.
     private var pictures: Int { Int(player.media?.statistics.displayedPictures ?? 0) }
     private static var holdWarned = Set<ObjectIdentifier>()
+    private var settleGeneration = 0
 
     private override init() {
         super.init()
@@ -81,18 +82,24 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
             player.drawable = canvas
         }
         guard let media = VLCMedia(url: url) else { return }
-        // Position zero of this open is the wanted time: libvlc 4 drops seeks issued before playback.
-        media.addOption(":start-time=\(Int(time))")
+        // No `:start-time`: libvlc 4 makes seeks and reported times relative to the start-time range,
+        // so a stream opened at 50 s and seeked to 90 s showed the picture from 140 s while reporting
+        // 90. The wanted time is applied as a seek on the first tick instead (libvlc 4 drops seeks
+        // issued before playback starts), and the canvas stays hidden until a picture from after
+        // that seek has shown, so the frame from the top of the file never flashes in the bubble.
         media.addOption(":no-audio")
         media.addOption(":network-caching=400")
         media.addOption(":file-caching=300")
         // As in the engine: nothing pinned lets VLC's VideoToolbox decoder take the stream; off, ffmpeg in software.
         if !hardwareDecoding { media.addOption(":codec=avcodec"); media.addOption(":avcodec-hw=none") }
         player.media = media
+        picturesBeforeSeek = nil
+        target = time
         player.play()
-        settle(at: time)   // show the first frame, then hold it
         Diagnostics.log("player", "scrub preview opened at \(Int(time))s")
     }
+    /// Displayed-picture count when the first seek of this open was issued; nil until then.
+    private var picturesBeforeSeek: Int?
 
     /// The finger moved. Seeks are coalesced to one every 150 ms; the player must be playing for a
     /// seek to take, so an open that has not started yet applies the latest target when it does.
@@ -110,6 +117,7 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard let t = target, player.isSeekable, player.state == .playing || player.state == .paused else { return }
         target = nil
         // Seek, run until the frame at the new position is shown, then hold it.
+        if picturesBeforeSeek == nil { picturesBeforeSeek = pictures }
         player.time = VLCTime(int: Int32(t * 1000))
         if !player.isPlaying { player.play() }
         settle(at: t)
@@ -118,6 +126,8 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private func settle(at target: TimeInterval) {
         settling?.cancel()
         settleTarget = target
+        settleGeneration += 1
+        let generation = settleGeneration
         let before = pictures
         settling = Task { @MainActor [weak self] in
             let started = Date()
@@ -139,7 +149,10 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
                     let held = self.pictures
                     self.settling = nil
                     try? await Task.sleep(for: .milliseconds(600))
-                    guard !Task.isCancelled, self.settling == nil, self.player.media != nil else { return }
+                    // Only the last stop of a drag reports: a later seek's run is not this hold failing.
+                    guard !Task.isCancelled, generation == self.settleGeneration, self.player.media != nil else { return }
+                    // The last stop of a drag: where the picture is against where the finger asked.
+                    Diagnostics.log("player", "scrub preview held at \(Int(TimeInterval(self.player.time.intValue) / 1000))s for \(Int(target))s (\(shown) new pictures, \(self.pictures - held) after the pause, vout \(self.player.hasVideoOut))")
                     if self.pictures > held + 1, Self.holdWarned.insert(ObjectIdentifier(self.player)).inserted {
                         Diagnostics.log("player", "scrub preview did not hold: \(self.pictures - held) pictures after the pause")
                     }
@@ -176,9 +189,10 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         Task { @MainActor in
             let t = TimeInterval(self.player.time.intValue) / 1000
             // A tick alone is not a picture, and neither is a video output that has shown nothing
-            // yet: the canvas covers the strip frame only once a picture has been displayed, else
-            // a black canvas would hide the frame the strip already has.
-            if !self.hasPicture, self.player.hasVideoOut, (self.player.media?.statistics.displayedPictures ?? 0) > 0 { self.hasPicture = true }
+            // yet: the canvas covers the strip frame only once a picture from after the first seek
+            // has been displayed, else a black canvas, or the top of the file, would hide the frame
+            // the strip already has.
+            if !self.hasPicture, self.player.hasVideoOut, let before = self.picturesBeforeSeek, self.pictures > before { self.hasPicture = true }
             if abs(t - self.shownTime) >= 0.5 { self.shownTime = t }
             // A seek issued while the player was still opening is applied on the first tick.
             if self.target != nil, self.seeking == nil { self.applyTarget() }

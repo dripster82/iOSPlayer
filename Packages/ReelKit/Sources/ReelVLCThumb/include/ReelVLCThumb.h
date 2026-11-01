@@ -11,11 +11,12 @@
 /// when the frame could not be made. `time_ms` is the frame's own time.
 typedef void (*reel_thumb_callback)(void *context, const unsigned char *pixels, unsigned width, unsigned height, unsigned stride, long long time_ms);
 
-/// Starts a request; `options` are libvlc media options (":no-audio" and the like). Returns an
-/// opaque handle to pass to reel_thumb_finish once the callback has run (or to cancel), or NULL
-/// when libvlc is not available on this platform.
+/// Starts a request; `options` are libvlc media options (":no-audio" and the like). `fast` takes
+/// the keyframe before `time_ms` rather than decoding up to it. Returns an opaque handle to pass
+/// to reel_thumb_finish once the callback has run (or to cancel), or NULL when libvlc is not
+/// available on this platform.
 void *reel_thumb_request(void *libvlc_instance, const char *mrl, const char *const *options, int option_count,
-                         long long time_ms, unsigned width, unsigned height, long long timeout_ms,
+                         long long time_ms, bool fast, unsigned width, unsigned height, long long timeout_ms,
                          reel_thumb_callback callback, void *context);
 
 /// Releases the request and its media. Safe after the callback, and before it (cancels).
