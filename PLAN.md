@@ -485,7 +485,7 @@ This section turns each feature area into a concrete approach: libraries, data m
 - Render into a `UIView` hosted in SwiftUI with `UIViewRepresentable`. The view handles `drawable` assignment and aspect-ratio mode (fit, fill, zoom).
 
 **Decoding**
-- Enable VideoToolbox hardware decoding via VLC options (`--codec=avcodec` with `--avcodec-hw=videotoolbox`). Fall back to software when hardware fails for a stream.
+- Hardware decoding: on Apple platforms VLC's VideoToolbox support is its own `videotoolbox` decoder module, which outranks ffmpeg for H.264 and HEVC when no decoder is pinned. Pin nothing. (`--codec=avcodec` with `--avcodec-hw=videotoolbox`, the earlier recipe here, keeps that module out and decodes everything on the CPU.) Software fallback is VLC's own when the module refuses a stream; `--codec=avcodec --avcodec-hw=none` forces it.
 - HDR: VLCKit passes HDR10 and HLG through to the display on iOS 17. Dolby Vision profiles 5 and 8 fall back to the HDR10 base layer. Document this limitation in Settings.
 
 **Tracks**

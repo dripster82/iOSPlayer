@@ -372,7 +372,7 @@ Phase 3
 
 Phase 4
 - [x] Picture in Picture — done via VLCKit 4 (§3.5). Auto-starts on swipe-home during playback; `pip.enter` button in the player.
-- [ ] Scrub thumbnails (`VLCMediaThumbnailer`, 10 s intervals, cached per file).
+- [x] Scrub thumbnails (`ScrubThumbnails`; see "Decoding and the scrubber (1 Nov 2026)").
 - [ ] Subtitle style editor (size/colour/position) — VLC `--freetype-*` options at load time.
 - [ ] Accessibility pass: VoiceOver through the grids, cards and sheets (the player controls are labelled, see above), Dynamic Type at the larger sizes, reduced motion.
 - [x] App icon (24 Oct): letter R in film strip, generated with Codex; see Design/README.md.
@@ -535,3 +535,40 @@ The App Store Connect listing (version 1.0, "Prepare for Submission") was filled
 reel.ketelle.co.uk, six iPhone shots (6.1" set) and seven iPad shots (13" set). The site's React form
 ignores programmatic value changes; fields were filled by typing. The 6.9" iPhone set is not uploaded
 separately: App Store Connect scales the medium-display set to every iPhone size.
+
+## Decoding and the scrubber (1 Nov 2026)
+
+The iPad's diagnostics for a 1080p 10-bit HEVC MKV showed the picture stop while the sound ran, 39 s
+after a 76 s pause; the stall watchdog reloaded it 6 s later. VLC's own log (`Documents/Diagnostics/vlc.log`,
+pull it with `xcrun devicectl device copy from --domain-type appDataContainer --domain-identifier
+uk.co.ketelle.reel --source Documents/Diagnostics/vlc.log`) gave the cause: the engine pinned the decoder
+to ffmpeg (`:codec=avcodec` plus `:avcodec-hw=videotoolbox`, the recipe PLAN.md used to give). On Apple
+platforms VLC's hardware decoding is a separate `videotoolbox` decoder module, not an ffmpeg
+acceleration, and the pin kept it out of the candidate list ("looking for video decoder module matching
+avcodec"). Every title Reel had ever played was decoded on the CPU. This one decoded to 10-bit planar
+(I0AL), which VLC's zero-copy converter cannot take, so swscale converted every frame to BGRA on the CPU
+as well: 1080p 10-bit HEVC plus a full-frame conversion, 24 times a second, which is the iPad's limit.
+
+Now nothing is pinned while hardware decoding is on, so VLC's VideoToolbox module takes H.264 and HEVC
+and hands the display hardware surfaces; VLC falls back to ffmpeg on its own when it refuses a stream.
+Off, or for a codec whose hardware output is wrong on the iPad (`PlayerCoordinator.needsSoftwareDecoding`:
+MPEG-4 Part 2 comes out black or green), `:codec=avcodec` and `:avcodec-hw=none` force software as
+before; the option is now decided per file from the probe's codec. `ScrubPreview` follows the same rule.
+Check on a device: `vlc.log` says `using video decoder module "videotoolbox"` for an H.264 or HEVC
+title. VLCKit's `VLCMediaThumbnailer` pins `codec=avcodec,none` itself, so the scrubber thumbnails and
+the credits scan still decode in software; the frame grabber and the thumbnail shim force software too
+(hardware surfaces arrive blank through the vmem output).
+
+The scrubber strip is fed from playback when VLC can manage it: on each clock tick, when playback passes
+the middle of a strip slot that has no frame, the engine writes a vout snapshot (`saveSnapshot`, a 320 px
+PNG written by VLC's video thread) and `ScrubThumbnails.capture` files it as that slot's frame. That only
+works for software-decoded titles (the MPEG-4 Part 2 AVIs): for a hardware-decoded one VLC logs "Failed
+to convert image for snapshot", there being no converter from a VideoToolbox surface back to RGB in this
+build, so after the first miss the title is left to the thumbnailer (`snapshotWarned`). The same missing
+converter is why thumbnails cannot be made with the hardware decoder. The thumbnailer pass makes what
+is left: every ninth frame first, then the frames ahead of the playhead in
+order, then those behind it. It stops when another title takes the screen (`ScrubThumbnails.focus`);
+before, a title skipped past in seconds got its whole 131-open pass alongside the current title's. The
+live preview's canvas covers the strip frame only once a picture has actually been displayed
+(`statistics.displayedPictures`), not as soon as the video output exists, which could leave a black
+canvas over a frame the strip already had.

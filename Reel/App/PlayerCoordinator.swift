@@ -312,11 +312,18 @@ final class PlayerCoordinator: ObservableObject {
             }
         }
         engine.onUserSeek = { [weak self] from, to in self?.noteUserSeek(from: from, to: to) }
+        tickWatcher = engine.clock.$time.sink { [weak self] t in self?.captureScrubFrame(at: t) }
         routeWatcher = NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.routeChanged() }
     }
     private var routeWatcher: AnyCancellable?
+    private var tickWatcher: AnyCancellable?
+    /// Each tick while VLC plays: a strip frame from the picture on screen, when its slot has none.
+    private func captureScrubFrame(at time: TimeInterval) {
+        guard let key = current?.itemKey, nativePlayback == nil, engine.status == .playing, engine.duration > 0, !engine.resumePending else { return }
+        ScrubThumbnails.shared.capture(key: key, time: time, duration: engine.duration, engine: engine)
+    }
     private var displayWatcher: AnyCancellable?
     /// The TV appeared or went away mid-play: reload at the same position with the matching
     /// frame-timing options (a two-second gap, once, rather than judder for the whole episode).
@@ -442,7 +449,7 @@ final class PlayerCoordinator: ObservableObject {
                     guard current?.itemKey == item.itemKey else { return }   // backed out while preparing
                     show(notice: "AirPlay is carrying the sound only. Turn on Screen Mirroring in Control Centre and Reel will put the full picture on the TV.")
                 }
-                let opts = playbackOptions(for: item, settings: settings)
+                let opts = playbackOptions(for: item, file: file, settings: settings)
                 let (playTitle, playSubtitle) = Self.titles(for: item)
                 let subtitle: String? = playSubtitle.isEmpty ? nil : playSubtitle
                 let playbackItem = PlaybackItem(url: url, title: playTitle, subtitle: subtitle, startAt: resume,
@@ -470,6 +477,7 @@ final class PlayerCoordinator: ObservableObject {
     /// Soon into a play, make the scrubber's preview frames this title lacks. Each frame
     /// is another open of the stream, so none are made on cellular, in Low Power Mode or on a hot device.
     private func scheduleScrubThumbnails(key: String, url: URL) {
+        ScrubThumbnails.shared.focus(key)   // a pass still running for the last title stops here
         Task { [weak self] in
             // Soon after the start, not a minute in: a short visit should still leave frames behind.
             try? await Task.sleep(for: .seconds(3))
@@ -481,7 +489,7 @@ final class PlayerCoordinator: ObservableObject {
             guard DeviceConditions.allowsBackgroundWork, !(await DeviceConditions.isOnExpensivePath()) else {
                 Diagnostics.log("player", "scrub thumbnails skipped (\(DeviceConditions.summary))"); return
             }
-            ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec))
+            ScrubThumbnails.shared.ensure(key: key, url: url, duration: self.engine.duration, position: self.engine.effectiveTime, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec))
             self.resolveCredits(key: key, url: url)
         }
     }
@@ -594,9 +602,10 @@ final class PlayerCoordinator: ObservableObject {
 
     /// The global playback settings, overridden by what the viewer chose last time for this show
     /// (or film): the audio language, and subtitles on in a language or off.
-    private func playbackOptions(for item: MediaItem, settings: AppSettings) -> PlaybackOptions {
+    private func playbackOptions(for item: MediaItem, file: MediaFile? = nil, settings: AppSettings) -> PlaybackOptions {
         var opts = PlaybackOptions()
-        opts.hardwareDecoding = settings.hardwareDecoding
+        // Codecs the hardware decoder gets wrong on the iPad stay in software whatever the setting.
+        opts.hardwareDecoding = settings.hardwareDecoding && !Self.needsSoftwareDecoding(file?.videoCodec)
         opts.networkCachingMS = settings.networkCachingMS
         opts.preferredAudioLanguage = settings.audioLanguage
         opts.preferredSubtitleLanguage = settings.subtitleLanguage
@@ -739,6 +748,7 @@ final class PlayerCoordinator: ObservableObject {
         HLSRemuxer.shared.cancel()
         Self.debugForceAirPlay = false
         ScrubPreview.shared.stop()
+        ScrubThumbnails.shared.focus(nil)   // the pass for this title may finish; nothing else is on screen
         engine.stop()
         externalScopedURL?.stopAccessingSecurityScopedResource(); externalScopedURL = nil
         nowPlaying.detach()

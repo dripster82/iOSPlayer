@@ -25,11 +25,67 @@ final class ScrubThumbnails: ObservableObject {
     /// How many frames a title of this length gets: one every 20 s, 9 to 150 (so a two-hour film
     /// gets one every 48 s). Holding the finger still brings up the live preview for the exact frame.
     static func frameCount(for duration: TimeInterval) -> Int { min(150, max(9, Int(duration / 20))) }
-    /// The order frames are made in: every ninth first, then the rest from the start.
-    static func order(_ n: Int) -> [Int] {
+    /// The order frames are made in: every ninth first, so the whole bar has something within a
+    /// minute; then the rest ahead of the playhead in order, where the next scrub goes, and
+    /// last the part behind it, nearest first (playback itself fills that part for free).
+    static func order(_ n: Int, around current: Int = 0) -> [Int] {
         let stride = max(1, n / 9)
         let coarse = Array(Swift.stride(from: 0, to: n, by: stride))
-        return coarse + (0..<n).filter { !coarse.contains($0) }
+        let rest = (0..<n).filter { !coarse.contains($0) }
+        let cur = min(max(0, current), max(0, n - 1))
+        return coarse + rest.filter { $0 >= cur } + rest.filter { $0 < cur }.reversed()
+    }
+
+    /// The title playing now. A job for any other title stops after the frame it is on: a title
+    /// skipped past in seconds used to get its whole pass, slowing the one on screen to a crawl.
+    private var focused: String?
+    func focus(_ key: String?) {
+        if let old = focused, old != key, let c = captured[old], c > 0 {
+            Diagnostics.log("player", "scrub frames for \(old.prefix(40)): \(c) taken from playback")
+            captured[old] = nil
+        }
+        focused = key
+    }
+    private var capturing: Set<String> = []
+    private var captured: [String: Int] = [:]
+    private var snapshotWarned: Set<String> = []
+
+    /// A frame from the picture on screen: as playback passes the middle of a strip slot that has
+    /// no frame yet, the engine writes a snapshot, which costs nothing over the share. The
+    /// background pass is then left with only the parts not yet watched. Only software-decoded
+    /// titles get these: VLC cannot convert a hardware surface for a snapshot ("Failed to convert
+    /// image for snapshot"), so after the first miss a title is left to the thumbnailer.
+    func capture(key: String, time: TimeInterval, duration: TimeInterval, engine: VLCPlaybackEngine) {
+        guard duration > 0, !capturing.contains(key), !snapshotWarned.contains(key) else { return }
+        if memory[key] == nil { load(key) }
+        let n = counts[key] ?? Self.frameCount(for: duration)
+        counts[key] = n
+        let i = min(n - 1, max(0, Int(time / duration * Double(n))))
+        let centre = (Double(i) + 0.5) / Double(n) * duration
+        // Just past the slot's middle, so the frame is within a couple of seconds of where the strip says it is.
+        guard time >= centre, time < centre + 2.5, legacy.contains(key) || memory[key]?[i] == nil else { return }
+        let dir = Self.folder(key)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let countFile = dir.appendingPathComponent("count.txt")
+        if !FileManager.default.fileExists(atPath: countFile.path) { try? "\(n)".write(to: countFile, atomically: true, encoding: .utf8) }
+        let png = dir.appendingPathComponent("\(i).snapshot.png")
+        try? FileManager.default.removeItem(at: png)
+        capturing.insert(key)
+        engine.saveSnapshot(to: png.path, width: 320)
+        Task {
+            defer { capturing.remove(key); try? FileManager.default.removeItem(at: png) }
+            var waited = 0
+            while !FileManager.default.fileExists(atPath: png.path), waited < 30 { try? await Task.sleep(for: .milliseconds(100)); waited += 1 }
+            try? await Task.sleep(for: .milliseconds(150))   // the write may still be finishing when the file appears
+            guard let ui = UIImage(contentsOfFile: png.path), let cg = ui.cgImage, Self.looksLikeAPicture(cg) else {
+                if waited >= 30, snapshotWarned.insert(key).inserted { Diagnostics.log("player", "scrub snapshot for \(key.prefix(40)) never arrived; the strip relies on the thumbnailer") }
+                return
+            }
+            if let data = ui.jpegData(compressionQuality: 0.7) { try? data.write(to: dir.appendingPathComponent("\(i).jpg")) }
+            memory[key, default: [:]][i] = ui
+            captured[key, default: 0] += 1
+            version += 1
+        }
     }
 
     private static var root: URL {
@@ -63,7 +119,7 @@ final class ScrubThumbnails: ObservableObject {
 
     /// Makes whatever frames are missing. Safe to call repeatedly. `duration` is the title's length,
     /// which the player knows by the time this is called; without it no frame can be placed.
-    func ensure(key: String, url: URL, duration: TimeInterval, softwareDecoding: Bool = false) {
+    func ensure(key: String, url: URL, duration: TimeInterval, position: TimeInterval = 0, softwareDecoding: Bool = false) {
         guard duration > 0, !inProgress.contains(key) else { return }
         if memory[key] == nil { load(key) }
         var n = counts[key] ?? Self.frameCount(for: duration)
@@ -77,7 +133,7 @@ final class ScrubThumbnails: ObservableObject {
         }
         counts[key] = n
         let have = legacy.contains(key) ? Set<Int>() : Set(memory[key]?.keys ?? [:].keys)
-        let missing = Self.order(n).filter { !have.contains($0) }
+        let missing = Self.order(n, around: Int(position / duration * Double(n))).filter { !have.contains($0) }
         guard !missing.isEmpty else { return }
         inProgress.insert(key)
         Task {
@@ -85,10 +141,14 @@ final class ScrubThumbnails: ObservableObject {
             let dir = Self.folder(key)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try? "\(n)".write(to: dir.appendingPathComponent("count.txt"), atomically: true, encoding: .utf8)
-            var made = 0
+            var made = 0, stopped: String?
             for i in missing {
-                // Stop (and pick up next play) if the device heated up or went to Low Power Mode meanwhile.
-                guard DeviceConditions.allowsBackgroundWork else { break }
+                // Stop (and pick up next play) if the device heated up or went to Low Power Mode
+                // meanwhile, or another title took the screen.
+                if !DeviceConditions.allowsBackgroundWork { stopped = DeviceConditions.summary; break }
+                if let f = focused, f != key { stopped = "another title playing"; break }
+                // Playback may have captured this one since the list was made.
+                if !legacy.contains(key), memory[key]?[i] != nil { continue }
                 let at = (Double(i) + 0.5) / Double(n) * duration
                 guard let image = await Self.frame(url: url, at: at, softwareDecoding: softwareDecoding), Self.looksLikeAPicture(image) else { continue }
                 let ui = UIImage(cgImage: image)
@@ -97,8 +157,8 @@ final class ScrubThumbnails: ObservableObject {
                 made += 1
                 version += 1
             }
-            if made == missing.count { legacy.remove(key) }
-            Diagnostics.log("player", "scrub thumbnails for \(key.prefix(40)): \(made) of \(missing.count) made (\(n) per title)")
+            if stopped == nil { legacy.remove(key) }
+            Diagnostics.log("player", "scrub thumbnails for \(key.prefix(40)): \(made) of \(missing.count) made (\(n) per title)\(stopped.map { "; stopped: \($0)" } ?? "")")
         }
     }
 

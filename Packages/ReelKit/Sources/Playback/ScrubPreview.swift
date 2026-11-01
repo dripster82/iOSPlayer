@@ -83,7 +83,8 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
         media.addOption(":no-audio")
         media.addOption(":network-caching=400")
         media.addOption(":file-caching=300")
-        media.addOption(hardwareDecoding ? ":avcodec-hw=videotoolbox" : ":avcodec-hw=none")
+        // As in the engine: nothing pinned lets VLC's VideoToolbox decoder take the stream; off, ffmpeg in software.
+        if !hardwareDecoding { media.addOption(":codec=avcodec"); media.addOption(":avcodec-hw=none") }
         player.media = media
         player.play()
         settle(at: time)   // show the first frame, then hold it
@@ -160,9 +161,10 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     nonisolated public func mediaPlayerTimeChanged(_ aNotification: Notification) {
         Task { @MainActor in
             let t = TimeInterval(self.player.time.intValue) / 1000
-            // A tick alone is not a picture: only once VLC has a video output does the canvas
-            // cover the strip frame, else a black canvas would hide it.
-            if !self.hasPicture, self.player.hasVideoOut { self.hasPicture = true }
+            // A tick alone is not a picture, and neither is a video output that has shown nothing
+            // yet: the canvas covers the strip frame only once a picture has been displayed, else
+            // a black canvas would hide the frame the strip already has.
+            if !self.hasPicture, self.player.hasVideoOut, (self.player.media?.statistics.displayedPictures ?? 0) > 0 { self.hasPicture = true }
             if abs(t - self.shownTime) >= 0.5 { self.shownTime = t }
             // A seek issued while the player was still opening is applied on the first tick.
             if self.target != nil, self.seeking == nil { self.applyTarget() }

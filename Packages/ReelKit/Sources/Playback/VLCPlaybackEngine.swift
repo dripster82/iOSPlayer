@@ -262,10 +262,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             media.addOption(":no-drop-late-frames")
             media.addOption(":no-skip-frames")
         }
-        if options.hardwareDecoding {
+        // On Apple platforms VLC's hardware decoding is its own "videotoolbox" decoder module, not an
+        // ffmpeg acceleration: it outranks ffmpeg for H.264 and HEVC when nothing is pinned, and hands
+        // the display hardware surfaces. Pinning ffmpeg (`:codec=avcodec`, the plan's recipe) kept that
+        // module out of the running, so every title was decoded on the CPU, 10-bit HEVC with a
+        // software colour conversion on top, which is what stalled the picture on the iPad. Off (or a
+        // codec whose hardware output is wrong, see `needsSoftwareDecoding`), ffmpeg decodes in software.
+        if !options.hardwareDecoding {
             media.addOption(":codec=avcodec")
-            media.addOption(":avcodec-hw=videotoolbox")
-        } else {
             media.addOption(":avcodec-hw=none")
         }
         if let lang = options.preferredAudioLanguage { media.addOption(":audio-language=\(lang)") }
@@ -318,6 +322,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     public func pause() { player.pause() }
     public func togglePlayPause() { player.isPlaying ? pause() : play() }
+
+    /// Writes the picture on screen to `path` as a PNG, `width` across with the aspect kept, on
+    /// VLC's video thread: the file appears a moment later. Free frames for the scrubber strip.
+    public func saveSnapshot(to path: String, width: Int) {
+        guard player.hasVideoOut else { return }
+        player.saveVideoSnapshot(at: path, withWidth: Int32(width), andHeight: 0)
+    }
 
     public func seek(to seconds: TimeInterval) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
