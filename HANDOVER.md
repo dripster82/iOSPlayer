@@ -571,4 +571,7 @@ order, then those behind it. It stops when another title takes the screen (`Scru
 before, a title skipped past in seconds got its whole 131-open pass alongside the current title's. The
 live preview's canvas covers the strip frame only once a picture has actually been displayed
 (`statistics.displayedPictures`), not as soon as the video output exists, which could leave a black
-canvas over a frame the strip already had.
+canvas over a frame the strip already had. The preview is a still: after each seek the player runs
+until the first new picture after the seek has landed, then pauses. It used to wait on time ticks plus
+a delay, which with the hardware decoder showed up to a second of motion in the bubble; the settle now
+counts displayed pictures, and logs "scrub preview did not hold" if pictures keep coming after the pause.

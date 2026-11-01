@@ -42,6 +42,9 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// first tick stopped the player before the seek landed, or not at all.
     private var settling: Task<Void, Never>?
     private var settleTarget: TimeInterval?
+    /// Pictures VLC has displayed for the current open; the settle waits for this to move.
+    private var pictures: Int { Int(player.media?.statistics.displayedPictures ?? 0) }
+    private static var holdWarned = Set<ObjectIdentifier>()
 
     private override init() {
         super.init()
@@ -115,20 +118,31 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private func settle(at target: TimeInterval) {
         settling?.cancel()
         settleTarget = target
+        let before = pictures
         settling = Task { @MainActor [weak self] in
             let started = Date()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(80))
+                try? await Task.sleep(for: .milliseconds(40))
                 guard let self, !Task.isCancelled else { return }
                 let now = TimeInterval(self.player.time.intValue) / 1000
                 let landed = abs(now - target) < 2.5
-                // Pause once the seek has landed, or after a second regardless (a keyframe far away).
-                if landed || Date().timeIntervalSince(started) > 1.2 {
+                let shown = self.pictures - before
+                // Pause on the first picture shown after the seek has landed: time ticks alone paused
+                // the old frame (VLC reports the old position for a few ticks), and time plus a wait
+                // let a hardware decoder run a second of motion in the bubble. A second new picture
+                // counts even if the clock has not caught up, and a keyframe far away gets 1.2 s.
+                if (landed && shown >= 1) || shown >= 2 || Date().timeIntervalSince(started) > 1.2 {
                     if self.player.isPlaying { self.player.pause() }
                     try? await Task.sleep(for: .milliseconds(250))
                     guard !Task.isCancelled else { return }
                     if self.player.isPlaying { self.player.pause() }   // pause issued mid-seek can be lost
+                    let held = self.pictures
                     self.settling = nil
+                    try? await Task.sleep(for: .milliseconds(600))
+                    guard !Task.isCancelled, self.settling == nil, self.player.media != nil else { return }
+                    if self.pictures > held + 1, Self.holdWarned.insert(ObjectIdentifier(self.player)).inserted {
+                        Diagnostics.log("player", "scrub preview did not hold: \(self.pictures - held) pictures after the pause")
+                    }
                     return
                 }
             }
