@@ -51,14 +51,18 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
         controller?.invalidatePlaybackState()
     }
 
+    /// The window reads the position only when told the state changed, and its "now" comes from
+    /// the layer's timebase, which VLC does not necessarily run; so every noticeable move of the
+    /// position (the ticks come several times a second) invalidates, and the range is placed
+    /// afresh each time. That keeps the window's timeline moving and the skips landing.
     @MainActor
     func update(playing: Bool, time: TimeInterval, duration: TimeInterval) {
         let changed: Bool = lock.withLock {
-            let was = snapshot.playing
+            let was = snapshot
             snapshot = Snapshot(playing: playing, time: time, duration: duration)
-            return was != playing
+            return was.playing != playing || abs(was.time - time) >= 0.5 || was.duration != duration
         }
-        if changed { controller?.invalidatePlaybackState() }
+        if changed, controller?.isPictureInPictureActive == true { controller?.invalidatePlaybackState() }
     }
 
     @MainActor func start() { controller?.startPictureInPicture() }

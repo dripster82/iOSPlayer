@@ -20,7 +20,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         status = new
         log("status \(new) at \(Int(clock.time))s")
         #if canImport(UIKit)
-        pip.update(playing: new == .playing, time: clock.time, duration: clock.duration)
+        pip.update(playing: Self.countsAsPlaying(new), time: clock.time, duration: clock.duration)
         if new == .playing { attachDisplayLayerIfNeeded() }
         #endif
     }
@@ -105,6 +105,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     #if canImport(UIKit)
     /// Reel's own PiP window, kept for the life of the engine so the next episode follows into it.
     private let pip = ReelPictureInPicture()
+    /// What the PiP window is told: buffering and opening are playing. A seek (the window's skip)
+    /// goes through buffering for a moment, and reporting that as paused made AVKit "pause" to
+    /// match, so every skip from the window stopped the video.
+    private static func countsAsPlaying(_ s: PlaybackStatus) -> Bool { s == .playing || s == .buffering || s == .opening }
     #endif
 
     /// Replaced by `rebuildPlayer` when libvlc wedges (an input that never finishes stopping leaves
@@ -710,7 +714,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         #if canImport(UIKit)
         log("PiP start asked: layer \(pip.hasLayer ? "present" : "none"), possible \(pip.isPossible), active \(isPictureInPictureActive)")
         guard !isPictureInPictureActive else { return }
-        pip.update(playing: status == .playing, time: clock.time, duration: clock.duration)
+        pip.update(playing: Self.countsAsPlaying(status), time: clock.time, duration: clock.duration)
         pip.start()
         #endif
     }
@@ -749,7 +753,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         Task { @MainActor in
             if length > 0, self.status != .idle { self.clock.duration = TimeInterval(length) / 1000 }
             #if canImport(UIKit)
-            self.pip.update(playing: self.status == .playing, time: self.clock.time, duration: self.clock.duration)
+            self.pip.update(playing: Self.countsAsPlaying(self.status), time: self.clock.time, duration: self.clock.duration)
             #endif
         }
     }
@@ -836,7 +840,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         if recoveries > 0, Date().timeIntervalSince(loadedAt) > 30 { recoveries = 0 }
         if status == .buffering { setStatus(.playing) }
         #if canImport(UIKit)
-        pip.update(playing: status == .playing, time: now, duration: clock.duration)
+        pip.update(playing: Self.countsAsPlaying(status), time: now, duration: clock.duration)
         // In the background UIKit lays nothing out, so the new display view after a load is only
         // noticed here, on the ticks (a scan of three views).
         if Date().timeIntervalSince(loadedAt) < 30 { attachDisplayLayerIfNeeded() }
