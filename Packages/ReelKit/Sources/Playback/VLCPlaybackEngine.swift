@@ -154,8 +154,13 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var vlcSubtitleTracks: [VLCMediaPlayer.Track] = []
 
     public override init() {
-        pictureInPictureMediaController = PiPMediaController(player: player)
+        let pip = PiPMediaController(player: player)
+        pictureInPictureMediaController = pip
         super.init()
+        // Play from the PiP window goes through `play()` like every other play, for the audio
+        // session and the fresh clock after an interrupted pause; a resume straight on the player
+        // froze the picture (iPad, 5 Nov 2026: an 8-minute pause in PiP, then play from its window).
+        pip.onPlay = { [weak self] in Task { @MainActor in self?.log("play from the PiP window"); self?.play() } }
         player.delegate = self
         #if canImport(UIKit)
         interruptionWatcher = NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
@@ -892,9 +897,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 /// like VideoLAN's own PiP example. The engine's published state catches up via the delegate.
 private final class PiPMediaController: NSObject, VLCPictureInPictureMediaControlling, @unchecked Sendable {
     var player: VLCMediaPlayer
+    /// Set by the engine: play on the main actor through the engine's own `play()`.
+    var onPlay: (@Sendable () -> Void)?
     init(player: VLCMediaPlayer) { self.player = player }
 
-    func play() { player.play() }
+    func play() { if let onPlay { onPlay() } else { player.play() } }
     func pause() { player.pause() }
     func seek(by offset: Int64, completion: @escaping () -> Void) {
         if !player.jump(withOffset: Int32(clamping: offset), completion: completion) { completion() }
