@@ -179,6 +179,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             let suspended = (note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt).map { AVAudioSession.InterruptionReason(rawValue: $0) == .appWasSuspended } ?? false
             log("audio session interrupted\(suspended ? " (the app was suspended)" : "") while \(status)")
             if suspended { sessionLostWhileAway = true; return }
+            // Eight minutes into a pause iOS takes the session (no other app involved). VLC's clock
+            // then comes back from the pause without the pause: the master clock never resets as it
+            // does after a plain pause, and every picture is "too late" by the pause's length and
+            // dropped (an iPad log showed 323 dropped for 1 shown over 13 s after a 12-minute pause).
+            // The next play seeks to where it is, which gives VLC a fresh clock context.
+            if status != .playing { clockStaleAfterInterruption = true }
             resumeAfterInterruption = status == .playing
             if status == .playing { player.pause() }
         case .ended:
@@ -192,6 +198,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     /// iOS took the audio session while the app was suspended; the output is checked once play resumes.
     private var sessionLostWhileAway = false
+    /// iOS took the audio session during a pause; the next play re-seeks to reset VLC's clock.
+    private var clockStaleAfterInterruption = false
     #endif
 
     /// The UIView VLC paints into. Set by `VLCVideoView`.
@@ -238,6 +246,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         self.item = item
         self.options = options
         verifyOnNextPlay = false
+        #if canImport(UIKit)
+        clockStaleAfterInterruption = false
+        #endif
         tracksLoaded = false
         isAudioOnly = false
         probed = false
@@ -318,6 +329,17 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // is longer than its 8 s stall threshold.
         lastProgressAt = Date(); lastPicturesAt = Date(); lastAudioAt = Date()
         player.play()
+        #if canImport(UIKit)
+        if clockStaleAfterInterruption {
+            clockStaleAfterInterruption = false
+            let t = clock.time
+            log("audio session was taken during the pause; seeking to \(Int(t))s so VLC starts a fresh clock")
+            player.time = VLCTime(int: Int32(t * 1000))
+            ignoreTicksUntil = Date().addingTimeInterval(0.6)
+            lastSeekAt = Date()
+            startSeekWatchdog(target: t)
+        }
+        #endif
         if check { verifyOnNextPlay = false; verifyOutput() }
     }
     public func pause() { player.pause() }

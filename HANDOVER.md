@@ -601,3 +601,20 @@ reel.ketelle.co.uk and the GitHub Pages site redirect to the studio; after that 
 app and delete `docs/*.html` and the icons (the screenshots and `docs/app-store`
 stay). App Store Connect's support, marketing and privacy URLs and the terms line in the description
 must be changed to the studio URLs by hand.
+
+## Freeze after a long pause (5 Nov 2026)
+
+The iPad froze again after a 12-minute pause, with the decoder fix in. Its VLC log has the cause: after
+every ordinary pause VLC logs "resetting master clock: coefficient too unstable" and plays on; after
+this one it logged "picture displayed late (missing 725625 ms)" and then dropped 323 pictures as "too
+late" for the one it showed, each late by the length of the pause, until Paul scrubbed and the seek
+("ES_OUT_RESET_PCR", a new clock context) cured it. The difference: eight minutes into any pause iOS
+takes the audio session (`reel.log` "audio session interrupted while paused", always at +8:00, no
+other app involved), and VLC's clock comes back from a pause whose audio output was taken without
+accounting for the pause. `VLCPlaybackEngine` now notes an interruption that begins while paused
+(`clockStaleAfterInterruption`) and, on the next `play()`, seeks to the current time right after
+`player.play()`, with the seek watchdog armed: the seek is what gave VLC the fresh clock in the log.
+A load clears the flag. The stall watchdogs had not fired yet (the scrub came 12 s after the resume;
+the no-output watchdog would have reloaded at about 10 s), and remain the guard, not the fix.
+Not yet verified on the iPad with a real 8-minute-plus pause: look for "audio session was taken
+during the pause; seeking to Ns" followed by normal play in `reel.log`.
