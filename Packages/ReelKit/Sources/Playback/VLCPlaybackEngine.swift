@@ -686,6 +686,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         controller.stateChangeEventHandler = { [weak self] started in
             Task { @MainActor in
                 guard let self else { return }
+                self.log("PiP \(started ? "started" : "ended")")
                 self.isPictureInPictureActive = started
                 if !started { self.pipEndedAt = Date(); self.recoverAfterPictureInPicture() }
             }
@@ -694,6 +695,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func startPictureInPicture() {
+        log("PiP start asked: controller \(pipController != nil ? "present" : "none"), active \(isPictureInPictureActive)")
         guard let pipController, !isPictureInPictureActive else { return }
         pipController.invalidatePlaybackState()
         pipController.startPictureInPicture()
