@@ -23,6 +23,10 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
     /// a pause (twice) right after the skip it asked for; the video is left as it was instead.
     private var lastSkipAt = Date.distantPast
     private var playingAtSkip = false
+    /// The pause that comes a hair *before* the skip (same millisecond on the iPad): noted here,
+    /// and undone once the skip arrives, since the viewer asked to skip, not to stop.
+    private var lastPauseAt = Date.distantPast
+    private var playingBeforePause = false
     private(set) weak var layer: AVSampleBufferDisplayLayer?
     /// Main-actor callbacks into the engine.
     var onStateChange: (@MainActor (Bool) -> Void)?
@@ -81,6 +85,7 @@ extension ReelPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
                 self.controller?.invalidatePlaybackState()
                 return
             }
+            if !playing { self.lastPauseAt = Date(); self.playingBeforePause = self.lock.withLock { self.snapshot.playing } }
             self.onSetPlaying?(playing)
         }
     }
@@ -100,9 +105,11 @@ extension ReelPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion completionHandler: @escaping () -> Void) {
         let seconds = CMTimeGetSeconds(skipInterval)
         Task { @MainActor in
-            self.lastSkipAt = Date(); self.playingAtSkip = self.lock.withLock { self.snapshot.playing }
-            self.log?("PiP: skip by \(Int(seconds))s")
+            let pausedForThis = Date().timeIntervalSince(self.lastPauseAt) < 0.5 && self.playingBeforePause
+            self.lastSkipAt = Date(); self.playingAtSkip = self.lock.withLock { self.snapshot.playing } || pausedForThis
+            self.log?("PiP: skip by \(Int(seconds))s\(pausedForThis ? " (undoing the pause that came with it)" : "")")
             self.onSkip?(seconds)
+            if pausedForThis { self.onSetPlaying?(true) }
             completionHandler()
             self.controller?.invalidatePlaybackState()
         }
