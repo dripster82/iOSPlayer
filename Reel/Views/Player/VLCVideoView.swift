@@ -44,10 +44,11 @@ struct VLCVideoView: UIViewRepresentable {
     }
 }
 
-/// A plain UIView is a valid VLC drawable; conforming to `VLCPictureInPictureDrawable` as well makes
-/// VLCKit 4 create a Picture in Picture controller for the video output and hand it back through
-/// `pictureInPictureReady`. The engine owns that controller and the playback controls behind it.
-final class VLCDrawableView: UIView, VLCPictureInPictureDrawable {
+/// A plain UIView is a valid VLC drawable. It deliberately does not conform to
+/// `VLCPictureInPictureDrawable`: VLCKit would then make a PiP controller per video output, which
+/// cannot follow an episode change. Reel's own controller (`ReelPictureInPicture` in Playback)
+/// takes the display layer VLCKit inserts here instead.
+final class VLCDrawableView: UIView {
     weak var engine: VLCPlaybackEngine?
     var onLayout: (() -> Void)?
 
@@ -57,19 +58,5 @@ final class VLCDrawableView: UIView, VLCPictureInPictureDrawable {
         // picture kept its old size: zoomed and cropped in portrait, off-screen in landscape.
         for sub in subviews where sub.frame != bounds { sub.frame = bounds }
         onLayout?()
-    }
-
-    // MARK: VLCPictureInPictureDrawable
-
-    // The header has no nullability annotations, hence the implicitly unwrapped types.
-    func mediaController() -> (any VLCPictureInPictureMediaControlling)! {
-        engine?.pictureInPictureMediaController
-    }
-
-    func pictureInPictureReady() -> (((any VLCPictureInPictureWindowControlling)?) -> Void)! {
-        { [weak self] controller in
-            guard let controller else { return }
-            Task { @MainActor in self?.engine?.pictureInPictureDidBecomeAvailable(controller) }
-        }
     }
 }

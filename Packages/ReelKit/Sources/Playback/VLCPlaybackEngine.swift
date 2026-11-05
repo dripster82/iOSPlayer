@@ -19,6 +19,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard new != status else { return }
         status = new
         log("status \(new) at \(Int(clock.time))s")
+        #if canImport(UIKit)
+        pip.update(playing: new == .playing, time: clock.time, duration: clock.duration)
+        if new == .playing { attachDisplayLayerIfNeeded() }
+        #endif
     }
     /// Position and length. Observe `clock` in views that must redraw every tick; read `time` /
     /// `duration` everywhere else.
@@ -94,19 +98,19 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var resumeAttempts = 0
     private var lastResumeAttempt = Date.distantPast
 
-    /// True once VLC's video output has offered a Picture in Picture controller for the current media.
+    /// True once Reel's PiP controller has VLC's display layer for the current media.
     @Published public private(set) var canStartPictureInPicture = false
     /// True while the system PiP window is showing the video.
     @Published public private(set) var isPictureInPictureActive = false
+    #if canImport(UIKit)
+    /// Reel's own PiP window, kept for the life of the engine so the next episode follows into it.
+    private let pip = ReelPictureInPicture()
+    #endif
 
     /// Replaced by `rebuildPlayer` when libvlc wedges (an input that never finishes stopping leaves
     /// every later open hanging); everything that holds a reference reads it through here.
     public private(set) var player = VLCMediaPlayer()
     private var openTimeouts = 0
-    /// The object VLCKit's PiP window drives for play/pause/seek. `VLCVideoView` returns it from
-    /// `mediaController()`; it talks to `player` directly because PiP calls arrive off the main actor.
-    public let pictureInPictureMediaController: VLCPictureInPictureMediaControlling
-    private var pipMediaController: PiPMediaController { pictureInPictureMediaController as! PiPMediaController }
 
     /// A fresh VLCMediaPlayer wired like the old one. libvlc stops asynchronously; an SMB input stuck in
     /// a read sometimes never finishes, and the player then serialises every later open behind it,
@@ -128,14 +132,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         player = VLCMediaPlayer()
         player.delegate = self
         player.drawable = drawable
-        pipMediaController.player = player
-        pipController = nil
-        canStartPictureInPicture = false
-        isPictureInPictureActive = false
         log("rebuilt VLC player: \(reason)")
     }
 
-    private weak var pipController: (any VLCPictureInPictureWindowControlling)?
     /// When the PiP window last closed. VLC's PiP output can take the inline video output down with it
     /// (closing the window with its X tells the system the content "stopped"), which would otherwise read
     /// as the stream ending and leave a black player; see `recoverAfterPictureInPicture`.
@@ -154,14 +153,24 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var vlcSubtitleTracks: [VLCMediaPlayer.Track] = []
 
     public override init() {
-        let pip = PiPMediaController(player: player)
-        pictureInPictureMediaController = pip
         super.init()
-        // Play from the PiP window goes through `play()` like every other play, for the audio
-        // session and the fresh clock after an interrupted pause; a resume straight on the player
-        // froze the picture (iPad, 5 Nov 2026: an 8-minute pause in PiP, then play from its window).
-        pip.onPlay = { [weak self] in Task { @MainActor in self?.log("play from the PiP window"); self?.play() } }
         player.delegate = self
+        #if canImport(UIKit)
+        pip.log = { [weak self] in self?.log($0) }
+        // Play from the window goes through `play()` like every other play, for the audio session
+        // and the fresh clock after an interrupted pause.
+        pip.onSetPlaying = { [weak self] playing in
+            guard let self else { return }
+            self.log(playing ? "play from the PiP window" : "pause from the PiP window")
+            if playing { self.play() } else { self.pause() }
+        }
+        pip.onSkip = { [weak self] seconds in self?.skip(by: seconds) }
+        pip.onStateChange = { [weak self] started in
+            guard let self else { return }
+            self.isPictureInPictureActive = started
+            if !started { self.pipEndedAt = Date(); self.recoverAfterPictureInPicture() }
+        }
+        #endif
         #if canImport(UIKit)
         interruptionWatcher = NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
             .receive(on: DispatchQueue.main)
@@ -245,7 +254,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
-        stop()
+        stop(forReload: true)
         if player.state == .stopping { rebuildPlayer(reason: "previous input still stopping") }
         log("load \(Diagnostics.safe(item.url)) startAt=\(Int(item.startAt))s hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms")
         self.item = item
@@ -627,7 +636,14 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     private var selectNextAddedSubtitle = false
 
+    /// Stops for good: the PiP window closes too. A load uses `stop(forReload:)` and keeps it.
     public func stop() {
+        #if canImport(UIKit)
+        if isPictureInPictureActive { log("stopping; closing the PiP window"); pip.stop() }
+        #endif
+        stop(forReload: false)
+    }
+    private func stop(forReload: Bool) {
         seekWatchdog?.cancel(); seekWatchdog = nil
         openWatchdog?.cancel()
         stallWatchdog?.cancel()
@@ -646,9 +662,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         chapters = []
         currentAudioTrack = nil
         currentSubtitleTrack = nil
-        pipController = nil
-        canStartPictureInPicture = false
-        isPictureInPictureActive = false
+        // The PiP controller and its state stay: the next load hands it the new display layer.
     }
 
     private var fillEnabled = false
@@ -663,7 +677,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     /// Re-applies the current Fit/Fill choice. `VLCVideoView` calls it whenever the drawable is laid out.
-    public func drawableDidLayout() { applyFill() }
+    public func drawableDidLayout() { applyFill(); attachDisplayLayerIfNeeded() }
 
     /// Only touches VLC when the answer changes: every layout pass calls this, and reconfiguring the
     /// video output each time made the whole player stutter.
@@ -679,31 +693,33 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     // MARK: - Picture in Picture
 
-    /// Called by the drawable's `pictureInPictureReady` block. VLC creates one controller per video
-    /// output, so this fires on every `load` once the first frame is up and the reference dies with it.
-    public func pictureInPictureDidBecomeAvailable(_ controller: any VLCPictureInPictureWindowControlling) {
-        pipController = controller
-        controller.stateChangeEventHandler = { [weak self] started in
-            Task { @MainActor in
-                guard let self else { return }
-                self.log("PiP \(started ? "started" : "ended")")
-                self.isPictureInPictureActive = started
-                if !started { self.pipEndedAt = Date(); self.recoverAfterPictureInPicture() }
-            }
-        }
-        canStartPictureInPicture = true
+    /// VLC paints through an AVSampleBufferDisplayLayer in a view it inserts into the drawable at
+    /// the first picture of every load. Reel's PiP controller takes that layer as its content; a
+    /// later layer (the next episode's) replaces it, and an open window carries on. Called on every
+    /// layout of the drawable and on every status change, since the view appears without notice.
+    private func attachDisplayLayerIfNeeded() {
+        #if canImport(UIKit)
+        // The newest view is the last one: the old display's view can still be there for a moment.
+        guard let root = player.drawable as? UIView, let layer = Self.displayLayers(in: root).last else { return }
+        pip.attach(layer)
+        if !canStartPictureInPicture { canStartPictureInPicture = true }
+        #endif
     }
 
     public func startPictureInPicture() {
-        log("PiP start asked: controller \(pipController != nil ? "present" : "none"), active \(isPictureInPictureActive)")
-        guard let pipController, !isPictureInPictureActive else { return }
-        pipController.invalidatePlaybackState()
-        pipController.startPictureInPicture()
+        #if canImport(UIKit)
+        log("PiP start asked: layer \(pip.hasLayer ? "present" : "none"), possible \(pip.isPossible), active \(isPictureInPictureActive)")
+        guard !isPictureInPictureActive else { return }
+        pip.update(playing: status == .playing, time: clock.time, duration: clock.duration)
+        pip.start()
+        #endif
     }
 
     public func stopPictureInPicture() {
+        #if canImport(UIKit)
         guard isPictureInPictureActive else { return }
-        pipController?.stopPictureInPicture()
+        pip.stop()
+        #endif
     }
 
     /// If the inline video output did not survive the PiP window closing, reload the same item at the
@@ -732,7 +748,9 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     nonisolated public func mediaPlayerLengthChanged(_ length: Int64) {
         Task { @MainActor in
             if length > 0, self.status != .idle { self.clock.duration = TimeInterval(length) / 1000 }
-            self.pipController?.invalidatePlaybackState()
+            #if canImport(UIKit)
+            self.pip.update(playing: self.status == .playing, time: self.clock.time, duration: self.clock.duration)
+            #endif
         }
     }
 
@@ -749,7 +767,6 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     private func handleStateChange(_ state: VLCMediaPlayerState) {
-        pipController?.invalidatePlaybackState()
         switch state {
         case .opening: setStatus(.opening)
         case .buffering:
@@ -818,6 +835,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         // Half a minute of steady playback after a reconnect earns a fresh allowance for the next drop.
         if recoveries > 0, Date().timeIntervalSince(loadedAt) > 30 { recoveries = 0 }
         if status == .buffering { setStatus(.playing) }
+        #if canImport(UIKit)
+        pip.update(playing: status == .playing, time: now, duration: clock.duration)
+        // In the background UIKit lays nothing out, so the new display view after a load is only
+        // noticed here, on the ticks (a scan of three views).
+        if Date().timeIntervalSince(loadedAt) < 30 { attachDisplayLayerIfNeeded() }
+        #endif
         if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
@@ -892,26 +915,6 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard let open = name.lastIndex(of: "["), let close = name.lastIndex(of: "]"), open < close else { return nil }
         return String(name[name.index(after: open)..<close])
     }
-}
-
-/// Playback controls for the system PiP window. VLCKit calls these from AVKit's queues, so this is
-/// deliberately not on the main actor and talks to the (thread-safe) `VLCMediaPlayer` directly,
-/// like VideoLAN's own PiP example. The engine's published state catches up via the delegate.
-private final class PiPMediaController: NSObject, VLCPictureInPictureMediaControlling, @unchecked Sendable {
-    var player: VLCMediaPlayer
-    /// Set by the engine: play on the main actor through the engine's own `play()`.
-    var onPlay: (@Sendable () -> Void)?
-    init(player: VLCMediaPlayer) { self.player = player }
-
-    func play() { if let onPlay { onPlay() } else { player.play() } }
-    func pause() { player.pause() }
-    func seek(by offset: Int64, completion: @escaping () -> Void) {
-        if !player.jump(withOffset: Int32(clamping: offset), completion: completion) { completion() }
-    }
-    func mediaLength() -> Int64 { player.media?.length.value?.int64Value ?? 0 }
-    func mediaTime() -> Int64 { player.time.value?.int64Value ?? 0 }
-    func isMediaSeekable() -> Bool { player.isSeekable }
-    func isMediaPlaying() -> Bool { player.isPlaying }
 }
 
 #if canImport(UIKit)

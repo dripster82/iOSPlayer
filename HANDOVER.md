@@ -667,29 +667,29 @@ cannot feed 6×, and "credits by the season's credits length" instead of "by cha
 Only one S2 pattern is usable (the others' prints predate `printsVersion` 6 or were provisional);
 they are retaken only when those episodes (S02E04/E05/E15) play again.
 
-## PiP across an episode change (5 Nov 2026) — not possible with VLCKit's PiP
+## PiP across an episode change (5 Nov 2026): Reel owns the window
 
-Asked for: the next episode carrying on in the Picture in Picture window. What happens instead:
-the window closes at the change and the sound carries on in the background.
+Asked for: the next episode carrying on in the Picture in Picture window. With VLCKit's own PiP it
+could not: VLCKit 4 makes one `AVPictureInPictureController` per libvlc video *display*, the display
+is closed when an input ends, the window went with it, and iOS refuses a PiP start from the
+background (AVKit's pegasus log never receives it; the same call in the foreground succeeds; tried
+on a new controller, on the same controller after a programmatic stop, and with the same
+`VLCMediaPlayer` handed the next media).
 
-Why, with evidence from the iPad simulator (`Test Show` two-episode corpus, AVKit/pegasus logs via
-`log show --predicate 'process == "Reel" AND subsystem CONTAINS "pegasus"'`):
-- VLCKit 4 makes one `AVPictureInPictureController` per libvlc video *display*, and the display is
-  closed when an input ends (`vout_StopDisplay`): the next file gets a new display, a new controller
-  (`pictureInPictureReady` fires again) and the old PiP window is stopped by the old one's teardown.
-  Keeping the same `VLCMediaPlayer` and handing it the next media changes nothing (tried: two
-  "Received first picture" / "isPictureInPicturePossible:1" rounds, same window teardown).
-- Starting PiP on the new controller from the background does nothing: AVKit never receives the
-  `startPictureInPicture` (pegasus logs none), on the new controller or even on the same one after
-  a programmatic stop. The same call in the foreground (the player's PiP button) is logged by
-  pegasus and succeeds. iOS starts PiP only in the foreground or automatically on the transition to
-  the background (`canStartPictureInPictureAutomaticallyFromInline`), and that transition has
-  already happened.
+Now (`ReelPictureInPicture` in Playback): Reel makes **one** `AVPictureInPictureController` for the
+life of the engine, over the `AVSampleBufferDisplayLayer` VLCKit inserts into the drawable
+(`VLCDrawableView` no longer conforms to `VLCPictureInPictureDrawable`, so VLCKit makes no
+controller of its own). Every load puts a new display view into the drawable; the engine finds the
+newest layer (`attachDisplayLayerIfNeeded`: on drawable layout, on `.playing`, and on the time ticks
+for 30 s after a load, because UIKit lays nothing out in the background) and hands it over as the
+controller's `contentSource`. An open window carries on with the new layer: on the iPad simulator
+the log reads "PiP: new display layer handed to the window (active true)" and pegasus shows no
+`_stopPictureInPictureAnimated` at the change. The window's play/pause/skip/timeline come through
+`AVPictureInPictureSampleBufferPlaybackDelegate`, answered from a snapshot the engine refreshes on
+status, ticks and length (`pip.update`); the timeline is placed so the layer timebase's "now" falls
+at the current position. `engine.stop()` (dismiss) closes the window; a load uses
+`stop(forReload:)` and keeps it. `canStartPictureInPictureAutomaticallyFromInline` is on, so Home
+still starts PiP by itself. Returning to the app stops PiP as before.
 
-What would work: Reel owning the PiP itself — one `AVPictureInPictureController` over an
-`AVSampleBufferDisplayLayer` that Reel feeds with VLC's frames (the memory output, as the grabber
-does, at full size) and keeps across loads, with `AVPictureInPictureSampleBufferPlaybackDelegate`
-for play/pause/seek. A separate piece of work; the rendering path for ordinary playback would stay
-VLCKit's.
-
-Kept from the investigation: the engine logs "PiP started" / "PiP ended" and "PiP start asked".
+Not verified on a device: that the window really shows the new episode's frames (the simulator's
+PiP window is always black), the window's own controls, and the timeline position.
