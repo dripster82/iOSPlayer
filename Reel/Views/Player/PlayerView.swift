@@ -115,9 +115,14 @@ struct PlayerContentView: View {
         .onDisappear { hideTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
             // Like YouTube: leaving the app mid-playback hands the video to the system PiP window, and
-            // coming back takes it over again. VLCKit may already have started PiP itself on the way out
-            // (its controller allows automatic start from inline); `startPictureInPicture` is a no-op then.
+            // coming back takes it over again. AVKit starts PiP by itself on the way out (automatic
+            // start from inline), but not every time (an iPad log: six seconds after a PiP session
+            // ended it did not), and once the scene is in the background iOS refuses a start. So the
+            // ask is made while the scene is still foreground but inactive, the first step of the
+            // way out; `startPictureInPicture` is a no-op when AVKit already did it. A Control Centre
+            // pull goes inactive too, and `.active` takes the window back straight away.
             switch phase {
+            case .inactive where engine.status == .playing && !engine.isPictureInPictureActive: engine.startPictureInPicture()
             case .background where engine.status == .playing: engine.startPictureInPicture()
             case .active: engine.stopPictureInPicture(); engine.verifyPlaybackAfterForeground()
             default: break

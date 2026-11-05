@@ -19,6 +19,10 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
     private var snapshot = Snapshot()
 
     private var controller: AVPictureInPictureController?
+    /// When the window last asked for a skip, and whether the video was playing then. AVKit sends
+    /// a pause (twice) right after the skip it asked for; the video is left as it was instead.
+    private var lastSkipAt = Date.distantPast
+    private var playingAtSkip = false
     private(set) weak var layer: AVSampleBufferDisplayLayer?
     /// Main-actor callbacks into the engine.
     var onStateChange: (@MainActor (Bool) -> Void)?
@@ -71,7 +75,14 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
 
 extension ReelPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
-        Task { @MainActor in self.onSetPlaying?(playing) }
+        Task { @MainActor in
+            if !playing, Date().timeIntervalSince(self.lastSkipAt) < 2, self.playingAtSkip {
+                self.log?("PiP: pause right after the skip ignored")
+                self.controller?.invalidatePlaybackState()
+                return
+            }
+            self.onSetPlaying?(playing)
+        }
     }
     nonisolated func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
         let s = lock.withLock { snapshot }
@@ -88,7 +99,13 @@ extension ReelPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions) {}
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion completionHandler: @escaping () -> Void) {
         let seconds = CMTimeGetSeconds(skipInterval)
-        Task { @MainActor in self.onSkip?(seconds); completionHandler() }
+        Task { @MainActor in
+            self.lastSkipAt = Date(); self.playingAtSkip = self.lock.withLock { self.snapshot.playing }
+            self.log?("PiP: skip by \(Int(seconds))s")
+            self.onSkip?(seconds)
+            completionHandler()
+            self.controller?.invalidatePlaybackState()
+        }
     }
 }
 
