@@ -596,8 +596,8 @@ Reel's pages now live on the studio site, served from the `studio/` app in drips
 from the seed file" with `reel`): https://studio.ketelle.co.uk/reel/ plus `/reel/support/`,
 `/reel/privacy/` and `/reel/terms/`. Settings, the README, the metadata user agent and
 `docs/app-store/listing.md` point there, and the support address is support@ketelle.co.uk (subject
-"Reel App Support"), the same on the studio pages. The old `docs/` site is kept only until
+"Reel App Support"), the same on the studio pages. The old `docs/` pages are now redirects to the studio (meta refresh, so GitHub Pages redirects too; `sudo vps deploy reel` picks them up on reel.ketelle.co.uk). Keep them until
 reel.ketelle.co.uk and the GitHub Pages site redirect to the studio; after that remove the `reel` VPS
-app and delete `docs/*.html`, `docs/style.css` and the icons (the screenshots and `docs/app-store`
+app and delete `docs/*.html` and the icons (the screenshots and `docs/app-store`
 stay). App Store Connect's support, marketing and privacy URLs and the terms line in the description
 must be changed to the studio URLs by hand.
