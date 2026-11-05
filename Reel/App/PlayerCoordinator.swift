@@ -566,9 +566,12 @@ final class PlayerCoordinator: ObservableObject {
     private func resolveCredits(key: String, url: URL, duration: TimeInterval? = nil, chapters: [Chapter]? = nil) {
         let duration = duration ?? engine.duration, chapters = chapters ?? engine.chapters
         guard let current, current.kind == .episode, !current.isAudiobookPart, duration > 0, creditsStart == nil else { return }
-        if let byChapter = chapters.creditsStart(fileDuration: duration) {
-            creditsStart = byChapter; creditsGrace = 0
-            Diagnostics.log("player", "credits by chapter at \(Int(byChapter))s")
+        // A chapter named as the credits is the file's word. An unnamed final chapter that is merely
+        // shaped like credits is a guess, and the viewer's mark on the show outranks it.
+        let byChapter = chapters.creditsChapter(fileDuration: duration)
+        if let byChapter, byChapter.named {
+            creditsStart = byChapter.start; creditsGrace = 0
+            Diagnostics.log("player", "credits by the named chapter at \(Int(byChapter.start))s")
             return
         }
         if let show = current.show, let marked = ShowMarkers.creditsStart(showKey: show.itemKey, itemKey: key, season: current.seasonNumber, duration: duration) {
@@ -581,6 +584,11 @@ final class PlayerCoordinator: ObservableObject {
                     self.creditsStart = found; self.creditsGrace = 0
                 }
             }
+            return
+        }
+        if let byChapter {
+            creditsStart = byChapter.start; creditsGrace = 0
+            Diagnostics.log("player", "credits by the short final chapter at \(Int(byChapter.start))s")
             return
         }
         creditsGrace = 15

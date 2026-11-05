@@ -61,15 +61,25 @@ public final class FrameGrabber: @unchecked Sendable {
         #endif
     }
 
+    /// Lets the player go. libvlc's stop waits for the input, and an input stuck in a read over a
+    /// share (an SMB stall on Wi-Fi) can hold it for minutes or for good, so the teardown runs on
+    /// its own thread and nothing waits for it; a slow one is logged.
     private func closeSession() {
         lock.lock()
         let s = session; session = nil; onFrame = nil
         let u = unmanaged; unmanaged = nil
         lock.unlock()
         guard let s else { return }
-        reel_grab_close(s)
-        u?.release()
+        let box = SessionBox(s)
+        Task.detached(priority: .utility) {
+            let began = Date()
+            reel_grab_close(box.pointer)
+            u?.release()
+            let took = Date().timeIntervalSince(began)
+            if took > 5 { Self.log?("grab player took \(Int(took))s to stop") }
+        }
     }
+    private struct SessionBox: @unchecked Sendable { let pointer: UnsafeMutableRawPointer; init(_ p: UnsafeMutableRawPointer) { pointer = p } }
 
     private func deliver(pixels: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int, time: TimeInterval) {
         lock.lock(); let handler = onFrame; lock.unlock()
@@ -83,16 +93,25 @@ public final class FrameGrabber: @unchecked Sendable {
     /// fresh input this far back and discards the run-up, leaving only clean frames.
     public static let leadIn: TimeInterval = 20   // XviD puts keyframes up to 12.5 s apart (300 frames at 23.976 fps)
 
+    /// How many of the last run's delivered frames were the same picture over again (see `frames`).
+    public private(set) var lastRunRepeats = 0
+
     /// VLC's output while the decoder has nothing yet (after a seek, until the next keyframe): a
     /// uniform mid-grey. Not a picture from the file, so never kept.
-    static func isPlaceholder(_ image: CGImage) -> Bool {
-        guard let p = FrameFingerprint(image), let lo = p.luma.min(), let hi = p.luma.max() else { return false }
+    static func isPlaceholder(_ p: FrameFingerprint) -> Bool {
+        guard let lo = p.luma.min(), let hi = p.luma.max() else { return false }
         return hi - lo < 8 && p.brightness > 118 && p.brightness < 138
     }
 
     /// Frames from `from`, one every `spacing` seconds, `count` of them, playing at `rate`, from a
-    /// fresh start of the input. `each` sees every kept frame as it arrives and may return true to
-    /// stop early. Returns what arrived once the run is covered, or when nothing more comes for a while.
+    /// fresh start of the input. `each` sees every frame the decoder delivers from the first target
+    /// on, once, with the time it is really from: at a rate the decoder cannot keep, VLC drops to
+    /// keyframes and one picture then stands for many slots, so a scan must go by the frame's own
+    /// time and never count a picture twice. When the input stalls (the share cannot feed the rate)
+    /// VLC's clock runs on and the output shows the last picture again and again with a later time
+    /// each; such a repeat is no new frame: `each` does not see it, it does not count as the stream
+    /// being alive, and a stall therefore ends in the give-up below rather than a run of one
+    /// picture. Returns what arrived once the run is covered, or when nothing more comes for a while.
     @discardableResult
     public func frames(from: TimeInterval, count: Int, spacing: TimeInterval, rate: Float = 8, each: (@Sendable (TimeInterval, CGImage) -> Bool)? = nil) async -> [(time: TimeInterval, image: CGImage)] {
         // The previous run's player is torn down off the main thread (libvlc blocks for it).
@@ -109,22 +128,36 @@ public final class FrameGrabber: @unchecked Sendable {
                 var stop = false
                 state.lock.lock()
                 guard !state.done else { state.lock.unlock(); return }
-                state.lastFrameAt = Date()
                 state.delivered += 1
+                let print = FrameFingerprint(image)
+                let repeat_ = print != nil && print == state.lastPrint
+                state.lastPrint = print
+                if repeat_ { state.repeats += 1 } else { state.lastFrameAt = Date() }
                 if state.delivered <= 3 || state.delivered % 50 == 0 { state.seen.append(time) }
                 // The start-time request is sometimes dropped and playback begins at 0: seek once.
-                if !state.sought, time < begin - 1.5 { state.sought = true; state.lock.unlock(); if let s = self.lock.withLock({ self.session }) { _ = reel_grab_seek(s, Int64(begin * 1000), true) }; return }
-                if Self.isPlaceholder(image) { state.placeholders += 1; state.lock.unlock(); return }
+                if !state.sought, time < begin - 1.5 {
+                    state.sought = true; state.lock.unlock()
+                    // Not from inside libvlc's own display callback: the seek takes the player's lock.
+                    Task.detached(priority: .utility) { [weak self] in if let s = self?.lock.withLock({ self?.session }) { _ = reel_grab_seek(s, Int64(begin * 1000), true) } }
+                    return
+                }
+                if let print, Self.isPlaceholder(print) { state.placeholders += 1; state.lock.unlock(); return }
                 // The first frame at or past each target; the run-up before the first is skipped. A
                 // frame that covers two targets is kept for both, so every slot has a print.
+                let slot = state.next
                 while state.next < targets.count, time >= targets[state.next] - 0.05 {
                     state.collected.append((targets[state.next], image))
                     state.next += 1
-                    if let each, each(targets[state.next - 1], image) { stop = true; break }
                 }
-                if stop || state.next >= targets.count || time >= end + spacing { state.finish() }
+                if state.next > slot, !repeat_, let each, each(time, image) { stop = true }
+                let over = stop || state.next >= targets.count || time >= end + spacing
+                if over {
+                    if state.repeats > 0 { Self.log?("grab from \(Int(begin))s done: \(state.delivered) frames delivered, \(state.repeats) the same picture again, \(state.collected.count) kept") }
+                    self.lastRunRepeats = state.repeats
+                    state.finish()
+                }
                 state.lock.unlock()
-                if stop || state.next >= targets.count || time >= end + spacing { self.clearHandler() }
+                if over { self.clearHandler() }
             }
             lock.unlock()
             if reel_grab_play(session, Int64(begin * 1000), rate) != 0 { state.lock.withLock { state.finish() }; clearHandler(); return }
@@ -138,7 +171,8 @@ public final class FrameGrabber: @unchecked Sendable {
                         if state.done { return 0 }
                         let stale = Date().timeIntervalSince(state.lastFrameAt ?? started) > 15 || Date().timeIntervalSince(started) > budget
                         if stale {
-                            Self.log?("grab from \(Int(begin))s gave up after \(Int(Date().timeIntervalSince(started)))s: \(state.delivered) frames delivered (\(state.placeholders) placeholders), \(state.collected.count) kept, times seen \(state.seen.map { Int($0) })")
+                            Self.log?("grab from \(Int(begin))s gave up after \(Int(Date().timeIntervalSince(started)))s: \(state.delivered) frames delivered (\(state.placeholders) placeholders, \(state.repeats) the same picture again), \(state.collected.count) kept, times seen \(state.seen.map { Int($0) })")
+                            self?.lastRunRepeats = state.repeats
                             state.finish(); return 1
                         }
                         return 2
@@ -157,7 +191,7 @@ public final class FrameGrabber: @unchecked Sendable {
     }
     private func clearHandler() { lock.lock(); onFrame = nil; lock.unlock() }
 
-    /// Stops and releases the stream. Blocks for libvlc's teardown; run it off the main thread.
+    /// Stops and releases the stream; the teardown runs on its own thread and returns at once.
     public func close() { closeSession() }
     deinit { closeSession() }
 
@@ -169,6 +203,8 @@ public final class FrameGrabber: @unchecked Sendable {
         var lastFrameAt: Date?
         var delivered = 0
         var placeholders = 0
+        var repeats = 0
+        var lastPrint: FrameFingerprint?
         var sought = false
         var seen: [TimeInterval] = []
         private var continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>?

@@ -21,7 +21,7 @@ enum DebugGrab {
         let seeks = (q("seek") ?? "").split(separator: ",").compactMap { TimeInterval($0) }
         Task {
             // `item=<key>` resolves that title's file through the library; otherwise the last played URL.
-            var target = player.lastPlaybackURL
+            var target = player.lastPlaybackURL ?? player.engine.currentURL
             if let key = q("item"), let file = library.item(key)?.files.first { target = try? await library.playbackURL(for: file).0 }
             guard let target else { Diagnostics.log("debug", "grab-current: nothing to open"); return }
             await grab(target, from: from, count: count, spacing: spacing, seeks: seeks)

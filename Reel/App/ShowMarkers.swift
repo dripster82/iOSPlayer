@@ -182,6 +182,8 @@ enum ShowMarkers {
         var isSession: Bool { grabber != nil }
 
         private(set) var usedSession = false
+        /// How many frames of the last run were the same picture again: a stalled stream.
+        var repeats: Int { grabber?.lastRunRepeats ?? 0 }
 
         func run(from: TimeInterval, count: Int, spacing: TimeInterval) async -> [FrameFingerprint] {
             if let grabber {
@@ -216,18 +218,31 @@ enum ShowMarkers {
             #endif
         }
 
-        /// A frame a second from `from`, each handed to `each` (return true to stop) as it comes off
-        /// a fresh start of the input. Returns false when no session could give frames.
-        func scan(from: TimeInterval, count: Int, each: @escaping @Sendable (TimeInterval, FrameFingerprint, CGImage) -> Bool) async -> Bool {
-            guard let grabber else { return false }
+        /// Playback speed for a scan. Six times: the share must feed it (a 1080p x265 episode is 30–50
+        /// Mbit/s at this rate over Wi-Fi, where twelve times stalled), and a decoder that cannot keep
+        /// up drops to keyframes, which the matching takes in their own time.
+        static let scanRate: Float = 6
+        /// A frame a second from `from`, each delivered frame handed once to `each` with the time it
+        /// is really from (return true to stop) as it comes off a fresh start of the input. Returns
+        /// the time of the last frame seen, or nil when no session could give frames; a run that
+        /// ends short of `count` seconds stalled, and the caller may go on from where it stopped.
+        func scan(from: TimeInterval, count: Int, each: @escaping @Sendable (TimeInterval, FrameFingerprint, CGImage) -> Bool) async -> TimeInterval? {
+            guard let grabber else { return nil }
             let dumpFolder = self.dumpFolder
-            let got = await grabber.frames(from: from, count: count, spacing: 1, rate: 12) { time, image in
+            let last = LastTime()
+            let got = await grabber.frames(from: from, count: count, spacing: 1, rate: Self.scanRate) { time, image in
                 guard let p = FrameFingerprint(image) else { return false }
+                last.set(time)
                 if let dumpFolder, Int(time) % 10 == 0 { Self.dumpImage(image, at: time, how: "scan", to: dumpFolder) }
                 return each(time, p, image)
             }
             usedSession = !got.isEmpty
-            return !got.isEmpty
+            return got.isEmpty ? nil : last.get() ?? from
+        }
+        private final class LastTime: @unchecked Sendable {
+            private let lock = NSLock(); private var t: TimeInterval?
+            func set(_ v: TimeInterval) { lock.withLock { t = v } }
+            func get() -> TimeInterval? { lock.withLock { t } }
         }
         static func dumpImage(_ image: CGImage, at seconds: TimeInterval, how: String, to folder: URL) {
             #if DEBUG
@@ -272,8 +287,8 @@ enum ShowMarkers {
             let prints = await grab.run(from: time, count: count, spacing: spacing)
             await grab.close()
             let usable = prints.filter { !$0.isFlat }.count
-            guard prints.count >= count / 2, usable >= 3 else {
-                Diagnostics.log("player", "intro prints for \(itemKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable; tried again next play")
+            guard prints.count >= count / 2, usable >= 3, grab.repeats <= prints.count / 4 else {
+                Diagnostics.log("player", "intro prints for \(itemKey.prefix(40)) not taken: \(prints.count) frames, \(usable) usable, \(grab.repeats) the same picture again (the stream stalled); tried again next play")
                 return
             }
             Diagnostics.log("player", "intro prints for \(itemKey.prefix(40)): \(prints.count) kept, \(usable) usable, in \(Int(Date().timeIntervalSince(began)))s \(grab.usedSession ? "from one open" : "a frame at a time")")
@@ -282,6 +297,11 @@ enum ShowMarkers {
                 s.patterns[i].prints = prints; s.patterns[i].spacing = spacing; s.patterns[i].version = Self.printsVersion
                 // Episodes searched without these prints (or with an older set) are searched again.
                 for k in s.episodes.keys where s.episodes[k]?.locatedIntro == nil { s.episodes[k]?.introSearched = false }
+            }
+            // The end was marked while these provisional prints were being taken: the full set now.
+            fingerprinting.remove(showKey)
+            if let p = show(showKey)?.pattern(for: itemKey), p.needsPrints {
+                fingerprintIntro(showKey: showKey, itemKey: itemKey, url: url, time: p.start, softwareDecoding: softwareDecoding)
             }
         }
     }
@@ -468,15 +488,18 @@ enum ShowMarkers {
             var looked = 0
             for (from, to) in stretches where seen.start == nil {
                 guard DeviceConditions.allowsBackgroundWork else { Diagnostics.log("player", "intro search paused (\(DeviceConditions.summary))"); await grab.close(); return }
-                let count = Int(to - from) + 1
-                guard count > 0 else { continue }
-                let got = await grab.scan(from: from, count: count) { time, print, _ in
-                    seen.looked += 1
-                    // The pattern this frame matches best, with the start it implies.
-                    var best: (pattern: Int, start: TimeInterval, similarity: Double, print: Int)?
-                    for (p, pattern) in patterns.enumerated() {
-                        guard let (i, sim) = IntroLocator.matches(print, in: pattern.prints), sim > (best?.similarity ?? 0) else { continue }
-                        best = (p, time - TimeInterval(i) * (pattern.spacing ?? IntroLocator.spacing), sim, i)
+                var from = from, passes = 0
+                // A stalled stream ends the run early; it is picked up from where it stopped, a few times.
+                while from < to - 2, seen.start == nil, passes < 4 {
+                    passes += 1
+                    let count = Int(to - from) + 1
+                    let last = await grab.scan(from: from, count: count) { time, print, _ in
+                        seen.looked += 1
+                        // The pattern this frame matches best, with the start it implies.
+                        var best: (pattern: Int, start: TimeInterval, similarity: Double, print: Int)?
+                        for (p, pattern) in patterns.enumerated() {
+                            guard let (i, sim) = IntroLocator.matches(print, in: pattern.prints), sim > (best?.similarity ?? 0) else { continue }
+                            best = (p, time - TimeInterval(i) * (pattern.spacing ?? IntroLocator.spacing), sim, i)
                     }
                     guard let best else { seen.recent = []; return false }
                     if seen.recent.last?.pattern != best.pattern { seen.recent = [] }
@@ -489,9 +512,13 @@ enum ShowMarkers {
                         return true
                     }
                     return false
+                    }
+                    looked = seen.looked
+                    guard let last else { Diagnostics.log("player", "intro pass \(Int(from))–\(Int(to))s gave no frames"); break }
+                    if last >= to - 2 || seen.start != nil { break }
+                    Diagnostics.log("player", "intro pass stalled at \(Int(last))s of \(Int(to))s; going on from there")
+                    from = last + 1
                 }
-                looked = seen.looked
-                if !got { Diagnostics.log("player", "intro pass \(Int(from))–\(Int(to))s gave no frames") }
             }
             await grab.close()
             guard let start = seen.start, let p = seen.pattern, let length = patterns[p].length else {

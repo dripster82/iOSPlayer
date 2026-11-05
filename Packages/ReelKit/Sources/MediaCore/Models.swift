@@ -208,12 +208,17 @@ public extension Array where Element == Chapter {
     /// among unnamed chapters only, a short final chapter (under four minutes, in the last tenth of the
     /// file) is taken as the credits, since that is how most TV rips are cut. Films with a handful of
     /// long chapters match nothing, and so does a last chapter that is a whole scene.
-    public func creditsStart(fileDuration: TimeInterval) -> TimeInterval? {
-        if let named = first(where: { $0.looksLikeCredits(fileDuration: fileDuration) }) { return named.start }
+    public func creditsStart(fileDuration: TimeInterval) -> TimeInterval? { creditsChapter(fileDuration: fileDuration)?.start }
+
+    /// As `creditsStart`, saying whether the chapter is named as the credits (the file's word) or
+    /// merely shaped like them (a guess a viewer's mark on the show outranks: Stargate Atlantis S3
+    /// closes every episode with an unnamed 220 s chapter that is the last scene and the credits).
+    public func creditsChapter(fileDuration: TimeInterval) -> (start: TimeInterval, named: Bool)? {
+        if let named = first(where: { $0.looksLikeCredits(fileDuration: fileDuration) }) { return (named.start, true) }
         guard fileDuration > 0, count >= 3, allSatisfy(\.hasGenericTitle), let last = self.last else { return nil }
         let endsAtFileEnd = fileDuration - (last.start + last.duration) < 15
         guard endsAtFileEnd, last.duration >= 15, last.duration <= 240, last.start >= fileDuration * 0.9 else { return nil }
-        return last.start
+        return (last.start, false)
     }
 
     var intro: Chapter? {

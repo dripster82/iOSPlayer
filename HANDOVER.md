@@ -618,3 +618,51 @@ A load clears the flag. The stall watchdogs had not fired yet (the scrub came 12
 the no-output watchdog would have reloaded at about 10 s), and remain the guard, not the fix.
 Not yet verified on the iPad with a real 8-minute-plus pause: look for "audio session was taken
 during the pause; seeking to Ns" followed by normal play in `reel.log`.
+
+- Later that evening it froze again after an 8-minute pause in the PiP window. The resume came
+  through `PiPMediaController.play()`, which called the VLC player directly and so never ran the
+  engine's `play()` (no "seeking to Ns" line in the log). PiP play now goes through the engine's
+  `play()` on the main actor (`onPlay`), logged as "play from the PiP window". Still unverified
+  with a real PiP pause of over eight minutes.
+
+## Intro search and credits on Atlantis S3 (5 Nov 2026)
+
+What the iPad log showed: no intro search had ever finished since 2 Nov (never an "intro found" or
+"intro not found" line), every one ended in "grab from 13s gave up" and then silence, so
+`ShowMarkers.isSearchingIntro` stayed true, the scrub thumbnails waited their full five minutes
+and `confirmCredits` its ten. And the credits in S3 came "by chapter at 2396s": those files end
+with an unnamed 220 s chapter (the last scene plus the credits) that the shape rule took for the
+credits, so Up Next came up three and a half minutes early.
+
+Reproduced on the simulator with a throttling proxy (`scratchpad/throttle-proxy.py`, 1 MB/s,
+SIGSTOP to freeze it) in front of the WebDAV corpus and the `reel://debug-grab-current` hook: when
+the input stalls, libvlc's clock runs on at the playback rate and the memory output shows the
+**last picture again and again with a later time each** ("60 frames in 9.5 s" of one picture; the
+iPad's "113 frames delivered, 294 kept"). Twelve times real time over SMB on Wi-Fi is where it
+stalled (30–50 Mbit/s files).
+
+Changes:
+- `FrameGrabber.frames`: a frame whose fingerprint equals the previous one is a repeat, not a new
+  frame: `each` does not see it, it does not keep the stream "alive" (so a stall ends in the
+  give-up), and the run reports them (`lastRunRepeats`, logged as "the same picture again").
+  `each` now gets every delivered frame once with its real time, not one call per one-second slot
+  (at a rate the decoder cannot keep VLC drops to keyframes, and one picture stood for many slots,
+  so three slots in a row could never agree on a start). The seek that fixes a dropped start-time
+  no longer runs inside libvlc's own display callback. The teardown (`closeSession`) runs on its own
+  thread and nothing waits for it: a player stuck in an SMB read held `libvlc_media_player_release`
+  and with it the whole search (logged if it takes over 5 s).
+- `ShowMarkers`: scans run at 6× (`Grab.scanRate`); `Grab.scan` returns the last real frame time and
+  `locateIntro` goes on from there after a stall (up to four passes); a print run that is mostly
+  repeats is rejected ("the stream stalled; tried again next play"); the full print run now follows
+  a provisional one when the end was marked while it ran (it was silently dropped, which is why
+  S02E15's pattern never became usable).
+- Credits: `[Chapter].creditsChapter(fileDuration:)` says whether the chapter is named. A named
+  credits chapter still wins; a viewer's mark on the show (the season's credits length) now beats
+  an unnamed credits-shaped final chapter, which comes third ("credits by the short final chapter").
+  Test `testNamedChapterIsTheFilesWordAndAShapedOneAGuess`.
+
+Not yet verified on the iPad: look for "intro found in … (pattern S2)" or "intro not found" within
+two minutes of an S3 episode starting, "intro pass stalled at … going on from there" if the share
+cannot feed 6×, and "credits by the season's credits length" instead of "by chapter" on S3.
+Only one S2 pattern is usable (the others' prints predate `printsVersion` 6 or were provisional);
+they are retaken only when those episodes (S02E04/E05/E15) play again.

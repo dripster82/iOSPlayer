@@ -21,6 +21,14 @@ final class CreditsDetectionTests: XCTestCase {
         XCTAssertEqual(chapters.creditsStart(fileDuration: 2550), 2500)
     }
 
+    func testNamedChapterIsTheFilesWordAndAShapedOneAGuess() {
+        let named = [Chapter(id: 0, title: "Story", start: 0, duration: 2400), Chapter(id: 1, title: "Credits", start: 2400, duration: 60)]
+        XCTAssertEqual(named.creditsChapter(fileDuration: 2460)?.named, true)
+        let shaped = [Chapter(id: 0, title: "Chapter 1", start: 0, duration: 1200), Chapter(id: 1, title: "Chapter 2", start: 1200, duration: 1200), Chapter(id: 2, title: "Chapter 3", start: 2400, duration: 220)]
+        XCTAssertEqual(shaped.creditsChapter(fileDuration: 2620)?.start, 2400)
+        XCTAssertEqual(shaped.creditsChapter(fileDuration: 2620)?.named, false)
+    }
+
     func testLongUnnamedFinalChapterIsAScene() {
         let chapters = [Chapter(id: 0, title: "Chapter 1", start: 0, duration: 1200), Chapter(id: 1, title: "Chapter 2", start: 1200, duration: 900), Chapter(id: 2, title: "Chapter 3", start: 2100, duration: 450)]
         XCTAssertNil(chapters.creditsStart(fileDuration: 2550))
