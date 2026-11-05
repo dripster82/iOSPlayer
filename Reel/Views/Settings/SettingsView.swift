@@ -65,9 +65,9 @@ struct SettingsView: View {
                 NavigationLink("Diagnostics") { DiagnosticsView() }
                 NavigationLink("Licences") { LicencesView() }
                 NavigationLink("Data providers") { AttributionView() }
-                Link(destination: URL(string: "mailto:barley_gilt6r@icloud.com?subject=Reel%20support")!) { Label("Contact support", systemImage: "envelope") }
-                Link(destination: URL(string: "https://dripster82.github.io/iOSPlayer/privacy.html")!) { Label("Privacy policy", systemImage: "hand.raised") }
-                Link(destination: URL(string: "https://dripster82.github.io/iOSPlayer/terms.html")!) { Label("Terms of use", systemImage: "doc.text") }
+                Link(destination: URL(string: "mailto:support@ketelle.co.uk?subject=Reel%20App%20Support")!) { Label("Contact support", systemImage: "envelope") }
+                Link(destination: URL(string: "https://studio.ketelle.co.uk/reel/privacy/")!) { Label("Privacy policy", systemImage: "hand.raised") }
+                Link(destination: URL(string: "https://studio.ketelle.co.uk/reel/terms/")!) { Label("Terms of use", systemImage: "doc.text") }
             }
 
             Section {

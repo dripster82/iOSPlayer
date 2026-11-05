@@ -588,3 +588,16 @@ The strip now comes from the shim's `libvlc_media_thumbnail_request_by_time` wit
 clip with a burned-in clock: frames at 0:10, 0:50, 1:30, 2:10, 2:50 for a 3-minute file, and the
 preview at 1:30.8 for the 1:31 mark. `Packages/ReelKit` tests: the DLNA integration test fails when
 a MiniDLNA on 127.0.0.1:8200 serves a library without the demo film; it is unrelated to playback.
+
+## Website moved to the studio (5 Nov 2026)
+
+Reel's pages now live on the studio site, served from the `studio/` app in dripster82/iphonegames
+(content in its seed file; the server's copy is imported from the studio admin, Apps → "Import an app
+from the seed file" with `reel`): https://studio.ketelle.co.uk/reel/ plus `/reel/support/`,
+`/reel/privacy/` and `/reel/terms/`. Settings, the README, the metadata user agent and
+`docs/app-store/listing.md` point there, and the support address is support@ketelle.co.uk (subject
+"Reel App Support"), the same on the studio pages. The old `docs/` site is kept only until
+reel.ketelle.co.uk and the GitHub Pages site redirect to the studio; after that remove the `reel` VPS
+app and delete `docs/*.html`, `docs/style.css` and the icons (the screenshots and `docs/app-store`
+stay). App Store Connect's support, marketing and privacy URLs and the terms line in the description
+must be changed to the studio URLs by hand.

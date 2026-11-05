@@ -21,10 +21,10 @@ Everything here is ready to paste. Fields are in App Store Connect order.
 
 | Field | Value |
 |---|---|
-| Support URL | https://reel.ketelle.co.uk/support.html |
-| Marketing URL | https://reel.ketelle.co.uk/ |
-| Privacy policy URL | https://reel.ketelle.co.uk/privacy.html |
-| Terms (EULA) | Standard Apple EULA, with https://reel.ketelle.co.uk/terms.html linked from the description |
+| Support URL | https://studio.ketelle.co.uk/reel/support/ |
+| Marketing URL | https://studio.ketelle.co.uk/reel/ |
+| Privacy policy URL | https://studio.ketelle.co.uk/reel/privacy/ |
+| Terms (EULA) | Standard Apple EULA, with https://studio.ketelle.co.uk/reel/terms/ linked from the description |
 
 ## Promotional text (170)
 
@@ -56,7 +56,7 @@ Reel has no account, no analytics, no advertising and no tracking. The only thin
 
 This product uses the TMDB API but is not endorsed or certified by TMDB. Extra artwork from fanart.tv. Anime titles from AniDB and Anime-Lists. Subtitles from OpenSubtitles. Audiobook details from Audible, Audnexus and Apple Books. Playback by VLCKit (LGPL 2.1; source at https://github.com/dripster82/iOSPlayer).
 
-Terms: https://reel.ketelle.co.uk/terms.html
+Terms: https://studio.ketelle.co.uk/reel/terms/
 
 ## Keywords (100)
 

@@ -1,6 +1,6 @@
 <p align="center"><strong>Reel</strong></p>
 <p align="center">Every file. Every screen.</p>
-<p align="center"><a href="https://dripster82.github.io/iOSPlayer/">Website</a> · <a href="https://dripster82.github.io/iOSPlayer/support.html">Support</a> · <a href="https://dripster82.github.io/iOSPlayer/privacy.html">Privacy</a> · <a href="https://dripster82.github.io/iOSPlayer/terms.html">Terms</a></p>
+<p align="center"><a href="https://studio.ketelle.co.uk/reel/">Website</a> · <a href="https://studio.ketelle.co.uk/reel/support/">Support</a> · <a href="https://studio.ketelle.co.uk/reel/privacy/">Privacy</a> · <a href="https://studio.ketelle.co.uk/reel/terms/">Terms</a></p>
 
 Reel is a media player for iPhone and iPad that plays your own video files, straight from a NAS share
 or the device, and turns them into a proper library: TV shows and films with artwork, episode names,
@@ -66,7 +66,7 @@ and the [Anime-Lists](https://github.com/Anime-Lists/anime-lists) mapping. Subti
 
 No analytics, no advertising, no tracking, no account. The only things that leave the device are
 requests to the servers you add and to the metadata services above, and your own iCloud if you turn
-sync on. The [privacy policy](https://dripster82.github.io/iOSPlayer/privacy.html) has the detail.
+sync on. The [privacy policy](https://studio.ketelle.co.uk/reel/privacy/) has the detail.
 
 ## Building from source
 
@@ -85,7 +85,7 @@ history and decisions are in [HANDOVER.md](HANDOVER.md).
 
 ## Support
 
-[Support page](https://dripster82.github.io/iOSPlayer/support.html) ·
+[Support page](https://studio.ketelle.co.uk/reel/support/) ·
 [GitHub Issues](https://github.com/dripster82/iOSPlayer/issues) · barley_gilt6r@icloud.com
 
 Made by dripster82.

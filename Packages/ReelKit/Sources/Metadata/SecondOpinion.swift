@@ -23,7 +23,7 @@ public struct SecondOpinionHit: Sendable, Equatable {
 /// User-Agent these services ask for. Errors are the caller's to swallow: a second opinion that
 /// cannot be fetched is simply no opinion.
 struct KeylessJSON: Sendable {
-    static let userAgent = "Reel/1.0 (https://dripster82.github.io/iOSPlayer; paul@ketelle.co.uk)"
+    static let userAgent = "Reel/1.0 (https://studio.ketelle.co.uk/reel; paul@ketelle.co.uk)"
     let transport: HTTPTransport
     let cache: MetadataCache
     let limiter: RateLimiter
