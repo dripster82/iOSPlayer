@@ -425,6 +425,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Reconnect now rather than leaving the viewer to wait for the stall watchdog.
     public func verifyPlaybackAfterForeground() {
         flushDisplayLayerIfNeeded()
+        rebuildPictureInPictureIfNeeded()
         // Paused while away: the check runs once play resumes, when the output would show.
         if status == .paused { verifyOnNextPlay = true; return }
         guard status == .playing else { return }
@@ -447,7 +448,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard failed || layer.requiresFlushToResumeDecoding else { continue }
             log("display layer \(failed ? "failed (\(layer.error?.localizedDescription ?? "no error"))" : "needs a flush") after the background; flushing")
             layer.flush()
-            if failed, layer === pip.layer { pip.rebuild(reason: "the display layer had failed") }
+            if failed, layer === pip.layer { pip.needsRebuild = "the display layer had failed" }
         }
         #endif
     }
@@ -721,6 +722,16 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         guard let root = player.drawable as? UIView, let layer = Self.displayLayers(in: root).last else { return }
         pip.attach(layer)
         if !canStartPictureInPicture { canStartPictureInPicture = true }
+        rebuildPictureInPictureIfNeeded()
+        #endif
+    }
+
+    /// A controller marked for a remake gets one at a good moment only: playing, in the foreground,
+    /// no window open (see `ReelPictureInPicture.needsRebuild`).
+    private func rebuildPictureInPictureIfNeeded() {
+        #if canImport(UIKit)
+        guard let reason = pip.needsRebuild, !isPictureInPictureActive, status == .playing, UIApplication.shared.applicationState == .active else { return }
+        pip.rebuild(reason: reason)
         #endif
     }
 

@@ -78,9 +78,15 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
     /// has it painting again, but the controller made over it never starts a window after that
     /// (an iPad log: every swipe-up "Failed to start picture in picture" from then on, where each
     /// one before had worked). Nothing to do while a window is open.
+    /// Why the controller should be remade, once the engine finds a good moment: playing, in the
+    /// foreground, with no window open. A remake at a bad one is no use: made over a paused,
+    /// just-flushed layer it never started a window; made as the scene went inactive it lost the
+    /// automatic start that follows.
+    @MainActor var needsRebuild: String?
     @MainActor
     func rebuild(reason: String) {
         guard let layer, controller?.isPictureInPictureActive != true else { return }
+        needsRebuild = nil
         controller = nil
         self.layer = nil
         log?("PiP: controller made afresh (\(reason))")
@@ -132,13 +138,19 @@ extension ReelPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
 
 extension ReelPictureInPicture: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor in self.log?("PiP started"); self.onStateChange?(true) }
+        Task { @MainActor in self.needsRebuild = nil; self.log?("PiP started"); self.onStateChange?(true) }
     }
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor in self.log?("PiP ended"); self.onStateChange?(false) }
     }
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        Task { @MainActor in self.log?("PiP could not start: \(error.localizedDescription)") }
+        Task { @MainActor in
+            self.log?("PiP could not start: \(error.localizedDescription)")
+            // A controller that has failed to start may be done for (an iPad log: one remade after
+            // a failed layer never started a window; one remade a second before the next swipe-up
+            // did). A fresh one takes the next swipe-up.
+            if self.controller?.isPictureInPictureActive != true { self.needsRebuild = "the last start failed" }
+        }
     }
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
         completionHandler(true)

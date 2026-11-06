@@ -648,27 +648,19 @@ painting again, but from then on every swipe-up failed, explicit and automatic a
 of the session. The controller made over a layer that has failed is done for. `ReelPictureInPicture.rebuild`
 now makes a fresh controller over the same layer when `flushDisplayLayerIfNeeded` finds the PiP
 layer failed, logged "PiP: controller made afresh (the display layer had failed)". Not reproduced
-on the simulator (the test clip is too short to get a pause, a background and a return in); to
-verify on the iPad: pause, go home, come back, play, swipe up, and look for that line followed by
-"PiP started".
+on the simulator (the test clip is too short to get a pause, a background and a return in).
 
-## Up Next and Skip intro in the PiP window; marks before chapters (6 Nov 2026)
-
-The Up Next countdown and the automatic advance lived in the player view (`TimedOverlays`), and
-SwiftUI runs no view updates while the app is in the background, which is where the PiP window is
-watched from: the countdown never ran there and the next episode never came. They are now in
-`PlayerCoordinator` ("Up Next and the intro, by the clock"), driven by the engine's clock tick, and
-the view only shows `upNextCountdown` and `upNextAt`. The same tick skips the intro while the PiP
-window is open ("intro skipped in the PiP window: Ns–Ns"), since the window has no Skip intro
-button. Verified on the simulator: with the app in the background and the window open, E02 loaded
-into the window 16 s before E01's end ("new display layer handed to the window (active true)").
-
-Precedence, by Paul's rule that the viewer's marks win: `PlayerCoordinator.introWindow` is the
-episode's marks (or the marked pattern located in it, `markedIntro`), then the file's chapters, then
-the intro learned from skips (`learnedIntro`); `resolveCredits` takes the show's marks (this
-episode's own, or the season's credits length from another) before a named credits chapter, which
-comes before an unnamed credits-shaped one. Before this a named chapter beat a mark and a chapter
-intro beat a marked one.
+- Later that evening the iPad showed the remake is the right cure but not at any moment: the
+  controller remade at 22:14 after a failed layer, with the video paused and the layer just
+  flushed, never started a window (the next swipe-up, at 22:42, failed), while one remade at 22:43
+  on another failed layer, with the video playing, started a window a second later. And the
+  simulator showed a remake made as the scene goes inactive loses the automatic start that follows
+  it. So a remake is only *asked for* (`ReelPictureInPicture.needsRebuild`, set when the layer has
+  failed and when a start fails) and done by the engine at the next good moment: playing, in the
+  foreground, no window open (`rebuildPictureInPictureIfNeeded`, from the attach on `.playing` and
+  from the return to the foreground), logged "PiP: controller made afresh (…)". The explicit ask
+  on `.inactive` fails on the iPad and the simulator every time; the automatic start from inline
+  half a second later is what opens the window.
 
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)
 
