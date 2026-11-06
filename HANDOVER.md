@@ -629,10 +629,12 @@ during the pause; seeking to Ns" followed by normal play in `reel.log`.
   ms)" and 278 pictures dropped as too late, while a 4-minute pause a quarter of an hour earlier
   had recovered by luck ("resetting master clock: coefficient too unstable", a new clock context).
   So the clock failing to come back is a property of long pauses, not of the session being taken.
-  The engine now notes when a pause began (`pausedAt`) and `play()` after a pause of over a minute
-  (`longPause`) does the same seek, logged "paused for Ns; seeking to Ns so VLC starts a fresh
-  clock"; the interruption flag remains for the eight-minute case. Short pauses are left alone,
-  since the seek costs a moment's picture. Unverified on a device: pause for two minutes, play,
+  The engine now notes when a pause began (`pausedAt`) and `play()` after a pause of over five
+  seconds (`longPause`) does the same seek, logged "paused for Ns; seeking to Ns so VLC starts a
+  fresh clock"; the interruption flag remains for the eight-minute case. The seek costs only a
+  moment's picture on resume, and nobody knows the shortest pause that breaks the clock, so only
+  a tap-pause short enough to want a seamless resume is left alone. Unverified on a device: pause
+  for a minute, play,
   and look for that line followed by moving pictures.
 
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)

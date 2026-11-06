@@ -223,9 +223,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// When the current pause began. VLC's clock does not always come back from a long pause (a
     /// 2.6-minute pause in the foreground left every picture "too late" by 160 s and dropped, with
     /// the sound playing on), so a play after a pause this long seeks to where it is, which gives
-    /// VLC a fresh clock context. Short pauses are left alone: the seek costs a moment's picture.
+    /// VLC a fresh clock context. Only a pause too short to matter is left alone: the seek costs a
+    /// moment's picture, and nobody knows how long a pause has to be before the clock fails.
     private var pausedAt: Date?
-    private static let longPause: TimeInterval = 60
+    private static let longPause: TimeInterval = 5
 
     /// The UIView VLC paints into. Set by `VLCVideoView`.
     public var drawable: AnyObject? {
