@@ -73,6 +73,20 @@ final class ReelPictureInPicture: NSObject, @unchecked Sendable {
         if changed, controller?.isPictureInPictureActive == true { controller?.invalidatePlaybackState() }
     }
 
+    /// A fresh controller over the same layer. After the app comes back from the background with
+    /// no window open, the display layer reports itself failed ("Operation Interrupted"); a flush
+    /// has it painting again, but the controller made over it never starts a window after that
+    /// (an iPad log: every swipe-up "Failed to start picture in picture" from then on, where each
+    /// one before had worked). Nothing to do while a window is open.
+    @MainActor
+    func rebuild(reason: String) {
+        guard let layer, controller?.isPictureInPictureActive != true else { return }
+        controller = nil
+        self.layer = nil
+        log?("PiP: controller made afresh (\(reason))")
+        attach(layer)
+    }
+
     @MainActor func start() { controller?.startPictureInPicture() }
     @MainActor func stop() { controller?.stopPictureInPicture() }
 }

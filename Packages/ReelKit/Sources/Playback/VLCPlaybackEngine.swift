@@ -447,6 +447,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             guard failed || layer.requiresFlushToResumeDecoding else { continue }
             log("display layer \(failed ? "failed (\(layer.error?.localizedDescription ?? "no error"))" : "needs a flush") after the background; flushing")
             layer.flush()
+            if failed, layer === pip.layer { pip.rebuild(reason: "the display layer had failed") }
         }
         #endif
     }

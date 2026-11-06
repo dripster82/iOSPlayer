@@ -637,6 +637,21 @@ during the pause; seeking to Ns" followed by normal play in `reel.log`.
   for a minute, play,
   and look for that line followed by moving pictures.
 
+## PiP stops starting after a return from the background (6 Nov 2026)
+
+iPad log: every swipe-up had started a window (the explicit ask on `.inactive` fails on the iPad
+every time with "Failed to start picture in picture", and the automatic start from inline then
+opens the window half a second later), until the app came back from the background with the
+video paused and no window open. On that return the display layer reported itself failed
+("display layer failed (Operation Interrupted) after the background; flushing"); the flush had it
+painting again, but from then on every swipe-up failed, explicit and automatic alike, for the rest
+of the session. The controller made over a layer that has failed is done for. `ReelPictureInPicture.rebuild`
+now makes a fresh controller over the same layer when `flushDisplayLayerIfNeeded` finds the PiP
+layer failed, logged "PiP: controller made afresh (the display layer had failed)". Not reproduced
+on the simulator (the test clip is too short to get a pause, a background and a return in); to
+verify on the iPad: pause, go home, come back, play, swipe up, and look for that line followed by
+"PiP started".
+
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)
 
 What the iPad log showed: no intro search had ever finished since 2 Nov (never an "intro found" or
