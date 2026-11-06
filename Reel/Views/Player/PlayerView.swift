@@ -393,61 +393,33 @@ struct TimedOverlays: View {
     let locked: Bool
     @State private var now: TimeInterval = 0
     @State private var duration: TimeInterval = 0
-    @State private var upNextCountdown: Int?
-    /// The viewer cancelled the countdown: the card stays, nothing starts on its own.
-    @State private var countdownCancelled = false
 
     var body: some View {
         ZStack {
-            if let intro = introWindow, now >= intro.start, now < intro.end, !locked {
+            if let intro = player.introWindow, now >= intro.start, now < intro.end, !locked {
                 Button("Skip intro") { engine.seek(to: intro.end) }
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28).padding(.bottom, 84)
             }
-            if let next = player.upNext, duration > 0, now >= upNextAt || engine.status == .ended { upNextCard(next) }
-        }
-        .onChange(of: now) { _, t in
-            if duration > 0, duration - t < 60, duration - t > 0, player.upNext != nil { player.prepareNext() }
-            // The countdown runs from the moment the card shows, so the next episode starts
-            // before the credits are over, not after them.
-            if duration > 0, t >= countdownAt, t < duration, upNextCountdown == nil, !countdownCancelled { startCountdown() }
-            if duration > 0, t < upNextAt - 5 { countdownCancelled = false }
+            if let next = player.upNext, duration > 0, now >= player.upNextAt || engine.status == .ended { upNextCard(next) }
         }
         .onReceive(engine.clock.$time.throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)) { t in
             let rounded = t.rounded()
             if rounded != now { now = rounded }
             if engine.clock.duration != duration { duration = engine.clock.duration }
         }
-        .onChange(of: engine.status) { _, s in if s == .ended, upNextCountdown == nil, !countdownCancelled { startCountdown() } }
-    }
-
-    /// How long before the end the Up Next card appears when nothing better is known: the countdown
-    /// plus a few seconds to read it.
-    private var upNextLead: TimeInterval { TimeInterval(max(3, settings.autoPlayCountdown)) + 10 }
-    /// When the card appears: where the credits start, if a chapter or the frame scan found them,
-    /// else the lead before the end.
-    private var upNextAt: TimeInterval { player.creditsStart ?? (duration - upNextLead) }
-    /// When the countdown starts: the card's time plus the grace a scanned credits start needs,
-    /// but never so late that the countdown would outlast the file.
-    private var countdownAt: TimeInterval { min(upNextAt + player.creditsGrace, duration - TimeInterval(max(3, settings.autoPlayCountdown)) - 3) }
-
-    /// Chapters first (a named intro, or the unnamed-chapter shape rule); otherwise what the viewer's
-    /// own skips have taught the app about this show.
-    private var introWindow: IntroMemory.Window? {
-        if let c = engine.chapters.intro { return IntroMemory.Window(start: c.start, end: c.start + c.duration) }
-        return player.learnedIntro
     }
 
     private func upNextCard(_ next: MediaItem) -> some View {
         HStack(spacing: 10) {
             ArtworkImage(url: ArtworkURL.still(next.stillPath) ?? ArtworkURL.poster(next.posterPath), title: next.title, aspect: 16 / 9, cornerRadius: 8).frame(width: 90, height: 90 * 9 / 16)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Up next" + (upNextCountdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
+                Text("Up next" + (player.upNextCountdown.map { " · \($0)s" } ?? "")).font(.caption2.bold()).textCase(.uppercase).foregroundStyle(.white.opacity(0.6))
                 Text("\(next.episodeCode ?? "") · \(next.title)").font(.footnote.weight(.semibold)).lineLimit(2)
                 HStack(spacing: 6) {
                     Button("Play now") { player.playNext(settings: settings) }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black).controlSize(.small)
-                    if upNextCountdown != nil {
-                        Button("Cancel") { upNextCountdown = nil; countdownCancelled = true }.buttonStyle(.bordered).controlSize(.small)
+                    if player.upNextCountdown != nil {
+                        Button("Cancel") { player.cancelCountdown() }.buttonStyle(.bordered).controlSize(.small)
                     } else {
                         Button("Stop") { player.dismiss() }.buttonStyle(.bordered).controlSize(.small)
                     }
@@ -458,15 +430,6 @@ struct TimedOverlays: View {
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.1)))
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(28)
-    }
-
-    private func startCountdown() {
-        guard player.upNext != nil, settings.autoPlayNext, !player.stopsAfterCurrent, upNextCountdown == nil else { return }
-        upNextCountdown = max(3, settings.autoPlayCountdown)
-        Task {
-            while let c = upNextCountdown, c > 0 { try? await Task.sleep(for: .seconds(1)); if upNextCountdown != nil { upNextCountdown = c - 1 } }
-            if upNextCountdown == 0 { upNextCountdown = nil; player.playNext(settings: settings) }
-        }
     }
 }
 

@@ -101,6 +101,15 @@ final class PlayerCoordinator: ObservableObject {
     private var pendingRate: Float?
     /// Intro window learned from the viewer's own skips, for shows whose chapters do not say.
     @Published private(set) var learnedIntro: IntroMemory.Window?
+    /// The intro the viewer marked in this episode, or the marked pattern located in it.
+    @Published private(set) var markedIntro: IntroMemory.Window?
+    /// The intro window in force: the viewer's marks first, then the file's chapters (a named
+    /// intro, or the unnamed-chapter shape rule), then what the viewer's skips have taught the app.
+    var introWindow: IntroMemory.Window? {
+        if let markedIntro { return markedIntro }
+        if let c = engine.chapters.intro { return IntroMemory.Window(start: c.start, end: c.start + c.duration) }
+        return learnedIntro
+    }
     /// Where the end credits start, once known: a named or short final chapter first, else the
     /// dark-frame scan's result (kept per title). The Up Next card appears and counts down from here.
     @Published private(set) var creditsStart: TimeInterval?
@@ -307,12 +316,12 @@ final class PlayerCoordinator: ObservableObject {
             case .playing:
                 if let rate = self.pendingRate { self.pendingRate = nil; self.engine.setRate(rate) }
             case .paused: self.saveProgress()
-            case .ended: self.saveProgress(markWatched: true); self.handleEnded()
+            case .ended: self.saveProgress(markWatched: true); self.handleEnded(); self.startCountdown()
             default: break
             }
         }
         engine.onUserSeek = { [weak self] from, to in self?.noteUserSeek(from: from, to: to) }
-        tickWatcher = engine.clock.$time.sink { [weak self] t in self?.captureScrubFrame(at: t) }
+        tickWatcher = engine.clock.$time.sink { [weak self] t in self?.tick(t) }
         routeWatcher = NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.routeChanged() }
@@ -457,8 +466,11 @@ final class PlayerCoordinator: ObservableObject {
                 let memory = TrackMemory.choice(for: Self.memoryKey(item))
                 preferredFill = memory?.fill
                 pendingRate = memory?.rate.flatMap { $0 == 1 ? nil : $0 }
-                learnedIntro = item.kind == .episode && !item.isAudiobookPart ? item.show.flatMap { ShowMarkers.introWindow(showKey: $0.itemKey, itemKey: item.itemKey) ?? IntroMemory.window(showKey: $0.itemKey) } : nil
+                let episode = item.kind == .episode && !item.isAudiobookPart ? item.show : nil
+                markedIntro = episode.flatMap { ShowMarkers.introWindow(showKey: $0.itemKey, itemKey: item.itemKey) }
+                learnedIntro = episode.flatMap { IntroMemory.window(showKey: $0.itemKey) }
                 creditsStart = nil; creditsGrace = 0
+                resetUpNext()
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
                 if let show = item.show, show.kind == .show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }
@@ -508,7 +520,7 @@ final class PlayerCoordinator: ObservableObject {
             guard let self, self.current?.itemKey == key, DeviceConditions.allowsBackgroundWork else { return }
             ShowMarkers.locateIntro(showKey: showKey, itemKey: key, season: self.current?.seasonNumber, url: url, duration: self.engine.duration, softwareDecoding: Self.needsSoftwareDecoding(self.currentVideoCodec)) { [weak self] window in
                 guard let self, self.current?.itemKey == key, let window else { return }
-                self.learnedIntro = window
+                self.markedIntro = window
             }
         }
     }
@@ -526,12 +538,12 @@ final class PlayerCoordinator: ObservableObject {
     func markIntroStart() {
         guard let c = markContext else { return }
         ShowMarkers.markIntroStart(showKey: c.showKey, itemKey: c.itemKey, season: c.season, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
-        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+        markedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
     }
     func markIntroEnd() {
         guard let c = markContext else { return }
         ShowMarkers.markIntroEnd(showKey: c.showKey, itemKey: c.itemKey, url: c.url, time: engine.time, softwareDecoding: Self.needsSoftwareDecoding(currentVideoCodec))
-        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+        markedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
     }
     func markCreditsStart() {
         guard let c = markContext else { return }
@@ -546,7 +558,8 @@ final class PlayerCoordinator: ObservableObject {
         IntroMemory.forget(showKey: c.showKey)
         ShowMarkers.forgetLocated(showKey: c.showKey)
         Diagnostics.log("player", "forgot the automatic intro and credits for \(c.showKey.prefix(40))")
-        learnedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+        markedIntro = ShowMarkers.introWindow(showKey: c.showKey, itemKey: c.itemKey)
+        learnedIntro = IntroMemory.window(showKey: c.showKey)
         creditsStart = nil; creditsGrace = 0
         resolveCredits(key: c.itemKey, url: c.url)
         scheduleIntroSearch(showKey: c.showKey, key: c.itemKey, url: c.url)
@@ -566,14 +579,10 @@ final class PlayerCoordinator: ObservableObject {
     private func resolveCredits(key: String, url: URL, duration: TimeInterval? = nil, chapters: [Chapter]? = nil) {
         let duration = duration ?? engine.duration, chapters = chapters ?? engine.chapters
         guard let current, current.kind == .episode, !current.isAudiobookPart, duration > 0, creditsStart == nil else { return }
-        // A chapter named as the credits is the file's word. An unnamed final chapter that is merely
-        // shaped like credits is a guess, and the viewer's mark on the show outranks it.
+        // The viewer's marks on the show (this episode's own, or the season's credits length from
+        // another) outrank the file's chapters; a chapter named as the credits outranks an unnamed
+        // final chapter that is merely shaped like credits, which is a guess.
         let byChapter = chapters.creditsChapter(fileDuration: duration)
-        if let byChapter, byChapter.named {
-            creditsStart = byChapter.start; creditsGrace = 0
-            Diagnostics.log("player", "credits by the named chapter at \(Int(byChapter.start))s")
-            return
-        }
         if let show = current.show, let marked = ShowMarkers.creditsStart(showKey: show.itemKey, itemKey: key, season: current.seasonNumber, duration: duration) {
             let exact = ShowMarkers.episode(showKey: show.itemKey, itemKey: key)?.creditsStart != nil
             creditsStart = marked; creditsGrace = exact ? 0 : 5
@@ -588,7 +597,7 @@ final class PlayerCoordinator: ObservableObject {
         }
         if let byChapter {
             creditsStart = byChapter.start; creditsGrace = 0
-            Diagnostics.log("player", "credits by the short final chapter at \(Int(byChapter.start))s")
+            Diagnostics.log("player", "credits by the \(byChapter.named ? "named" : "short final") chapter at \(Int(byChapter.start))s")
             return
         }
         creditsGrace = 15
@@ -752,6 +761,7 @@ final class PlayerCoordinator: ObservableObject {
         let wasNative = nativePlayback != nil || bridgeLive
         if nativePlayback != nil { releaseNative() }
         Diagnostics.log("player", "dismissed at \(Int(engine.time))s of \(Int(engine.duration))s")
+        resetUpNext()
         if !wasNative { saveProgress() }   // Apple's player saved its own position as it closed
         HLSRemuxer.shared.cancel()
         Self.debugForceAirPlay = false
@@ -806,8 +816,77 @@ final class PlayerCoordinator: ObservableObject {
     private func handleEnded() {
         // The sleep timer's "end of episode": this was the last one tonight.
         if sleepTimer == .endOfEpisode { setSleepTimer(nil); Diagnostics.log("player", "sleep timer: stopping at the end of the episode"); dismiss(); return }
-        // The player view shows the Up Next card; auto-advance is its job so the countdown is visible.
         if upNext == nil { dismiss() }
+    }
+
+    // MARK: - Up Next and the intro, by the clock
+
+    /// The Up Next countdown and the automatic advance live here, not in the player view: SwiftUI
+    /// runs no view updates while the app is in the background, and the PiP window is watched from
+    /// there, so a countdown kept in the view never ran and the next episode never came. The view
+    /// only shows what is here. The same tick skips the intro in the PiP window, which has no
+    /// Skip intro button of its own.
+    @Published private(set) var upNextCountdown: Int?
+    /// The viewer cancelled the countdown: the card stays, nothing starts on its own.
+    private var countdownCancelled = false
+    private var countdownTask: Task<Void, Never>?
+    private var lastTick: TimeInterval = -1
+    private var introSkippedInPiP = false
+
+    /// How long before the end the Up Next card appears when nothing better is known: the countdown
+    /// plus a few seconds to read it.
+    private var upNextLead: TimeInterval { TimeInterval(max(3, AppSettings.current.autoPlayCountdown)) + 10 }
+    /// When the card appears: where the credits start, if a chapter, a mark or the frame scan found
+    /// them, else the lead before the end.
+    var upNextAt: TimeInterval { creditsStart ?? (engine.duration - upNextLead) }
+    /// When the countdown starts: the card's time plus the grace a scanned credits start needs,
+    /// but never so late that the countdown would outlast the file.
+    private var countdownAt: TimeInterval { min(upNextAt + creditsGrace, engine.duration - TimeInterval(max(3, AppSettings.current.autoPlayCountdown)) - 3) }
+
+    func cancelCountdown() {
+        countdownTask?.cancel(); countdownTask = nil
+        upNextCountdown = nil; countdownCancelled = true
+    }
+    private func resetUpNext() {
+        countdownTask?.cancel(); countdownTask = nil
+        upNextCountdown = nil; countdownCancelled = false
+        lastTick = -1; introSkippedInPiP = false
+    }
+
+    private func startCountdown() {
+        guard upNext != nil, nativePlayback == nil, AppSettings.current.autoPlayNext, !stopsAfterCurrent, upNextCountdown == nil, !countdownCancelled else { return }
+        upNextCountdown = max(3, AppSettings.current.autoPlayCountdown)
+        countdownTask = Task { [weak self] in
+            while let c = self?.upNextCountdown, c > 0 {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.upNextCountdown = c - 1
+            }
+            guard let self, !Task.isCancelled, self.upNextCountdown == 0 else { return }
+            self.upNextCountdown = nil
+            self.playNext(settings: AppSettings.current)
+        }
+    }
+
+    /// Every clock tick while VLC plays; the position work runs once per whole second.
+    private func tick(_ time: TimeInterval) {
+        captureScrubFrame(at: time)
+        let t = time.rounded()
+        guard t != lastTick else { return }
+        lastTick = t
+        guard nativePlayback == nil else { return }
+        let duration = engine.duration
+        guard duration > 0 else { return }
+        if duration - t < 60, duration - t > 0, upNext != nil { prepareNext() }
+        // The countdown runs from the moment the card shows, so the next episode starts
+        // before the credits are over, not after them.
+        if t >= countdownAt, t < duration, upNextCountdown == nil, !countdownCancelled { startCountdown() }
+        if t < upNextAt - 5 { countdownCancelled = false }
+        if engine.isPictureInPictureActive, !introSkippedInPiP, engine.status == .playing, let intro = introWindow, t >= intro.start, t < intro.end - 2 {
+            introSkippedInPiP = true
+            Diagnostics.log("player", "intro skipped in the PiP window: \(Int(intro.start))–\(Int(intro.end))s")
+            engine.seek(to: intro.end)
+        }
     }
 }
 

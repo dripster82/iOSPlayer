@@ -652,6 +652,24 @@ on the simulator (the test clip is too short to get a pause, a background and a 
 verify on the iPad: pause, go home, come back, play, swipe up, and look for that line followed by
 "PiP started".
 
+## Up Next and Skip intro in the PiP window; marks before chapters (6 Nov 2026)
+
+The Up Next countdown and the automatic advance lived in the player view (`TimedOverlays`), and
+SwiftUI runs no view updates while the app is in the background, which is where the PiP window is
+watched from: the countdown never ran there and the next episode never came. They are now in
+`PlayerCoordinator` ("Up Next and the intro, by the clock"), driven by the engine's clock tick, and
+the view only shows `upNextCountdown` and `upNextAt`. The same tick skips the intro while the PiP
+window is open ("intro skipped in the PiP window: Ns–Ns"), since the window has no Skip intro
+button. Verified on the simulator: with the app in the background and the window open, E02 loaded
+into the window 16 s before E01's end ("new display layer handed to the window (active true)").
+
+Precedence, by Paul's rule that the viewer's marks win: `PlayerCoordinator.introWindow` is the
+episode's marks (or the marked pattern located in it, `markedIntro`), then the file's chapters, then
+the intro learned from skips (`learnedIntro`); `resolveCredits` takes the show's marks (this
+episode's own, or the season's credits length from another) before a named credits chapter, which
+comes before an unnamed credits-shaped one. Before this a named chapter beat a mark and a chapter
+intro beat a marked one.
+
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)
 
 What the iPad log showed: no intro search had ever finished since 2 Nov (never an "intro found" or
