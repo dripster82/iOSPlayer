@@ -567,6 +567,8 @@ final class PlayerCoordinator: ObservableObject {
     func clearMarks() {
         guard let c = markContext else { return }
         ShowMarkers.forget(showKey: c.showKey)
+        Diagnostics.log("player", "cleared every mark for \(c.showKey.prefix(40)) (intro patterns and credits lengths included)")
+        markedIntro = nil
         learnedIntro = IntroMemory.window(showKey: c.showKey)
         creditsStart = nil; creditsGrace = 0
         resolveCredits(key: c.itemKey, url: c.url)
