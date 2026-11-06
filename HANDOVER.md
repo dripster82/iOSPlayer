@@ -624,6 +624,16 @@ during the pause; seeking to Ns" followed by normal play in `reel.log`.
   engine's `play()` (no "seeking to Ns" line in the log). PiP play now goes through the engine's
   `play()` on the main actor (`onPlay`), logged as "play from the PiP window". Still unverified
   with a real PiP pause of over eight minutes.
+- 6 Nov: the iPhone froze the same way after a 2.6-minute pause in the foreground, with no audio
+  interruption at all: its VLC log shows "resuming" then "picture displayed late (missing 160594
+  ms)" and 278 pictures dropped as too late, while a 4-minute pause a quarter of an hour earlier
+  had recovered by luck ("resetting master clock: coefficient too unstable", a new clock context).
+  So the clock failing to come back is a property of long pauses, not of the session being taken.
+  The engine now notes when a pause began (`pausedAt`) and `play()` after a pause of over a minute
+  (`longPause`) does the same seek, logged "paused for Ns; seeking to Ns so VLC starts a fresh
+  clock"; the interruption flag remains for the eight-minute case. Short pauses are left alone,
+  since the seek costs a moment's picture. Unverified on a device: pause for two minutes, play,
+  and look for that line followed by moving pictures.
 
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)
 
