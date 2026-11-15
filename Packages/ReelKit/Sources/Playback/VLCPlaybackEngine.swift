@@ -818,14 +818,31 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             // A stop right after the PiP window closed is VLC tearing down its PiP output, not the end
             // of the film: hold as paused and let the PiP recovery reload the picture.
             if isPictureInPictureActive || pipEndedRecently { setStatus(.paused); recoverAfterPictureInPicture(); break }
-            // A stop well short of the end is the stream dying (the server dropped the connection),
-            // not the film finishing: reopen where we were rather than marking it watched.
-            if state == .stopped, duration > 0, duration - time > 20 { log("stream stopped \(Int(duration - time))s before the end"); reconnect(); break }
+            // A stop well short of the end is the stream dying (the server dropped the connection, or
+            // the SMB socket died while the iPad slept and the first read after the resume failed),
+            // not the film finishing: reopen where we were rather than marking it watched. Checked at
+            // `.stopping` as well as `.stopped`: the socket case arrives as stopping first, and
+            // treating that as the end dropped the viewer back to Home as they pressed play.
+            if duration > 0, duration - time > 20 { log("stream \(state == .stopped ? "stopped" : "stopping") \(Int(duration - time))s before the end"); reconnect(); break }
             setStatus(.ended)
             canStartPictureInPicture = false
         case .error:
             log("VLC error state (hasPlayed=\(hasPlayed))")
-            if hasPlayed, time > 0 { reconnect() } else { setStatus(.failed("VLC couldn't play this file.")) }
+            if hasPlayed, time > 0 { reconnect(); break }
+            // A reconnect that could not even open: the server, or the Wi-Fi after a wake, is not back
+            // yet. One more try a few seconds on, at the same position, before the error card.
+            if recoveries == 1, let item {
+                let opened = loadedAt
+                log("reconnect could not open; trying again in 4s")
+                setStatus(.buffering)
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(4))
+                    guard let self, self.loadedAt == opened, self.status == .buffering else { return }
+                    self.reconnect(at: item.startAt)
+                }
+                break
+            }
+            setStatus(.failed("VLC couldn't play this file."))
         @unknown default: break
         }
     }

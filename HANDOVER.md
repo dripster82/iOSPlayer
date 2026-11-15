@@ -662,6 +662,36 @@ on the simulator (the test clip is too short to get a pause, a background and a 
   on `.inactive` fails on the iPad and the simulator every time; the automatic start from inline
   half a second later is what opens the window.
 
+## Play after the iPad slept dropped back to Home (15 Nov 2026)
+
+Twice in one afternoon on the iPad: Reel paused in the player, the iPad slept for 40–50 minutes,
+Paul woke it and tapped play, and the app fell back to the Home screen. No crash. The Reel log
+reads "paused for 3040s; seeking to 4238s", "status playing", then "dismissed at 4238s of 5915s",
+"status idle", "status ended at 0s". The VLC log for the same second: `smb2_service: POLLHUP,
+socket error`, `STATUS_CANCELLED` on the first read, "end of stream", both tracks disabled
+"(eof?)", input destroyed. The SMB socket had died during the sleep and libvlc reported the read
+failure as the stream running out.
+
+In the engine that arrives as VLC's `.stopping` state. The "a stop well short of the end is the
+stream dying, reconnect" check in `handleStateChange` only looked at `.stopped`, so `.stopping`
+after playback began went straight to `.ended`; the coordinator's status watcher (a `@Published`
+sink, so it fires before the status assignment is logged, which is why "dismissed" is printed
+before "status ended") marked the film watched and dismissed the player. Now both `.stopping`
+and `.stopped` more than 20 s before the end log "stream stopping Ns before the end" and
+`reconnect()` reopens the stream at the position. A reconnect that cannot even open (VLC's
+`.error` before anything played: the server, or the Wi-Fi after a wake, not back yet) is tried
+once more four seconds later, logged "reconnect could not open; trying again in 4s"; only then
+the error card. Checked on the simulator by killing and restarting the WebDAV server under a
+playing clip: "stream stopping 30s before the end", "reconnect 1/2 at 9s", the error, then
+"reconnect 2/2 at 9s" and playing. Not yet seen on the iPad after a real sleep. Both changes in
+VLCPlaybackEngine `handleStateChange`.
+
+Simulator corpus note: the scratchpad had been wiped, so the clips and the throttle proxy from
+"Screenshots (31 Oct 2026)" were remade for this: two 40 s `ffmpeg` clips (E01 is a 1280×720
+random-noise encode of ~550 MB so VLC cannot read it all up front; E02 the tiny test pattern)
+under `scratchpad/clip/TV/Test Show/Season 1/`, served straight by `wsgidav` on 127.0.0.1:8080
+from a fresh venv (`pip install wsgidav cheroot`), no proxy.
+
 ## Intro search and credits on Atlantis S3 (5 Nov 2026)
 
 What the iPad log showed: no intro search had ever finished since 2 Nov (never an "intro found" or
