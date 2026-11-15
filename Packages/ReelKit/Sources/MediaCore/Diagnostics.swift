@@ -71,4 +71,63 @@ public enum Diagnostics {
     public static func header(appVersion: String, device: String, system: String) -> String {
         "Reel \(appVersion) on \(device), \(system)"
     }
+
+    // MARK: - The main thread
+
+    /// Times a piece of main-thread work and logs it under "main" when it took `threshold` or more,
+    /// so a frozen screen can be put down to a named job. Wrap the known heavy jobs (a screen's
+    /// rows, a sync batch, a probe) rather than guessing afterwards.
+    @discardableResult
+    public static func timeMain<T>(_ name: @autoclosure () -> String, threshold: TimeInterval = 0.5, _ work: () throws -> T) rethrows -> T {
+        let began = Date()
+        defer {
+            let took = Date().timeIntervalSince(began)
+            if took >= threshold { log("main", "\(name()) took \(String(format: "%.2f", took))s on the main thread") }
+        }
+        return try work()
+    }
+
+    nonisolated(unsafe) private static var watchingMainThread = false
+    nonisolated(unsafe) private static var lastPong = Date()
+    private static let pongLock = NSLock()
+
+    /// A thread of its own pings the main thread four times a second and logs every stretch of a
+    /// second or more during which the main thread answered nothing: "main thread busy for Ns
+    /// (until HH:MM:SS)". The "took … on the main thread" lines from `timeMain` in the same
+    /// window name the job; a stretch with none is work that is not yet wrapped. A late ping
+    /// thread itself (the process starved or suspended) is reported as such, not as a busy main
+    /// thread.
+    public static func startMainThreadWatch() {
+        guard !watchingMainThread else { return }
+        watchingMainThread = true
+        pongLock.withLock { lastPong = Date() }
+        let thread = Thread {
+            var blockedSince: Date?
+            var lastTick = Date()
+            while true {
+                Thread.sleep(forTimeInterval: 0.25)
+                let now = Date()
+                let tickLate = now.timeIntervalSince(lastTick) - 0.25
+                lastTick = now
+                DispatchQueue.main.async { pongLock.withLock { lastPong = Date() } }
+                let pong = pongLock.withLock { lastPong }
+                let silent = now.timeIntervalSince(pong)
+                if silent >= 1, blockedSince == nil { blockedSince = pong }
+                if let since = blockedSince, pong > since {
+                    // Recovered. The pong arrived at `pong`; the main thread was busy from `since`.
+                    let busy = pong.timeIntervalSince(since)
+                    blockedSince = nil
+                    if tickLate > 1 {
+                        log("main", "process starved or suspended for about \(String(format: "%.1f", busy))s (the watch thread itself was \(String(format: "%.1f", tickLate))s late)")
+                    } else if busy >= 1 {
+                        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
+                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)")
+                    }
+                }
+            }
+        }
+        thread.name = "reel.mainThreadWatch"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
 }

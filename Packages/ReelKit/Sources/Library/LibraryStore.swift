@@ -123,7 +123,7 @@ public final class LibraryStore: ObservableObject {
         let phaseChanged = scanProgress[p.sourceID]?.phase != p.phase
         guard phaseChanged || now.timeIntervalSince(lastProgressPublish[p.sourceID] ?? .distantPast) >= 1 else { return }
         lastProgressPublish[p.sourceID] = now
-        scanProgress[p.sourceID] = p
+        Diagnostics.timeMain("scan progress publish (every screen redraws)") { scanProgress[p.sourceID] = p }
     }
 
     /// Folders being emptied right now, so the UI can show it.

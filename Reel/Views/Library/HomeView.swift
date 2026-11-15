@@ -90,19 +90,25 @@ struct HomeView: View {
     private func refreshRowsInChunks() async {
         guard !rows.loaded else { return }
         var r = Rows()
-        r.continueWatching = library.continueWatching()
-        r.recentlyAdded = library.recentlyAdded()
-        r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })
+        Diagnostics.timeMain("Home rows, first chunk (continue watching, recently added)") {
+            r.continueWatching = library.continueWatching()
+            r.recentlyAdded = library.recentlyAdded()
+            r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })
+        }
         r.loaded = true
         rows = r
         await Task.yield()
-        r.nextUp = library.nextUp()
-        r.favourites = Array(library.favourites().prefix(12))
+        Diagnostics.timeMain("Home rows, second chunk (next up, favourites)") {
+            r.nextUp = library.nextUp()
+            r.favourites = Array(library.favourites().prefix(12))
+        }
         rows = r
         await Task.yield()
-        r.isEmpty = r.recentlyAdded.isEmpty && library.items(kind: .film).isEmpty && library.items(kind: .show).isEmpty && library.audiobooks().isEmpty
-        r.reviewCount = library.reviewCount()
-        r.unmatched = library.unmatchedFileCount()
+        Diagnostics.timeMain("Home rows, third chunk (counts)") {
+            r.isEmpty = r.recentlyAdded.isEmpty && library.items(kind: .film).isEmpty && library.items(kind: .show).isEmpty && library.audiobooks().isEmpty
+            r.reviewCount = library.reviewCount()
+            r.unmatched = library.unmatchedFileCount()
+        }
         rows = r
     }
 
@@ -117,6 +123,7 @@ struct HomeView: View {
     }
 
     private func refreshRows() {
+      Diagnostics.timeMain("Home rows refresh after a store change") {
         var r = Rows()
         r.loaded = true
         r.continueWatching = library.continueWatching()
@@ -128,6 +135,7 @@ struct HomeView: View {
         r.unmatched = library.unmatchedFileCount()
         r.offlineSource = library.sources().first(where: { $0.status == .offline || $0.status == .authFailed })
         rows = r
+      }
     }
 
     @ViewBuilder private var offlineBanner: some View {

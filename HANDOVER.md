@@ -754,6 +754,30 @@ on `.playing`); `ScrubPreview`'s player is lazy too, since `ScrubPreview.shared`
 PlayerView appears. The library's own time is logged when over half a second ("launch: VLC's
 library took Ns to come up, off the main thread").
 
+Paul's next reboot (21:01) was slow again, and this time every launch number was good: ready
+0.49 s, first frame 0.59 s, VLC's library 0.7 s, "scene active" at 1 s. The clue is further down:
+the tasks the activation schedules for 6 and 8 s later ("scan on launch", the book tidy and
+probe) ran at 21:02:02, **a minute late**, so the main thread was saturated for most of that
+minute by work that was not timed. So the instrumentation moved from launch to the main thread
+as a whole:
+
+- `Diagnostics.startMainThreadWatch()` (from `ReelApp.init`): a thread pings the main thread four
+  times a second and logs "[main] main thread busy for Ns (from … until … UTC)" for every
+  stretch of a second or more with no answer, or "process starved or suspended for about Ns"
+  when the watch thread itself ran late.
+- `Diagnostics.timeMain(name) { … }` wraps the known main-thread jobs and logs "[main] <job> took
+  Ns on the main thread" at half a second or more: Home's three row chunks and its refresh after
+  a store change, the scan progress publish, the sync engine's record building, its post-fetch
+  bookkeeping and its sent-records bookkeeping, and the post-launch book tidy and probe.
+  "scan on launch starting" is logged too.
+- One hog fixed on the way: `nextRecordZoneChangeBatch` hopped to the main actor once per record,
+  up to 200 per batch, each a SwiftData fetch; it now builds the batch's records in one hop.
+
+Read the next slow launch's log for "[main]" lines in the first minute after "scene active": a
+busy stretch with a named job in it is the answer; a busy stretch with no job named is work not
+yet wrapped, and the candidates are the screens' own bodies (RootView fetches `sources()` and
+`audiobooks()` in its body) and SwiftUI's rebuilds on `LibraryStore.objectWillChange`.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

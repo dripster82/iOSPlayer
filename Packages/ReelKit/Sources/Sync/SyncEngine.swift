@@ -459,6 +459,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
     }
 
     private func fetchedChangesApplied(_ applied: AppliedBatch, changed: Bool) {
+      Diagnostics.timeMain("sync: after a fetched batch (\(applied.items) items, \(applied.files) files)") {
         lastSyncedAt = Date()
         deleteRecords(named: applied.toDelete)
         if var r = restore {
@@ -468,6 +469,7 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             restore = r
         }
         if changed { scheduleRefresh() }
+      }
     }
 
     /// Every screen rebuilds on `onChangesApplied`; during a restore batches arrive several times a
@@ -501,9 +503,17 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
             }
         }
         let pending = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }.sorted { rank($0) < rank($1) }.prefix(200)
-        return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: Array(pending)) { id in
-            await MainActor.run { self.record(for: id) }
+        // One hop to the main actor for the whole batch, not one per record: 200 hops each with a
+        // fetch kept the main thread saturated for the length of a backfill.
+        let ids: [CKRecord.ID] = pending.compactMap { if case .saveRecord(let id) = $0 { return id } else { return nil } }
+        let records: [CKRecord.ID: CKRecord] = await MainActor.run {
+            Diagnostics.timeMain("sync: building \(ids.count) records to send") {
+                var out: [CKRecord.ID: CKRecord] = [:]
+                for id in ids { if let r = self.record(for: id) { out[id] = r } }
+                return out
+            }
         }
+        return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: Array(pending)) { id in records[id] }
     }
 
     private func handle(_ event: CKSyncEngine.Event) {
@@ -518,7 +528,9 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         case .fetchedRecordZoneChanges:
             break   // handled in handleEvent, off the main thread
         case .sentRecordZoneChanges(let e):
+            Diagnostics.timeMain("sync: bookkeeping for \(e.savedRecords.count) sent records") {
             for saved in e.savedRecords { Self.rememberSystemFields(saved, in: ctx); clearPending(saved.recordID) }
+            }
             for failed in e.failedRecordSaves {
                 let id = failed.record.recordID
                 if failed.error.code == .serverRecordChanged, let server = failed.error.serverRecord {

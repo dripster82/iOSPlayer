@@ -26,6 +26,7 @@ struct ReelApp: App {
         // the AirPlay copy writes to one, and its reader closes first when the stream is cancelled.
         signal(SIGPIPE, SIG_IGN)
         LaunchTrace.watch()
+        Diagnostics.startMainThreadWatch()
         LaunchTrace.step("opening the library store")
         let container: ModelContainer
         do { container = try LibrarySchema.container() }
@@ -140,6 +141,7 @@ struct ReelApp: App {
     private func scanForNewMediaIfDue() {
         guard settings.scanOnLaunch, settings.hasCompletedOnboarding, !library.isScanning,
               Date().timeIntervalSince(lastForegroundScan) > 10 * 60, !library.sources().isEmpty else { return }
+        Diagnostics.log("app", "scan on launch starting")
         lastForegroundScan = Date()
         library.scanAll(providers: settings.providers)
     }
@@ -225,7 +227,7 @@ struct ReelApp: App {
                         hasActivated = true
                         Task { try? await Task.sleep(for: delay); await sync.fetchNow(); sync.pushPendingChanges() }
                         // Books whose tags were not read (the app was put away mid-scan) get them now.
-                        Task { try? await Task.sleep(for: .seconds(8)); library.tidyBookTitles(); library.dedupeFolderRules(); library.redoBookLookupsOnce(key: "bookLookupRedo3"); AudiobookTags.readPending(library: library); FileProbe.probePending(library: library) }
+                        Task { try? await Task.sleep(for: .seconds(8)); Diagnostics.timeMain("post-launch book tidy and probe") { library.tidyBookTitles(); library.dedupeFolderRules(); library.redoBookLookupsOnce(key: "bookLookupRedo3"); AudiobookTags.readPending(library: library); FileProbe.probePending(library: library) } }
                         // A scan publishes progress every second and every screen rebuilds on it; on a
                         // cold launch Home gets several seconds to itself first.
                         Task { try? await Task.sleep(for: delay == .zero ? .zero : .seconds(6)); scanForNewMediaIfDue() }
