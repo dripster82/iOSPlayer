@@ -824,6 +824,20 @@ during that first play, the busy line will say the library was running, and the 
 find out what `libvlc_new` does that the main thread waits on (a sysdiagnose during the stall,
 or timing `VLCLibrary(options:)` with modules disabled one group at a time).
 
+**23:12, the decisive one:** with VLC no longer started at launch, the reboot launch froze just
+the same: "scene active" 23:12:42, "main thread busy for 25.6s (from 23:12:42 until 23:13:07)",
+**no VLC start at all** and no named job. VLC was never the cause; its start merely ran during the
+same freeze. The freeze begins at activation and lasts 20–33 s on every launch in the first
+minutes after a reboot, and nothing wrapped so far is inside it. Guessing stopped there: the
+main-thread watch now **samples the main thread's call stack** while it is silent, at 2, 5 and
+12 s into a stall (`MainThreadSampler` in Diagnostics.swift: `thread_suspend`,
+`thread_get_state`, a frame-pointer walk read with `vm_read_overwrite`, `thread_resume`, then
+`dladdr` after the resume because it takes the loader lock), logged as "[main] main thread at
+Ns into the stall: frame < frame < …". Swift names are mangled in the log; `swift demangle` on
+the Mac reads them. `reel://debug-stall?seconds=7` (debug builds) blocks the main thread to
+exercise it; on the simulator the samples show `Thread.sleep` under `ReelApp.open`. The next
+post-reboot launch's log says exactly what the main thread is doing for those 25 s.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

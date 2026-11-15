@@ -93,6 +93,8 @@ struct ReelApp: App {
         if scheme == "reel", url.host == "debug-grab" { DebugGrab.run(url); return }
         if scheme == "reel", url.host == "debug-grab-current" { DebugGrab.runCurrent(url, player: player, library: library); return }
         if scheme == "reel", url.host == "debug-list" { DebugList.run(url, library: library); return }
+        // reel://debug-stall?seconds=6 — blocks the main thread, to see the watch's samples in the log.
+        if scheme == "reel", url.host == "debug-stall" { let secs = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "seconds" })?.value.flatMap(Double.init) ?? 6; Thread.sleep(forTimeInterval: secs); return }
         #if DEBUG
         if scheme == "reel", url.host == "debug-scan" { library.scanAll(providers: settings.providers); return }
         #endif

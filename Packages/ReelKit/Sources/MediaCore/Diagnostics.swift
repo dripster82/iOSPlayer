@@ -104,9 +104,11 @@ public enum Diagnostics {
         guard !watchingMainThread else { return }
         watchingMainThread = true
         pongLock.withLock { lastPong = Date() }
+        let mainThread = pthread_mach_thread_np(pthread_self())   // called from the main thread at launch
         let thread = Thread {
             var blockedSince: Date?
             var lastTick = Date()
+            var sampled: Set<Int> = []
             while true {
                 Thread.sleep(forTimeInterval: 0.25)
                 let now = Date()
@@ -115,7 +117,15 @@ public enum Diagnostics {
                 DispatchQueue.main.async { pongLock.withLock { lastPong = Date() } }
                 let pong = pongLock.withLock { lastPong }
                 let silent = now.timeIntervalSince(pong)
-                if silent >= 1, blockedSince == nil { blockedSince = pong }
+                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = [] }
+                // While the main thread is silent, capture what it is doing at 2, 5 and 12 s in.
+                if blockedSince != nil, tickLate < 1 {
+                    for mark in [2, 5, 12] where silent >= Double(mark) && !sampled.contains(mark) {
+                        sampled.insert(mark)
+                        let frames = MainThreadSampler.sample(mainThread)
+                        log("main", "main thread at \(mark)s into the stall: \(frames.isEmpty ? "(no frames)" : frames.joined(separator: " < "))")
+                    }
+                }
                 if let since = blockedSince, pong > since {
                     // Recovered. The pong arrived at `pong`; the main thread was busy from `since`.
                     let busy = pong.timeIntervalSince(since)
@@ -133,5 +143,63 @@ public enum Diagnostics {
         thread.name = "reel.mainThreadWatch"
         thread.qualityOfService = .userInteractive
         thread.start()
+    }
+}
+
+
+// MARK: - Sampling the main thread
+
+/// A backtrace of the main thread taken from another thread, for the log, when the main thread has
+/// not answered for seconds. Mach lets a process suspend one of its own threads, read its registers
+/// and resume it; the frame-pointer chain is then read with `vm_read_overwrite` (never a raw
+/// dereference: a stale frame must not crash the app) and only symbolicated after the resume, since
+/// `dladdr` takes the dynamic loader's lock and the main thread may hold it. arm64 only; elsewhere
+/// it returns nothing.
+enum MainThreadSampler {
+    static func sample(_ thread: thread_t) -> [String] {
+        #if arch(arm64)
+        var addresses: [UInt] = []
+        guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
+        var state = arm_thread_state64_t()
+        var count = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &state) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(count)) { thread_get_state(thread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &count) }
+        }
+        let strip: (UInt64) -> UInt = { UInt($0 & 0x0000_007F_FFFF_FFFF) }   // pointer authentication bits off (arm64e)
+        if kr == KERN_SUCCESS {
+            addresses.append(strip(state.__pc))
+            addresses.append(strip(state.__lr))
+            var fp = strip(state.__fp)
+            let task = mach_task_self_
+            for _ in 0..<40 {
+                guard fp > 0x1000, fp & 0xF == 0 else { break }
+                var pair: (UInt64, UInt64) = (0, 0)
+                var outsize: vm_size_t = 0
+                let read = withUnsafeMutablePointer(to: &pair) { vm_read_overwrite(task, vm_address_t(fp), 16, vm_address_t(UInt(bitPattern: $0)), &outsize) }
+                guard read == KERN_SUCCESS, outsize == 16 else { break }
+                let next = strip(pair.0), ret = strip(pair.1)
+                guard ret > 0x1000 else { break }
+                addresses.append(ret)
+                guard next > fp else { break }   // stacks grow down: the caller's frame is higher
+                fp = next
+            }
+        }
+        thread_resume(thread)
+        guard kr == KERN_SUCCESS else { return [] }
+        // Symbolicate only now, with the main thread running again (see above).
+        let names = addresses.map { addr -> String in
+            var info = Dl_info()
+            guard dladdr(UnsafeRawPointer(bitPattern: addr), &info) != 0 else { return String(format: "0x%lx", addr) }
+            let image = info.dli_fname.map { (String(cString: $0) as NSString).lastPathComponent } ?? "?"
+            if let sym = info.dli_sname {
+                let offset = addr - UInt(bitPattern: info.dli_saddr)
+                return "\(image)`\(String(cString: sym))+\(offset)"
+            }
+            return "\(image)+\(addr - UInt(bitPattern: info.dli_fbase))"
+        }
+        return names
+        #else
+        return []
+        #endif
     }
 }
