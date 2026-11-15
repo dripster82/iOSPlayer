@@ -41,7 +41,7 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
     /// The libvlc instance a conversion runs on (its own, so --codec applies); kept while it runs.
     private var conversionLibrary: VLCLibrary?
     /// Debug builds: where the conversion instance writes VLC's log (set with `enableVLCLog`).
-    public static var conversionLogURL: URL?
+    nonisolated(unsafe) public static var conversionLogURL: URL?
     private var segmenter: Segmenter?
     private var readyContinuation: CheckedContinuation<Void, Error>?
     fileprivate(set) var currentDirectory: URL?
@@ -253,12 +253,14 @@ public final class HLSRemuxer: NSObject, VLCMediaPlayerDelegate {
 
     /// Sends VLC's own log to a file (debug builds; truncated each launch). Its messages say why a
     /// frame was dropped or a stream output stalled, which Reel's log cannot.
-    public static func enableVLCLog(to url: URL, level: Int = 3) {
+    /// Callable off the main actor: the app attaches the log from the background thread that warms
+    /// VLC's library up, so neither sits on the launch path.
+    nonisolated public static func enableVLCLog(to url: URL, level: Int = 3) {
         VLCLibrary.shared().loggers = [fileLogger(at: url, level: level)]
         conversionLogURL = url.deletingPathExtension().appendingPathExtension("convert.log")
     }
 
-    static func fileLogger(at url: URL, level: Int) -> VLCFileLogger {
+    nonisolated static func fileLogger(at url: URL, level: Int) -> VLCFileLogger {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = (try? FileHandle(forWritingTo: url)) ?? FileHandle.standardError
         let logger = VLCFileLogger(fileHandle: handle)

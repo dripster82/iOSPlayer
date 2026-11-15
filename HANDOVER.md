@@ -725,6 +725,18 @@ timer says so: "(this timer fired Ns late: the process was starved or suspended)
 offline comes up the same way; CloudKit's traffic is asynchronous and its errors (CKError 20,
 "cancelled", at 20:09:59 that evening as the app went to the background) are logged and retried.
 
+Paul then asked why the VLC log held the start at all (it showed as "Opening the VLC log 0.28s").
+It is debug-only diagnostics: `HLSRemuxer.enableVLCLog` truncates `Documents/Diagnostics/vlc.log`
+and attaches a `VLCFileLogger` (credentials redacted) to the shared VLCLibrary so libvlc's own
+messages are kept; that file is what showed the SMB socket dying on 15 Nov. Measuring showed the
+library itself was already up (`warmUpLibrary` 0.00 s) and the half second was `VLCMediaPlayer()`,
+which has to be made on the main actor. So now **nothing gates Home**: `LaunchSequence` sets
+`ready` at once (the splash lasts a frame), the library warm-up and the VLC log run on a utility
+thread (`enableVLCLog` and `fileLogger` are `nonisolated`), and one second after Home has painted
+the player object is made (`engine.warmUp()`, so the first play does not pay for it; a play that
+comes first makes it on demand through the lazy `player`) followed by the sync start and the marks
+migration. Only slow ones log ("launch: after Home, the VLC player took Ns and the sync start Ns").
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

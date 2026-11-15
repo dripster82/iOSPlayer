@@ -74,35 +74,47 @@ enum LaunchTrace {
     }
 }
 
-/// The part of launch that runs after the first frame. Behind the splash, with its status line:
-/// only VLC's library, which is local and which the first play needs. Nothing to do with the
-/// network or iCloud gates the splash: sync starts once Home is up, and the viewer never waits for
-/// it, so an iPad used offline, or one still settling after a boot, comes up just the same. Every
-/// step yields to SwiftUI first, so the line naming it is on screen before the step can block.
+/// The part of launch that runs after the first frame. Nothing gates Home any more: `ready` is
+/// set as soon as this runs, so the splash lasts a frame. VLC's library (the plugin load, half a
+/// second warm and seconds on a cold disk) and the debug VLC log are then brought up on a
+/// background thread; a play that comes before they are done waits for them inside VLCKit. Sync
+/// starts a second after that, so an iPad used offline, or one still settling after a boot, comes
+/// up just the same. The splash and its status line stay for a launch that has something to show.
 @MainActor
 final class LaunchSequence: ObservableObject {
     @Published private(set) var status = "Starting"
     @Published private(set) var ready = false
 
     func run(player: PlayerCoordinator, sync: SyncEngine) async {
-        await step("Preparing the player") { player.engine.warmUp() }   // VLC's library and plugins
-        #if canImport(VLCKit) && DEBUG
-        await step("Opening the VLC log") {
-            HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
-        }
-        #endif
         LaunchTrace.step("ready")
         withAnimation(.easeOut(duration: 0.25)) { ready = true }
         LaunchTrace.ready()
-        // After Home: work nobody is waiting for. The sync start is a CloudKit engine being made and
-        // the pending rows counted, local and a fraction of a second; its traffic is asynchronous
-        // and fails quietly offline. Timed, so a slow one is in the log.
+        // VLC's library and, in debug builds, its message log (libvlc's own messages to
+        // Documents/Diagnostics/vlc.log, the record that showed the SMB socket dying): off the main
+        // thread, and nothing waits for them.
+        Task.detached(priority: .utility) {
+            let began = Date()
+            VLCPlaybackEngine.warmUpLibrary()
+            #if canImport(VLCKit) && DEBUG
+            HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
+            #endif
+            let took = Date().timeIntervalSince(began)
+            if took > 0.2 { Diagnostics.log("app", "launch: VLC library and log took \(String(format: "%.2f", took))s off the main thread") }
+        }
+        // After Home has painted: work nobody is waiting for. The VLC player object (half a second,
+        // and it must be made on the main actor) is made here so the first play does not pay for
+        // it; a play that comes first makes it on demand instead. The sync start is a CloudKit
+        // engine being made and the pending rows counted, local and a fraction of a second; its
+        // traffic is asynchronous and fails quietly offline. Timed, so a slow one is in the log.
         try? await Task.sleep(for: .seconds(1))
-        let began = Date()
+        var began = Date()
+        player.engine.warmUp()
+        let playerTook = Date().timeIntervalSince(began)
+        began = Date()
         sync.startIfEnabled(cloudContainerID: AppSettings.cloudContainerID)
         ShowMarkers.retryEarlySearchesOnce()
-        let took = Date().timeIntervalSince(began)
-        if took > 0.5 { Diagnostics.log("app", "launch: sync start and show marks took \(String(format: "%.1f", took))s after Home was up") }
+        let syncTook = Date().timeIntervalSince(began)
+        if playerTook > 0.5 || syncTook > 0.5 { Diagnostics.log("app", "launch: after Home, the VLC player took \(String(format: "%.2f", playerTook))s and the sync start \(String(format: "%.2f", syncTook))s") }
     }
 
     private func step(_ name: String, _ work: () -> Void) async {

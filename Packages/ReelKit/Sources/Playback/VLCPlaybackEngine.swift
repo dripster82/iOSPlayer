@@ -122,8 +122,16 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         p.delegate = self
         return p
     }()
-    /// Creates the VLC player and library now, so the first play does not pay for it.
+    /// Creates the VLC player now, so the first play does not pay for it. Cheap once the library is up.
     public func warmUp() { _ = player }
+    /// Brings up the shared VLCLibrary (the plugin load) on whatever thread calls it. The app does
+    /// this on a background thread once Home is drawn; a player made before it has finished waits
+    /// for it inside `VLCLibrary.shared()`, so a play that comes first is merely a little later.
+    nonisolated public static func warmUpLibrary() {
+        #if canImport(VLCKit)
+        _ = VLCLibrary.shared()
+        #endif
+    }
     private var openTimeouts = 0
 
     /// A fresh VLCMediaPlayer wired like the old one. libvlc stops asynchronously; an SMB input stuck in
