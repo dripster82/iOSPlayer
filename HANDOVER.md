@@ -678,13 +678,21 @@ after playback began went straight to `.ended`; the coordinator's status watcher
 sink, so it fires before the status assignment is logged, which is why "dismissed" is printed
 before "status ended") marked the film watched and dismissed the player. Now both `.stopping`
 and `.stopped` more than 20 s before the end log "stream stopping Ns before the end" and
-`reconnect()` reopens the stream at the position. A reconnect that cannot even open (VLC's
-`.error` before anything played: the server, or the Wi-Fi after a wake, not back yet) is tried
-once more four seconds later, logged "reconnect could not open; trying again in 4s"; only then
-the error card. Checked on the simulator by killing and restarting the WebDAV server under a
-playing clip: "stream stopping 30s before the end", "reconnect 1/2 at 9s", the error, then
-"reconnect 2/2 at 9s" and playing. Not yet seen on the iPad after a real sleep. Both changes in
-VLCPlaybackEngine `handleStateChange`.
+`reconnect()` reopens the stream at the position.
+
+Reconnects are now **three tries over at least 30 s** (`VLCPlaybackEngine.reconnectTries`,
+`reconnectDelays` 10 s and 20 s): the first at once, and when a try cannot open (VLC's `.error`
+before anything played, or the 20 s open watchdog) `reconnectAgainLater` waits and tries again at
+the same position, logged "reconnect 2/3 could not open; trying again in 20s"; the open watchdog
+of a failed try is cancelled so it does not reload on top. Only after the third does the error
+card come ("Lost the connection to host and couldn't get it back", Retry / Back), not a drop to
+Home. While it runs the engine publishes `reconnecting` (the attempt number) and the player shows
+a pill above the scrubber, "Reconnecting to DiskStation (smb://192.168.1.124) · try 2 of 3"
+(`PlayerCoordinator.sourceLabel`: the file's source name and the URL's scheme and host).
+Checked on the simulator by killing the WebDAV server under a playing clip: with the server back
+within 30 s the third try plays on from the position; with it kept down, "gave up reconnecting
+to 127.0.0.1 after 3 tries" at 31 s and the card. Not yet seen on the iPad after a real sleep.
+Code: VLCPlaybackEngine `handleStateChange`, `reconnect`, `reconnectAgainLater`, `startOpenWatchdog`.
 
 Simulator corpus note: the scratchpad had been wiped, so the clips and the throttle proxy from
 "Screenshots (31 Oct 2026)" were remade for this: two 40 s `ffmpeg` clips (E01 is a 1280×720

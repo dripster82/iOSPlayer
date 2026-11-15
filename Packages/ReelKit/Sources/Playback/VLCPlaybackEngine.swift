@@ -238,31 +238,63 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public func load(_ item: PlaybackItem, options: PlaybackOptions) {
         recoveries = 0
+        reconnectTimer?.cancel(); reconnectTimer = nil
+        reconnecting = nil
         openTimeouts = 0
         performLoad(item, options: options)
     }
 
-    /// How many times the stream has been reopened on its own since the last `load`. Two reconnects
-    /// with no joy means the server is really gone; the viewer gets the error card and Retry instead.
+    /// How many times the stream has been reopened on its own since the last `load`. Three tries
+    /// over about half a minute with no joy means the server is really gone; the viewer gets the
+    /// error card and Retry instead.
     private var recoveries = 0
+    public static let reconnectTries = 3
+    /// The waits before the second and third tries, so the three span 30 s or more even when the
+    /// server refuses at once (a NAS waking, Wi-Fi reassociating after the iPad slept).
+    private static let reconnectDelays: [TimeInterval] = [10, 20]
+    private var reconnectTimer: Task<Void, Never>?
+    /// While a dropped stream is being reopened: the attempt number (1-based), for the player to
+    /// show "Reconnecting to …". Nil once the stream ticks again or the engine gives up.
+    @Published public private(set) var reconnecting: Int?
 
     /// Reopens the current stream at the current position: a fresh VLC input and, for SMB and WebDAV,
     /// a fresh connection. Used when the stream dies mid-play (a NAS that dropped the session, Wi-Fi
     /// that came and went); the alternative was a player spinning on a dead socket forever.
     private func reconnect(at position: TimeInterval? = nil) {
         guard var current = item else { return }
-        guard recoveries < 2 else {
+        reconnectTimer?.cancel(); reconnectTimer = nil
+        guard recoveries < Self.reconnectTries else {
             let host = current.url.host.map { " to \($0)" } ?? ""
-            log("gave up reconnecting\(host)")
+            log("gave up reconnecting\(host) after \(Self.reconnectTries) tries")
             stopRequested = true
             player.stop()
+            reconnecting = nil
             setStatus(.failed("Lost the connection\(host) and couldn't get it back. Check the server, then retry."))
             return
         }
         recoveries += 1
+        reconnecting = recoveries
         current.startAt = max(0, position ?? clock.time)
-        log("reconnect \(recoveries)/2 at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
+        log("reconnect \(recoveries)/\(Self.reconnectTries) at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
         performLoad(current, options: options)
+    }
+
+    /// A reconnect that could not open (VLC's error before anything played, or the open timing out):
+    /// the server, or the Wi-Fi after a wake, is not back yet. The next try comes after a wait, at
+    /// the same position; after the last one the error card.
+    private func reconnectAgainLater() {
+        guard let item else { return }
+        guard recoveries < Self.reconnectTries else { reconnect(); return }   // reports the give-up
+        let delay = Self.reconnectDelays[min(recoveries - 1, Self.reconnectDelays.count - 1)]
+        openWatchdog?.cancel()   // the failed open is dealt with here; its watchdog must not reload on top
+        let opened = loadedAt
+        log("reconnect \(recoveries)/\(Self.reconnectTries) could not open; trying again in \(Int(delay))s")
+        setStatus(.buffering)
+        reconnectTimer = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled, self.loadedAt == opened, self.status == .buffering else { return }
+            self.reconnect(at: item.startAt)
+        }
     }
 
     private func performLoad(_ item: PlaybackItem, options: PlaybackOptions) {
@@ -578,6 +610,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             }
             self.stopRequested = true
             self.player.stop()
+            // During a reconnect the timeout is one failed try, not the verdict.
+            if self.recoveries > 0 { self.reconnectAgainLater(); return }
             self.setStatus(.failed("No response opening \(target) after 20 seconds. Check the server is on and reachable, then retry."))
         }
     }
@@ -664,6 +698,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     private func stop(forReload: Bool) {
         seekWatchdog?.cancel(); seekWatchdog = nil
+        if !forReload { reconnectTimer?.cancel(); reconnectTimer = nil; reconnecting = nil }
         openWatchdog?.cancel()
         stallWatchdog?.cancel()
         if player.state != .stopped {
@@ -829,19 +864,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         case .error:
             log("VLC error state (hasPlayed=\(hasPlayed))")
             if hasPlayed, time > 0 { reconnect(); break }
-            // A reconnect that could not even open: the server, or the Wi-Fi after a wake, is not back
-            // yet. One more try a few seconds on, at the same position, before the error card.
-            if recoveries == 1, let item {
-                let opened = loadedAt
-                log("reconnect could not open; trying again in 4s")
-                setStatus(.buffering)
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(4))
-                    guard let self, self.loadedAt == opened, self.status == .buffering else { return }
-                    self.reconnect(at: item.startAt)
-                }
-                break
-            }
+            if recoveries > 0 { reconnectAgainLater(); break }
             setStatus(.failed("VLC couldn't play this file."))
         @unknown default: break
         }
@@ -880,6 +903,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         openWatchdog?.cancel()
         // Half a minute of steady playback after a reconnect earns a fresh allowance for the next drop.
         if recoveries > 0, Date().timeIntervalSince(loadedAt) > 30 { recoveries = 0 }
+        if reconnecting != nil { reconnecting = nil }
         if status == .buffering { setStatus(.playing) }
         #if canImport(UIKit)
         pip.update(playing: Self.countsAsPlaying(status), time: now, duration: clock.duration)

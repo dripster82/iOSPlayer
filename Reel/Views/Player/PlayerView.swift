@@ -81,6 +81,16 @@ struct PlayerContentView: View {
                         if player.isLoading, let m = player.loadingMessage { Text(m).font(.footnote).foregroundStyle(.white.opacity(0.8)) }
                     }
                 }
+                // A dropped stream being reopened: its own pill above the scrubber, clear of the centre controls.
+                if let attempt = engine.reconnecting {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(.white)
+                        Text("Reconnecting to \(player.sourceLabel) · try \(attempt) of \(VLCPlaybackEngine.reconnectTries)").font(.footnote)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 8).background(.black.opacity(0.6), in: Capsule())
+                    .foregroundStyle(.white).allowsHitTesting(false)
+                    .position(x: geo.size.width / 2, y: geo.size.height - 150)
+                }
                 if let f = skipFlash { skipFlashView(left: f.left, size: geo.size).id(f.id) }
                 if holdingSpeed { flag("2×") }
                 if let v = volumeOverlay { verticalMeter(v, icon: "speaker.wave.2.fill").position(x: geo.size.width * 0.86, y: geo.size.height / 2) }

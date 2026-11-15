@@ -672,6 +672,15 @@ final class PlayerCoordinator: ObservableObject {
     }
 
     /// For "Copy details" on the error card: the title and file, then the engine's own report.
+    /// The source as the viewer knows it, for "Reconnecting to …": the source's name and its
+    /// address, "DiskStation (smb://192.168.1.124)", or just the address for a file from elsewhere.
+    var sourceLabel: String {
+        let url = engine.currentURL ?? externalURL
+        let address = url.flatMap { u in u.host.map { "\(u.scheme ?? "")://\($0)" } } ?? ""
+        if let s = currentFile?.source { return address.isEmpty ? s.name : "\(s.name) (\(address))" }
+        return address.isEmpty ? "the source" : address
+    }
+
     func failureReport() -> String {
         var lines = ["Reel playback report, \(Date().formatted(date: .abbreviated, time: .standard))"]
         if let current { lines.append("title: \(current.kind == .episode ? "\(current.show?.title ?? "") \(current.episodeCode ?? "")" : current.title)") }
