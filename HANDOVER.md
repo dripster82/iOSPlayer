@@ -806,6 +806,24 @@ points a view or the coordinator can reach before a load are guarded with `playe
 `pause()`, `togglePlayPause()`, `seek(to:)`, `setSubtitleDelay`, `setAudioDelay`, and the session
 report. The next slow launch's log will name whoever is left.
 
+**22:50, with a screen recording:** the splash's "Starting…" for 27 s, Paul touched nothing. The
+log: ready 0.76 s, "scene active" at 22:51:00, "VLC's library took 26.3s", "main thread busy for
+25.5s (from 22:51:00 until 22:51:25)", and **no** "VLC player made before the library is ready"
+line. So nothing in Reel touched VLC on the main thread, and the main thread still froze for
+exactly the library's start, as in all four runs (32.4/32.9, 19.3/19.8, 25.5/26.3 s). The
+vendored VLCKit's modules are compiled in (`_vlc_static_modules`, no plugin dylibs), so it is
+not the dynamic loader's lock either; what inside `libvlc_new` stalls the main thread for its
+whole duration is not known. What is known is that the freeze follows the library start. So the
+**library is no longer started at launch**: `LaunchSequence` only sets the `onLibraryReady` hook
+(the debug VLC log); `startWarmingLibrary` runs from the first `load()` (behind the opening
+spinner and "Preparing the player…") or `warmUp`, and logs "VLC's library took Ns" itself. The
+main-thread watch's busy line adds "; VLC's library start was running" when that coincides
+(`Diagnostics.backgroundStartInProgress`, set in `ReelApp.init`). After a reboot Home should now
+be instant and the first play should wait on the spinner; if the main thread still freezes
+during that first play, the busy line will say the library was running, and the next step is to
+find out what `libvlc_new` does that the main thread waits on (a sysdiagnose during the stall,
+or timing `VLCLibrary(options:)` with modules disabled one group at a time).
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

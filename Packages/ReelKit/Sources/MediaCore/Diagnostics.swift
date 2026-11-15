@@ -88,6 +88,9 @@ public enum Diagnostics {
     }
 
     nonisolated(unsafe) private static var watchingMainThread = false
+    /// Set by whoever runs a long background start (VLC's library), so a busy stretch that
+    /// coincides with it says so.
+    nonisolated(unsafe) public static var backgroundStartInProgress: (() -> String?)?
     nonisolated(unsafe) private static var lastPong = Date()
     private static let pongLock = NSLock()
 
@@ -121,7 +124,8 @@ public enum Diagnostics {
                         log("main", "process starved or suspended for about \(String(format: "%.1f", busy))s (the watch thread itself was \(String(format: "%.1f", tickLate))s late)")
                     } else if busy >= 1 {
                         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
-                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)")
+                        let during = backgroundStartInProgress?().map { "; \($0) was running" } ?? ""
+                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(during)")
                     }
                 }
             }

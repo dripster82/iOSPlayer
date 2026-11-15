@@ -27,6 +27,7 @@ struct ReelApp: App {
         signal(SIGPIPE, SIG_IGN)
         LaunchTrace.watch()
         Diagnostics.startMainThreadWatch()
+        Diagnostics.backgroundStartInProgress = { VLCPlaybackEngine.libraryIsStarting ? "VLC's library start" : nil }
         LaunchTrace.step("opening the library store")
         let container: ModelContainer
         do { container = try LibrarySchema.container() }

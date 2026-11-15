@@ -153,17 +153,31 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     // waits for it.
     nonisolated(unsafe) private static var libraryTask: Task<Void, Never>?
     nonisolated(unsafe) public private(set) static var libraryIsReady = false
+    /// True while the library is starting: the main-thread watch names it in its report.
+    nonisolated(unsafe) public private(set) static var libraryIsStarting = false
+    /// Run once the library is up, on its thread (the app attaches VLC's debug log here).
+    nonisolated(unsafe) public static var onLibraryReady: (@Sendable () -> Void)?
     private static let libraryLock = NSLock()
 
-    /// Starts the library coming up, once; cheap to call again.
+    /// Starts the library coming up, once; cheap to call again. Not called at launch any more: on
+    /// the iPad, in the first minute after a reboot, the library took 20–33 s to start and the
+    /// main thread was frozen for exactly that long on every run, whether or not anything on it
+    /// touched VLC (15 Nov 2026, four runs). So the library starts on the first play, behind the
+    /// opening spinner and "Preparing the player…", and Home owes VLC nothing.
     nonisolated public static func startWarmingLibrary() {
         libraryLock.lock(); defer { libraryLock.unlock() }
         guard libraryTask == nil else { return }
+        libraryIsStarting = true
         libraryTask = Task.detached(priority: .userInitiated) {
+            let began = Date()
             #if canImport(VLCKit)
             _ = VLCLibrary.shared()
             #endif
             libraryIsReady = true
+            libraryIsStarting = false
+            let took = Date().timeIntervalSince(began)
+            if took > 0.5 { Diagnostics.log("player", "VLC's library took \(String(format: "%.1f", took))s to come up, off the main thread") }
+            onLibraryReady?()
         }
     }
     /// Returns once the library is up, starting it if nobody has.

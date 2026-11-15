@@ -92,27 +92,22 @@ final class LaunchSequence: ObservableObject {
         // VLC's library and, in debug builds, its message log (libvlc's own messages to
         // Documents/Diagnostics/vlc.log, the record that showed the SMB socket dying): off the main
         // thread, and nothing waits for them.
-        let libraryBegan = Date()
-        VLCPlaybackEngine.startWarmingLibrary()
-        Task.detached(priority: .userInitiated) {
-            await VLCPlaybackEngine.awaitLibrary()
-            let library = Date().timeIntervalSince(libraryBegan)
-            #if canImport(VLCKit) && DEBUG
+        // VLC is not started at launch (see VLCPlaybackEngine.startWarmingLibrary): the first play
+        // starts it, behind its spinner. Only the debug log hook is set here, for when it does.
+        #if canImport(VLCKit) && DEBUG
+        VLCPlaybackEngine.onLibraryReady = {
             HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
-            #endif
-            if library > 0.5 { Diagnostics.log("app", "launch: VLC's library took \(String(format: "%.1f", library))s to come up, off the main thread") }
         }
+        #endif
         // After Home has painted: work nobody is waiting for. The sync start is a CloudKit engine
         // being made and the pending rows counted, local and a fraction of a second; its traffic
-        // is asynchronous and fails quietly offline. Then the VLC player object, so the first play
-        // does not pay for it: `warmUp` makes it only once the library is up, never blocking.
+        // is asynchronous and fails quietly offline.
         try? await Task.sleep(for: .seconds(1))
         let began = Date()
         sync.startIfEnabled(cloudContainerID: AppSettings.cloudContainerID)
         ShowMarkers.retryEarlySearchesOnce()
         let syncTook = Date().timeIntervalSince(began)
         if syncTook > 0.5 { Diagnostics.log("app", "launch: the sync start took \(String(format: "%.2f", syncTook))s after Home") }
-        player.engine.warmUp()
     }
 
     private func step(_ name: String, _ work: () -> Void) async {
