@@ -55,7 +55,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         if let item { lines.append("url: \(Diagnostics.safe(item.url))"); lines.append("start at: \(Int(item.startAt))s, external subtitles: \(item.externalSubtitles.count)") }
         lines.append("reconnects: \(recoveries), open timeouts: \(openTimeouts), player rebuilt: \(rebuilds)")
         lines.append("options: hw=\(options.hardwareDecoding) cache=\(options.networkCachingMS)ms boost=\(options.dialogueBoost) audio=\(options.preferredAudioLanguage ?? "-") subs=\(options.subtitlesOnByDefault ? options.preferredSubtitleLanguage ?? "on" : "off")")
-        if let s = player.media?.statistics {
+        if let s = playerIfMade?.media?.statistics {
             lines.append("video: decoded \(s.decodedVideo), shown \(s.displayedPictures), lost \(s.lostPictures)")
             lines.append("audio: decoded \(s.decodedAudio), played \(s.playedAudioBuffers), lost \(s.lostAudioBuffers)")
             lines.append("demux: read \(s.demuxReadBytes / 1_000_000) MB, corrupted \(s.demuxCorrupted), discontinuities \(s.demuxDiscontinuity), input \(Int(s.inputBitrate * 8000)) kbit/s")
@@ -117,11 +117,22 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Made on first use, not when the engine is: the first VLCMediaPlayer brings up the shared
     /// VLCLibrary, which loads every plugin from the bundle, seconds on a cold disk right after a
     /// boot. The app warms it up (`warmUp`) once its first frame is on screen, behind a status line.
-    public private(set) lazy var player: VLCMediaPlayer = {
+    private var _player: VLCMediaPlayer?
+    /// A drawable handed over before the player exists; applied when it is made.
+    private var pendingDrawable: AnyObject?
+    public var player: VLCMediaPlayer {
+        if let p = _player { return p }
         let p = VLCMediaPlayer()
         p.delegate = self
+        if let d = pendingDrawable { p.drawable = d; pendingDrawable = nil }
+        _player = p
         return p
-    }()
+    }
+    /// The player if it exists, or can be made without waiting for the library; nil otherwise.
+    /// Everything a view can reach before the first load (the drawable, layout, Fit/Fill, stats)
+    /// goes through this, so none of it waits on the main thread for VLC's library: the iPad's
+    /// 21:16 reboot launch sat 32 s on `drawable` being set by the player screen.
+    private var playerIfMade: VLCMediaPlayer? { (_player != nil || Self.libraryIsReady) ? player : nil }
     /// Creates the VLC player once the library is up, so the first play does not pay for it. Never
     /// blocks: the player is made only after `awaitLibrary` returns.
     public func warmUp() { Task { @MainActor in await Self.awaitLibrary(); _ = player } }
@@ -176,7 +187,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             try? await Task.sleep(for: .seconds(2))
             _ = old
         }
-        player = VLCMediaPlayer()
+        _player = VLCMediaPlayer()
         player.delegate = self
         player.drawable = drawable
         log("rebuilt VLC player: \(reason)")
@@ -271,8 +282,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     /// The UIView VLC paints into. Set by `VLCVideoView`.
     public var drawable: AnyObject? {
-        get { player.drawable as AnyObject? }
-        set { player.drawable = newValue }
+        get { playerIfMade?.drawable as AnyObject? ?? pendingDrawable }
+        set { if let p = playerIfMade { p.drawable = newValue } else { pendingDrawable = newValue } }
     }
 
     // MARK: - PlaybackEngine
@@ -529,7 +540,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// view, not this one, so the flush is done here on the way back to the foreground.
     private func flushDisplayLayerIfNeeded() {
         #if canImport(UIKit)
-        guard let root = player.drawable as? UIView else { return }
+        guard let root = playerIfMade?.drawable as? UIView else { return }
         let layers = Self.displayLayers(in: root)
         log("display layers on return: \(layers.map { "status \($0.status.rawValue) flush \($0.requiresFlushToResumeDecoding) ready \($0.isReadyForMoreMediaData)" }.joined(separator: "; "))")
         for layer in layers {
@@ -557,7 +568,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// interrupted the same way and swallows every buffer while the picture moves on in silence.
     /// If either is stuck, the item is reopened at the current position.
     private func verifyOutput() {
-        guard let stats = player.media?.statistics else { return }
+        guard let player = playerIfMade, let stats = player.media?.statistics else { return }
         let hasVideo = !player.videoTracks.isEmpty, hasAudio = hasSelectedAudio
         let pictures = Int(stats.displayedPictures), audio = Int(stats.playedAudioBuffers)
         let position = clock.time
@@ -573,7 +584,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
     }
     /// Whether an audio track is playing, so sound is expected along with the picture.
-    private var hasSelectedAudio: Bool { !player.audioTracks.isEmpty && player.audioTracks.contains { $0.isSelected } }
+    private var hasSelectedAudio: Bool { guard let player = playerIfMade else { return false }; return !player.audioTracks.isEmpty && player.audioTracks.contains { $0.isSelected } }
 
     /// If nothing has been shown or played for 8 s while VLC still claims to be playing, the connection
     /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
@@ -700,7 +711,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func skip(by seconds: TimeInterval) { seek(to: time + seconds) }
 
     public func setRate(_ rate: Float) {
-        player.rate = rate
+        playerIfMade?.rate = rate
         self.rate = rate
     }
 
@@ -793,6 +804,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Only touches VLC when the answer changes: every layout pass calls this, and reconfiguring the
     /// video output each time made the whole player stutter.
     private func applyFill() {
+        guard let player = playerIfMade else { return }
         let view = player.drawable as? PlatformView
         let w = Int((view?.bounds.width ?? 0).rounded()), h = Int((view?.bounds.height ?? 0).rounded())
         let wanted = (fill: fillEnabled && w > 0 && h > 0, width: w, height: h)
@@ -811,7 +823,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func attachDisplayLayerIfNeeded() {
         #if canImport(UIKit)
         // The newest view is the last one: the old display's view can still be there for a moment.
-        guard let root = player.drawable as? UIView, let layer = Self.displayLayers(in: root).last else { return }
+        guard let root = playerIfMade?.drawable as? UIView, let layer = Self.displayLayers(in: root).last else { return }
         pip.attach(layer)
         if !canStartPictureInPicture { canStartPictureInPicture = true }
         rebuildPictureInPictureIfNeeded()
@@ -971,7 +983,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         if attemptResumeIfNeeded(now: now) { return }
         if Date() < ignoreTicksUntil { return }
         if abs(now - clock.time) >= 0.2 { clock.time = now }
-        if let length = player.media?.length.intValue, length > 0 {
+        if let length = playerIfMade?.media?.length.intValue, length > 0 {
             let seconds = TimeInterval(length) / 1000
             if seconds != clock.duration { clock.duration = seconds }
         }

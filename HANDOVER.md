@@ -778,6 +778,23 @@ busy stretch with a named job in it is the answer; a busy stretch with no job na
 yet wrapped, and the candidates are the screens' own bodies (RootView fetches `sources()` and
 `audiobooks()` in its body) and SwiftUI's rebuilds on `LibraryStore.objectWillChange`.
 
+**Caught (21:16, the log AirDropped from the iPad because the Mac's developer connection does not
+see the iPad for a while after a reboot):** "ready after 0.50s", "scene active" at 21:16:55, then
+"VLC's library took 32.9s to come up, off the main thread" and "[main] main thread busy for 32.4s
+(from 21:16:55 until 21:17:27)" with **no named job inside**. Paul had tapped Continue Watching:
+the player screen's `VLCVideoView` set `engine.drawable`, the drawable setter touched `player`,
+the first `VLCMediaPlayer()` waits inside VLCKit for the shared library, and the main thread sat
+there for the library's whole 33 s. (33 s for the library after a reboot on this iPad Pro 4th gen;
+0.5–0.7 s warm. Nothing to be done about the library itself; everything about not waiting for
+it.) So the engine's player is now behind two accessors: `player` makes it (and applies a
+`pendingDrawable`), and `playerIfMade` returns it only if it exists or the library is ready.
+Every entry a view can reach before the first load goes through `playerIfMade`: the `drawable`
+getter and setter (a drawable set early is kept and applied when the player is made), `applyFill`,
+`attachDisplayLayerIfNeeded`, `flushDisplayLayerIfNeeded`, `setRate`, the stats readers
+(`verifyOutput`, `hasSelectedAudio`, the tick's length read, the failure report). `load()` already
+waited for the library with "Preparing the player…". The screen therefore stays live while the
+library comes up, and the play starts when it is there.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
