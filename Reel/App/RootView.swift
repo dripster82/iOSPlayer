@@ -81,7 +81,7 @@ struct RootView: View {
                 .onChange(of: hasBooks) { _, has in if !has, nav.section == .audiobooks { nav.section = .home } }
             }
         }
-        .onAppear { nav.searchIsAPage = sizeClass == .compact }
+        .onAppear { LaunchTrace.firstFrame(); nav.searchIsAPage = sizeClass == .compact }
         .onChange(of: sizeClass) { _, c in nav.searchIsAPage = c == .compact }
         .fullScreenCover(isPresented: $player.isPresented) {
             PlayerView()

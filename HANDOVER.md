@@ -662,6 +662,36 @@ on the simulator (the test clip is too short to get a pause, a background and a 
   on `.inactive` fails on the iPad and the simulator every time; the automatic start from inline
   half a second later is what opens the window.
 
+## White screen at launch after a power-off (15 Nov 2026)
+
+The iPad's battery ran flat (a LowBatteryLog at 16:28 in the system crash logs); after the
+power-on Paul opened Reel and got a white screen and nothing else. No Reel crash or hang report
+exists for the day, and the Reel log has **nothing at all** for that launch, not even
+"scene active". Launched from the Mac forty minutes later the app came up in under a second. So
+whatever it was belonged to the first minutes after the reboot, and it stopped the launch before
+anything in Reel logs: the launch screen (white) stays up while the main thread is busy in
+`ReelApp.init` or the first body, and the launch watchdog is lenient while the system is still
+settling after a boot, which is how a white screen can sit there instead of a kill.
+
+Unproven, so two things were done:
+
+- **Launch trace** (`Reel/App/LaunchTrace.swift`). `ReelApp.init` marks each step (opening the
+  library store, settings, sync engine, show marks, player and the VLC library, downloads and
+  stores, background scans, VLC sources, first body), `RootView.onAppear` logs
+  "launch: first frame after 0.49s (opening the library store 0.11s, first body 0.36s)", and a
+  timer off the main thread logs at 5, 15 and 30 s "launch: no first frame after Ns; still in
+  "<step>" for Ns" if the first frame has not come. The next white screen names its step.
+- **Keychain read moved off the launch path.** `AppSettings.init` read the OpenSubtitles password
+  synchronously from the Keychain, an iCloud-synchronised item, on the main thread; Keychain
+  reads shortly after a boot are a known place for a long block while the security daemons come
+  up. It is now read in a detached task after init (`loadingPassword` keeps the setter's
+  Keychain save from firing for that fill). The source passwords were already read only when a
+  source connects, off the main thread.
+
+If it happens again: pull the log; the "launch:" lines say where it sat. If there are none at
+all, the block is before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining
+candidate) and the next step is a sysdiagnose from the iPad while the white screen is up.
+
 ## Play after the iPad slept dropped back to Home (15 Nov 2026)
 
 Twice in one afternoon on the iPad: Reel paused in the player, the iPad slept for 40–50 minutes,

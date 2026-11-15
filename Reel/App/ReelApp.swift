@@ -24,6 +24,8 @@ struct ReelApp: App {
         // A write to a pipe whose reader has gone raises SIGPIPE, which kills the process by default;
         // the AirPlay copy writes to one, and its reader closes first when the stream is cancelled.
         signal(SIGPIPE, SIG_IGN)
+        LaunchTrace.watch()
+        LaunchTrace.step("opening the library store")
         let container: ModelContainer
         do { container = try LibrarySchema.container() }
         catch {
@@ -31,16 +33,21 @@ struct ReelApp: App {
             container = try! LibrarySchema.container(inMemory: true)
         }
         let store = LibraryStore(container: container)
+        LaunchTrace.step("settings")
         let settings = AppSettings()
         _settings = StateObject(wrappedValue: settings)
         _library = StateObject(wrappedValue: store)
+        LaunchTrace.step("sync engine")
         let sync = SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID)
         SyncEngine.documents = ShowMarkersSync()
         FrameGrabber.log = { Diagnostics.log("player", $0) }
+        LaunchTrace.step("show marks")
         ShowMarkers.retryEarlySearchesOnce()
         ShowMarkers.onChange = { [weak sync] in Task { @MainActor in sync?.pushPendingChanges() } }
         _sync = StateObject(wrappedValue: sync)
+        LaunchTrace.step("player (VLC library)")
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
+        LaunchTrace.step("downloads, group art, collections")
         _downloads = StateObject(wrappedValue: DownloadManager(library: store))
         _groupArt = StateObject(wrappedValue: GroupArtStore(library: store))
         _smart = StateObject(wrappedValue: SmartCollectionStore(library: store))
@@ -51,13 +58,16 @@ struct ReelApp: App {
         // Books found by a scan get their embedded tags (title, author, cover) read afterwards.
         store.scanFinished = { [weak store] _ in if let store { AudiobookTags.readPending(library: store); FileProbe.probePending(library: store) } }
         // Must happen before launch finishes, so here rather than in a view.
+        LaunchTrace.step("background scans")
         BackgroundScans.register(library: store, settings: settings)
+        LaunchTrace.step("VLC sources and log")
         #if canImport(VLCKit)
         VLCDirectorySource.register()   // SFTP and NFS sources, browsed and played through VLC
         #if DEBUG
         HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
         #endif
         #endif
+        LaunchTrace.step("first body")
     }
 
     /// "Open in Reel" from another app (a file URL), or `reel://play?url=…` / `reel://x-callback-url/play?url=…`.

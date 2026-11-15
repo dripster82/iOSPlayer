@@ -45,12 +45,17 @@ final class AppSettings: ObservableObject {
     @Published var openSubtitlesAPIKey: String { didSet { d.set(openSubtitlesAPIKey, forKey: "openSubtitlesAPIKey") } }
     @Published var openSubtitlesUsername: String { didSet { d.set(openSubtitlesUsername, forKey: "openSubtitlesUsername") } }
     /// Kept in the Keychain (with the source passwords), not in UserDefaults.
+    /// Read from the Keychain off the main thread after init: a synchronous Keychain read (this one
+    /// is an iCloud-synchronised item) sat on the launch path, where it is a suspect for a launch
+    /// that never drew after a reboot.
     @Published var openSubtitlesPassword: String {
         didSet {
+            guard !loadingPassword else { return }
             if openSubtitlesPassword.isEmpty { CredentialStore.shared.remove(for: Self.openSubtitlesCredentialID) }
             else { try? CredentialStore.shared.save(Credentials(username: openSubtitlesUsername, password: openSubtitlesPassword), for: Self.openSubtitlesCredentialID) }
         }
     }
+    private var loadingPassword = false
     private static let openSubtitlesCredentialID = UUID(uuidString: "6F9B2E1C-5D0A-4C4B-9A1E-0B5E4C3D2A11")!
     @Published var animeMatching: Bool { didSet { d.set(animeMatching, forKey: "animeMatching") } }
     @Published var metadataLanguage: String { didSet { d.set(metadataLanguage, forKey: "metadataLanguage") } }
@@ -91,7 +96,7 @@ final class AppSettings: ObservableObject {
         fanartAPIKey = d.string(forKey: "fanartAPIKey") ?? ""
         openSubtitlesAPIKey = d.string(forKey: "openSubtitlesAPIKey") ?? ""
         openSubtitlesUsername = d.string(forKey: "openSubtitlesUsername") ?? ""
-        openSubtitlesPassword = CredentialStore.shared.load(for: Self.openSubtitlesCredentialID)?.password ?? ""
+        openSubtitlesPassword = ""
         animeMatching = d.object(forKey: "animeMatching") as? Bool ?? true
         metadataLanguage = d.string(forKey: "metadataLanguage") ?? "en-GB"
         audibleRegion = d.string(forKey: "audibleRegion") ?? "uk"
@@ -116,6 +121,11 @@ final class AppSettings: ObservableObject {
         acceptVLCLinks = d.bool(forKey: "acceptVLCLinks")
         demoInstalled = d.bool(forKey: "demoInstalled")
         autoPlayCountdown = d.object(forKey: "autoPlayCountdown") as? Int ?? 10
+        Task.detached(priority: .utility) { [weak self] in
+            let password = CredentialStore.shared.load(for: Self.openSubtitlesCredentialID)?.password ?? ""
+            guard !password.isEmpty else { return }
+            await MainActor.run { guard let self else { return }; self.loadingPassword = true; self.openSubtitlesPassword = password; self.loadingPassword = false }
+        }
     }
 
     /// nil until the user has entered a key.
