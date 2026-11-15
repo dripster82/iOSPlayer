@@ -60,7 +60,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
             lines.append("audio: decoded \(s.decodedAudio), played \(s.playedAudioBuffers), lost \(s.lostAudioBuffers)")
             lines.append("demux: read \(s.demuxReadBytes / 1_000_000) MB, corrupted \(s.demuxCorrupted), discontinuities \(s.demuxDiscontinuity), input \(Int(s.inputBitrate * 8000)) kbit/s")
         }
-        lines.append("video tracks: " + (player.videoTracks.map(\.trackName).joined(separator: ", ").nilIfEmpty ?? "none"))
+        lines.append("video tracks: " + ((playerIfMade?.videoTracks ?? []).map(\.trackName).joined(separator: ", ").nilIfEmpty ?? "none"))
         lines.append("audio tracks: " + (audioTracks.map { "\($0.name)\($0.id == currentAudioTrack ? " ✓" : "")" }.joined(separator: ", ").nilIfEmpty ?? "none"))
         lines.append("subtitle tracks: " + (subtitleTracks.map { "\($0.name)\($0.id == currentSubtitleTrack ? " ✓" : "")" }.joined(separator: ", ").nilIfEmpty ?? "none"))
         lines.append("chapters: \(chapters.count), picture in picture: \(isPictureInPictureActive)")
@@ -122,6 +122,11 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private var pendingDrawable: AnyObject?
     public var player: VLCMediaPlayer {
         if let p = _player { return p }
+        if !Self.libraryIsReady {
+            // Whoever this is will now block until VLC's library is up. Name them in the log.
+            let callers = Thread.callStackSymbols.dropFirst(1).prefix(6).map { $0.split(separator: " ", maxSplits: 3).last.map(String.init) ?? $0 }
+            log("VLC player made before the library is ready (this blocks): \(callers.joined(separator: " < "))")
+        }
         let p = VLCMediaPlayer()
         p.delegate = self
         if let d = pendingDrawable { p.drawable = d; pendingDrawable = nil }
@@ -442,6 +447,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func play() {
+        guard playerIfMade != nil else { return }   // nothing loaded yet: nothing to resume
         if verifyOnNextPlay { flushDisplayLayerIfNeeded() }
         #if canImport(UIKit)
         // The session may have been taken while we were paused (another app's audio, a suspension);
@@ -473,8 +479,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
         if check { verifyOnNextPlay = false; verifyOutput() }
     }
-    public func pause() { player.pause() }
-    public func togglePlayPause() { player.isPlaying ? pause() : play() }
+    public func pause() { playerIfMade?.pause() }
+    public func togglePlayPause() { (playerIfMade?.isPlaying ?? false) ? pause() : play() }
 
     /// Writes the picture on screen to `path` as a PNG, `width` across with the aspect kept, on
     /// VLC's video thread: the file appears a moment later. Free frames for the scrubber strip.
@@ -486,6 +492,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     public func seek(to seconds: TimeInterval) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
         onUserSeek?(clock.time, clamped)
+        guard let player = playerIfMade else { return }
         player.time = VLCTime(int: Int32(clamped * 1000))
         clock.time = clamped
         // VLC keeps reporting the old position for a few ticks after a seek; don't let those drag the
@@ -739,12 +746,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
 
     public func setSubtitleDelay(_ seconds: TimeInterval) {
-        player.currentVideoSubTitleDelay = Int(seconds * 1_000_000)
+        playerIfMade?.currentVideoSubTitleDelay = Int(seconds * 1_000_000)
         subtitleDelay = seconds
     }
 
     public func setAudioDelay(_ seconds: TimeInterval) {
-        player.currentAudioPlaybackDelay = Int(seconds * 1_000_000)
+        playerIfMade?.currentAudioPlaybackDelay = Int(seconds * 1_000_000)
         audioDelay = seconds
     }
 
@@ -767,6 +774,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     private func stop(forReload: Bool) {
         seekWatchdog?.cancel(); seekWatchdog = nil
         if !forReload { reconnectTimer?.cancel(); reconnectTimer = nil; reconnecting = nil }
+        guard let player = playerIfMade else { setStatus(.idle); return }   // nothing was ever made
         openWatchdog?.cancel()
         stallWatchdog?.cancel()
         if player.state != .stopped {

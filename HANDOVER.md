@@ -795,6 +795,17 @@ getter and setter (a drawable set early is kept and applied when the player is m
 waited for the library with "Preparing the player…". The screen therefore stays live while the
 library comes up, and the play starts when it is there.
 
+The 22:41 reboot (Paul's tap on Continue Watching within a second of Home) did it again with
+that build: ready 0.47 s, then "main thread busy for 19.3s (from 22:41:06 until 22:41:25)" against
+"VLC's library took 19.8s", and no "waiting for VLC's library before the load" line, so yet
+another touch of `player` on the main thread, not the drawable. Rather than guess a third time,
+the `player` getter now **logs its caller** when it makes the player before the library is ready
+("VLC player made before the library is ready (this blocks): <frames>"), and the remaining entry
+points a view or the coordinator can reach before a load are guarded with `playerIfMade`:
+`stop(forReload:)` (reached through `engine.stop()` from `dismiss`), `play()` (the resume),
+`pause()`, `togglePlayPause()`, `seek(to:)`, `setSubtitleDelay`, `setAudioDelay`, and the session
+report. The next slow launch's log will name whoever is left.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
