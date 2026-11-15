@@ -114,7 +114,16 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     /// Replaced by `rebuildPlayer` when libvlc wedges (an input that never finishes stopping leaves
     /// every later open hanging); everything that holds a reference reads it through here.
-    public private(set) var player = VLCMediaPlayer()
+    /// Made on first use, not when the engine is: the first VLCMediaPlayer brings up the shared
+    /// VLCLibrary, which loads every plugin from the bundle, seconds on a cold disk right after a
+    /// boot. The app warms it up (`warmUp`) once its first frame is on screen, behind a status line.
+    public private(set) lazy var player: VLCMediaPlayer = {
+        let p = VLCMediaPlayer()
+        p.delegate = self
+        return p
+    }()
+    /// Creates the VLC player and library now, so the first play does not pay for it.
+    public func warmUp() { _ = player }
     private var openTimeouts = 0
 
     /// A fresh VLCMediaPlayer wired like the old one. libvlc stops asynchronously; an SMB input stuck in
@@ -159,7 +168,6 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
 
     public override init() {
         super.init()
-        player.delegate = self
         #if canImport(UIKit)
         pip.log = { [weak self] in self?.log($0) }
         // Play from the window goes through `play()` like every other play, for the audio session

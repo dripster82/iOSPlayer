@@ -18,6 +18,7 @@ struct ReelApp: App {
     @StateObject private var groupArt: GroupArtStore
     @StateObject private var smart: SmartCollectionStore
     @StateObject private var nav = AppNavigation()
+    @StateObject private var launch = LaunchSequence()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -41,11 +42,9 @@ struct ReelApp: App {
         let sync = SyncEngine(container: container, cloudContainerID: AppSettings.cloudContainerID)
         SyncEngine.documents = ShowMarkersSync()
         FrameGrabber.log = { Diagnostics.log("player", $0) }
-        LaunchTrace.step("show marks")
-        ShowMarkers.retryEarlySearchesOnce()
         ShowMarkers.onChange = { [weak sync] in Task { @MainActor in sync?.pushPendingChanges() } }
         _sync = StateObject(wrappedValue: sync)
-        LaunchTrace.step("player (VLC library)")
+        LaunchTrace.step("player")
         _player = StateObject(wrappedValue: PlayerCoordinator(library: store))
         LaunchTrace.step("downloads, group art, collections")
         _downloads = StateObject(wrappedValue: DownloadManager(library: store))
@@ -60,13 +59,11 @@ struct ReelApp: App {
         // Must happen before launch finishes, so here rather than in a view.
         LaunchTrace.step("background scans")
         BackgroundScans.register(library: store, settings: settings)
-        LaunchTrace.step("VLC sources and log")
         #if canImport(VLCKit)
         VLCDirectorySource.register()   // SFTP and NFS sources, browsed and played through VLC
-        #if DEBUG
-        HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
         #endif
-        #endif
+        // VLC's library, the CloudKit engine and the marks migration follow in `LaunchSequence`,
+        // after the first frame, behind the splash's status line.
         LaunchTrace.step("first body")
     }
 
@@ -149,7 +146,11 @@ struct ReelApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            ZStack {
+                RootView()
+                if !launch.ready { LaunchView(launch: launch).transition(.opacity) }
+            }
+                .task { await launch.run(player: player, sync: sync) }
                 .environmentObject(settings)
                 .environmentObject(library)
                 .environmentObject(sync)

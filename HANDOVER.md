@@ -688,9 +688,30 @@ Unproven, so two things were done:
   Keychain save from firing for that fill). The source passwords were already read only when a
   source connects, off the main thread.
 
-If it happens again: pull the log; the "launch:" lines say where it sat. If there are none at
-all, the block is before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining
-candidate) and the next step is a sysdiagnose from the iPad while the white screen is up.
+Then the launch was restructured so the slow services come up behind a splash rather than
+before the first frame (Paul's ask, 15 Nov evening):
+
+- `ReelApp.init` now does only what is cheap and local: the SwiftData container, the stores,
+  settings from UserDefaults, the sync engine *object* (no CloudKit start), the player
+  coordinator (no VLC: `VLCPlaybackEngine.player` is a lazy var, and the first VLCMediaPlayer is
+  what brings up the shared VLCLibrary and its plugin load), the background-task registration
+  (must happen before launch finishes) and the VLC source factory.
+- `LaunchSequence` (`Reel/App/LaunchTrace.swift`) runs from a `.task` on the window after the
+  first frame: "Preparing the player" (`engine.warmUp()`), "Opening the VLC log" (debug builds),
+  "Starting iCloud sync" (`SyncEngine.startIfEnabled`), "Checking show marks"
+  (`ShowMarkers.retryEarlySearchesOnce`). Each step publishes its name, sleeps 40 ms so the
+  splash draws it, then runs; a step that blocks the main thread leaves its name on screen.
+- `LaunchView` is the splash over `RootView` until `ready`: app glyph, "Reel", spinner and the
+  step name; it fades when the sequence ends. On the simulator the whole launch reads
+  "first frame after 0.60s" then "ready after 1.26s (… Preparing the player 0.43s …)"; the
+  splash is on screen for about two thirds of a second.
+- `LaunchTrace.watch` now reports against *ready*, so it says "no first frame" or "first frame
+  drawn, not ready" with the step name at 5, 15 and 30 s.
+
+If it happens again: the splash names the step, and the log's "launch:" lines say how long it
+sat there. If the screen is white with no splash and no "launch:" lines at all, the block is
+before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
+step is a sysdiagnose from the iPad while the white screen is up.
 
 ## Play after the iPad slept dropped back to Home (15 Nov 2026)
 

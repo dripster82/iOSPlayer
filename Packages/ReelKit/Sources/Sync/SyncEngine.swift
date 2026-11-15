@@ -176,7 +176,14 @@ public final class SyncEngine: NSObject, ObservableObject, CKSyncEngineDelegate 
         applier = SyncApplier(modelContainer: container)
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
         super.init()
-        if isEnabled { start(cloudContainerID: cloudContainerID) }
+    }
+
+    /// Brings the CloudKit engine up when sync is on. Not done in `init`: the app calls this once
+    /// its first frame is drawn, so a slow CloudKit start (the first minutes after a boot) shows a
+    /// status line rather than a white launch screen.
+    public func startIfEnabled(cloudContainerID: String) {
+        guard isEnabled, engine == nil else { return }
+        start(cloudContainerID: cloudContainerID)
     }
 
     public func setEnabled(_ on: Bool, cloudContainerID: String) {
