@@ -78,7 +78,7 @@ struct PlayerContentView: View {
                 if engine.status == .opening || engine.status == .buffering || player.isLoading {
                     VStack(spacing: 12) {
                         ProgressView().controlSize(.large).tint(.white)
-                        if player.isLoading, let m = player.loadingMessage { Text(m).font(.footnote).foregroundStyle(.white.opacity(0.8)) }
+                        if let m = player.loadingMessage { Text(m).font(.footnote).foregroundStyle(.white.opacity(0.8)) }
                     }
                 }
                 // A dropped stream being reopened: its own pill above the scrubber, clear of the centre controls.

@@ -19,7 +19,14 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     /// A new player per open: stop in libvlc 4 is asynchronous, and reusing the player right after
     /// a stop (new media, play) raced the old input and left the bubble black.
-    private var player = VLCMediaPlayer()
+    /// Made on first use: a VLCMediaPlayer made before the shared library is up blocks the main
+    /// thread for the library's whole start (see VLCPlaybackEngine's library notes).
+    private lazy var player: VLCMediaPlayer = {
+        let p = VLCMediaPlayer()
+        p.delegate = self
+        p.drawable = canvas
+        return p
+    }()
     /// The one view VLC ever paints into. The bubble re-parents it; handing VLC a new drawable for
     /// each bubble left its output bound to the old, gone view, which is the other black bubble.
     public let canvas: UIView = {
@@ -49,8 +56,6 @@ public final class ScrubPreview: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     private override init() {
         super.init()
-        player.delegate = self
-        player.drawable = canvas
     }
 
     /// A drag began at `time` on `url`. Opens (or resumes) the preview player there.

@@ -314,6 +314,7 @@ final class PlayerCoordinator: ObservableObject {
             guard let self else { return }
             switch status {
             case .playing:
+                self.loadingMessage = nil   // "Preparing the player…" and the like are over
                 if let rate = self.pendingRate { self.pendingRate = nil; self.engine.setRate(rate) }
             case .paused: self.saveProgress()
             case .ended: self.saveProgress(markWatched: true); self.handleEnded(); self.startCountdown()
@@ -471,6 +472,7 @@ final class PlayerCoordinator: ObservableObject {
                 learnedIntro = episode.flatMap { IntroMemory.window(showKey: $0.itemKey) }
                 creditsStart = nil; creditsGrace = 0
                 resetUpNext()
+                if !VLCPlaybackEngine.libraryIsReady { loadingMessage = "Preparing the player…" }
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
                 if let show = item.show, show.kind == .show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }

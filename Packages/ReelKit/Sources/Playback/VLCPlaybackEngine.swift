@@ -122,16 +122,41 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         p.delegate = self
         return p
     }()
-    /// Creates the VLC player now, so the first play does not pay for it. Cheap once the library is up.
-    public func warmUp() { _ = player }
-    /// Brings up the shared VLCLibrary (the plugin load) on whatever thread calls it. The app does
-    /// this on a background thread once Home is drawn; a player made before it has finished waits
-    /// for it inside `VLCLibrary.shared()`, so a play that comes first is merely a little later.
-    nonisolated public static func warmUpLibrary() {
-        #if canImport(VLCKit)
-        _ = VLCLibrary.shared()
-        #endif
+    /// Creates the VLC player once the library is up, so the first play does not pay for it. Never
+    /// blocks: the player is made only after `awaitLibrary` returns.
+    public func warmUp() { Task { @MainActor in await Self.awaitLibrary(); _ = player } }
+
+    // MARK: - The shared VLCLibrary, off the main thread
+    //
+    // The first VLCMediaPlayer brings up the shared VLCLibrary: its module bank, every plugin
+    // loaded and probed. Half a second warm; 13.6 s on the iPad in the first minute after a reboot
+    // (15 Nov 2026), during which a player made on the main thread sat waiting for it and the
+    // screen froze on the splash. So the library is brought up on a user-initiated background
+    // task, and nothing on the main thread touches a VLC object until `libraryIsReady`: `load`
+    // waits for it (the viewer sees the opening spinner and "Preparing the player"), and `warmUp`
+    // waits for it.
+    nonisolated(unsafe) private static var libraryTask: Task<Void, Never>?
+    nonisolated(unsafe) public private(set) static var libraryIsReady = false
+    private static let libraryLock = NSLock()
+
+    /// Starts the library coming up, once; cheap to call again.
+    nonisolated public static func startWarmingLibrary() {
+        libraryLock.lock(); defer { libraryLock.unlock() }
+        guard libraryTask == nil else { return }
+        libraryTask = Task.detached(priority: .userInitiated) {
+            #if canImport(VLCKit)
+            _ = VLCLibrary.shared()
+            #endif
+            libraryIsReady = true
+        }
     }
+    /// Returns once the library is up, starting it if nobody has.
+    nonisolated public static func awaitLibrary() async {
+        startWarmingLibrary()
+        let task = libraryLock.withLock { libraryTask }
+        await task?.value
+    }
+    private var loadGeneration = 0
     private var openTimeouts = 0
 
     /// A fresh VLCMediaPlayer wired like the old one. libvlc stops asynchronously; an SMB input stuck in
@@ -257,6 +282,22 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         reconnectTimer?.cancel(); reconnectTimer = nil
         reconnecting = nil
         openTimeouts = 0
+        loadGeneration += 1
+        guard Self.libraryIsReady else {
+            // The first play right after a launch: VLC's library is still coming up on its thread.
+            // Wait for it here rather than block the main thread in the player's init.
+            let generation = loadGeneration
+            let began = Date()
+            setStatus(.opening)
+            log("waiting for VLC's library before the load")
+            Task { @MainActor [weak self] in
+                await Self.awaitLibrary()
+                guard let self, self.loadGeneration == generation else { return }
+                self.log("VLC's library ready after \(String(format: "%.1f", Date().timeIntervalSince(began)))s; loading")
+                self.performLoad(item, options: options)
+            }
+            return
+        }
         performLoad(item, options: options)
     }
 

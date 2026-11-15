@@ -737,6 +737,23 @@ the player object is made (`engine.warmUp()`, so the first play does not pay for
 comes first makes it on demand through the lazy `player`) followed by the sync start and the marks
 migration. Only slow ones log ("launch: after Home, the VLC player took Ns and the sync start Ns").
 
+Paul's reboot test after that (20:33) froze on the splash's "Starting…" line anyway, and the log
+explained it: "ready after 0.44s", "first frame after 0.53s", "scene active" a second later, then
+"VLC library and log took 13.62s off the main thread". VLC's shared library, the module bank
+loading and probing every plugin, took 13.6 s in the first minute after the reboot (half a second
+warm). The player object made one second after Home was on the main thread, and
+`VLCMediaPlayer()` waits inside `VLCLibrary.shared()` for that same start, so the main thread
+froze and the screen kept its last frame, the splash. Now **no VLC object is touched on the main
+thread until the library is up**: `VLCPlaybackEngine.startWarmingLibrary` runs it on a
+user-initiated task (utility was starved for 22 s after the boot), `libraryIsReady` says when,
+`awaitLibrary()` waits; `warmUp()` makes the player only after that; `load()` before it sets
+`.opening`, logs "waiting for VLC's library before the load" and performs the load when it is up
+(a later load or stop supersedes it via `loadGeneration`), while the coordinator shows "Preparing
+the player…" under the spinner (`loadingMessage` now shows whenever the spinner is up and clears
+on `.playing`); `ScrubPreview`'s player is lazy too, since `ScrubPreview.shared` is made when
+PlayerView appears. The library's own time is logged when over half a second ("launch: VLC's
+library took Ns to come up, off the main thread").
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

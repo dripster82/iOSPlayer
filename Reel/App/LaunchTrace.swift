@@ -92,29 +92,27 @@ final class LaunchSequence: ObservableObject {
         // VLC's library and, in debug builds, its message log (libvlc's own messages to
         // Documents/Diagnostics/vlc.log, the record that showed the SMB socket dying): off the main
         // thread, and nothing waits for them.
-        Task.detached(priority: .utility) {
-            let began = Date()
-            VLCPlaybackEngine.warmUpLibrary()
+        let libraryBegan = Date()
+        VLCPlaybackEngine.startWarmingLibrary()
+        Task.detached(priority: .userInitiated) {
+            await VLCPlaybackEngine.awaitLibrary()
+            let library = Date().timeIntervalSince(libraryBegan)
             #if canImport(VLCKit) && DEBUG
             HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
             #endif
-            let took = Date().timeIntervalSince(began)
-            if took > 0.2 { Diagnostics.log("app", "launch: VLC library and log took \(String(format: "%.2f", took))s off the main thread") }
+            if library > 0.5 { Diagnostics.log("app", "launch: VLC's library took \(String(format: "%.1f", library))s to come up, off the main thread") }
         }
-        // After Home has painted: work nobody is waiting for. The VLC player object (half a second,
-        // and it must be made on the main actor) is made here so the first play does not pay for
-        // it; a play that comes first makes it on demand instead. The sync start is a CloudKit
-        // engine being made and the pending rows counted, local and a fraction of a second; its
-        // traffic is asynchronous and fails quietly offline. Timed, so a slow one is in the log.
+        // After Home has painted: work nobody is waiting for. The sync start is a CloudKit engine
+        // being made and the pending rows counted, local and a fraction of a second; its traffic
+        // is asynchronous and fails quietly offline. Then the VLC player object, so the first play
+        // does not pay for it: `warmUp` makes it only once the library is up, never blocking.
         try? await Task.sleep(for: .seconds(1))
-        var began = Date()
-        player.engine.warmUp()
-        let playerTook = Date().timeIntervalSince(began)
-        began = Date()
+        let began = Date()
         sync.startIfEnabled(cloudContainerID: AppSettings.cloudContainerID)
         ShowMarkers.retryEarlySearchesOnce()
         let syncTook = Date().timeIntervalSince(began)
-        if playerTook > 0.5 || syncTook > 0.5 { Diagnostics.log("app", "launch: after Home, the VLC player took \(String(format: "%.2f", playerTook))s and the sync start \(String(format: "%.2f", syncTook))s") }
+        if syncTook > 0.5 { Diagnostics.log("app", "launch: the sync start took \(String(format: "%.2f", syncTook))s after Home") }
+        player.engine.warmUp()
     }
 
     private func step(_ name: String, _ work: () -> Void) async {
