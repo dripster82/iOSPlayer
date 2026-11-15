@@ -708,8 +708,25 @@ before the first frame (Paul's ask, 15 Nov evening):
 - `LaunchTrace.watch` now reports against *ready*, so it says "no first frame" or "first frame
   drawn, not ready" with the step name at 5, 15 and 30 s.
 
+The first real catch (15 Nov, 20:09): Paul saw the splash sit on its last line. The trace read
+"first frame after 0.53s", then "not ready after 5s; still in Checking show marks for 13.5s"
+*logged at 14.5 s*, and "ready after 23.21s (… Starting iCloud sync 0.21s, Checking show marks
+21.73s)". The sync start took a fifth of a second; the step after it waited 21 s for its turn,
+and the 5 s timer, which runs off the main thread, fired 9.5 s late: the whole process was
+starved or suspended, not blocked in CloudKit. No "scene active" was logged for that launch,
+which points at iOS having brought the app up in the background (a background task or push, or
+prewarming), where timers are held and CPU is scarce, with the splash still up when Paul opened
+it. Whatever the trigger, nothing to do with iCloud or the network now gates the splash:
+`LaunchSequence` is ready after the VLC warm-up (and the debug VLC log), and the sync start and
+the marks migration run a second after Home is up, timed and logged only when slow ("launch:
+sync start and show marks took Ns after Home was up"). The first-frame line now says "(in the
+background)" or "(inactive)" when the app was not active at its first frame, and a late watch
+timer says so: "(this timer fired Ns late: the process was starved or suspended)". An iPad used
+offline comes up the same way; CloudKit's traffic is asynchronous and its errors (CKError 20,
+"cancelled", at 20:09:59 that evening as the app went to the background) are logged and retried.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
-sat there. If the screen is white with no splash and no "launch:" lines at all, the block is
+sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
 step is a sysdiagnose from the iPad while the white screen is up.
 

@@ -3,6 +3,7 @@ import SwiftUI
 import MediaCore
 import Playback
 import Sync
+import UIKit
 
 /// What launch is doing, for the log. The iPad once came up to a white screen after a power-off
 /// and on (15 Nov 2026), with nothing in the log at all: the launch screen stays up while the main
@@ -27,12 +28,15 @@ enum LaunchTrace {
         }
     }
 
-    /// Called from the first view's `onAppear`.
-    static func firstFrame() {
+    /// Called from the first view's `onAppear`, with the app's state: a launch that iOS made in the
+    /// background (a background task, a push, prewarming) runs starved of CPU and with its timers
+    /// held, and its splash is still up when the viewer opens it.
+    static func firstFrame(state: UIApplication.State) {
         let report: String? = lock.withLock {
             guard firstFrameAt == nil else { return nil }
             firstFrameAt = Date()
-            return "launch: first frame after \(String(format: "%.2f", firstFrameAt!.timeIntervalSince(began)))s"
+            let where_ = state == .active ? "" : state == .background ? " (in the background)" : " (inactive)"
+            return "launch: first frame after \(String(format: "%.2f", firstFrameAt!.timeIntervalSince(began)))s\(where_)"
         }
         if let report { Diagnostics.log("app", report) }
     }
@@ -53,11 +57,16 @@ enum LaunchTrace {
     /// Started from `ReelApp.init`; silent when launch finishes in time.
     static func watch() {
         for seconds in [5.0, 15.0, 30.0] {
+            let due = Date().addingTimeInterval(seconds)
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {
                 let stuck: String? = lock.withLock {
                     guard readyAt == nil else { return nil }
                     let frame = firstFrameAt == nil ? "no first frame" : "first frame drawn, not ready"
-                    return "launch: \(frame) after \(Int(seconds))s; still in \"\(current)\" for \(String(format: "%.1f", Date().timeIntervalSince(currentBegan)))s"
+                    // This timer runs off the main thread: when it is itself late, the process was
+                    // starved or suspended, and the main thread was not necessarily blocked.
+                    let late = Date().timeIntervalSince(due)
+                    let starved = late > 1 ? " (this timer fired \(String(format: "%.1f", late))s late: the process was starved or suspended)" : ""
+                    return "launch: \(frame) after \(Int(seconds))s; still in \"\(current)\" for \(String(format: "%.1f", Date().timeIntervalSince(currentBegan)))s\(starved)"
                 }
                 if let stuck { Diagnostics.log("app", stuck) }
             }
@@ -65,9 +74,11 @@ enum LaunchTrace {
     }
 }
 
-/// The part of launch that runs after the first frame: the services that can be slow to come up in
-/// the first minutes after a boot, each behind a status line on the splash. Every step yields to
-/// SwiftUI first, so the line naming it is on screen before the step can block the main thread.
+/// The part of launch that runs after the first frame. Behind the splash, with its status line:
+/// only VLC's library, which is local and which the first play needs. Nothing to do with the
+/// network or iCloud gates the splash: sync starts once Home is up, and the viewer never waits for
+/// it, so an iPad used offline, or one still settling after a boot, comes up just the same. Every
+/// step yields to SwiftUI first, so the line naming it is on screen before the step can block.
 @MainActor
 final class LaunchSequence: ObservableObject {
     @Published private(set) var status = "Starting"
@@ -80,11 +91,18 @@ final class LaunchSequence: ObservableObject {
             HLSRemuxer.enableVLCLog(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Diagnostics/vlc.log"), level: 3)
         }
         #endif
-        await step("Starting iCloud sync") { sync.startIfEnabled(cloudContainerID: AppSettings.cloudContainerID) }
-        await step("Checking show marks") { ShowMarkers.retryEarlySearchesOnce() }
         LaunchTrace.step("ready")
         withAnimation(.easeOut(duration: 0.25)) { ready = true }
         LaunchTrace.ready()
+        // After Home: work nobody is waiting for. The sync start is a CloudKit engine being made and
+        // the pending rows counted, local and a fraction of a second; its traffic is asynchronous
+        // and fails quietly offline. Timed, so a slow one is in the log.
+        try? await Task.sleep(for: .seconds(1))
+        let began = Date()
+        sync.startIfEnabled(cloudContainerID: AppSettings.cloudContainerID)
+        ShowMarkers.retryEarlySearchesOnce()
+        let took = Date().timeIntervalSince(began)
+        if took > 0.5 { Diagnostics.log("app", "launch: sync start and show marks took \(String(format: "%.1f", took))s after Home was up") }
     }
 
     private func step(_ name: String, _ work: () -> Void) async {
