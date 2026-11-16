@@ -1036,6 +1036,26 @@ and the "unbounded lazy shelf" reading has no support yet; the card-body counts 
 are still the thing to read, on the next (now safe) run. Paul described this startup as "much
 faster", which may be the 10 s before the freeze rather than a change in the stall itself.
 
+**16 Nov 18:09 — a full stall with the safe sampler: zero Reel bodies, UIKit trait propagation.**
+Reboot at 18:08:55, Reel opened at 18:09:35, root 1366×967 regular from the first frame, then a
+**35.9 s stall (34.6 s user CPU, 113 samples, spin 0.75–0.8 s throughout, thermal nominal, 8 cores)**.
+The busy line has **no "during it:" clause**: not one Root, Home, shelf-row or poster-card body ran
+during the stall, so "lazy shelves build every card" is dead along with the size theory. Every
+whole-stack sample is one `_UIHostingView.layoutSubviews` commit; symbolicated (`Scripts/symbolicate-stall.sh`)
+the recurring frames are `-[UIView _wrappedProcessTraitChanges:withBehavior:]` 8–13 levels deep under
+`_processChangesFromOldTraits:toCurrentTraits:` and `_updateTraitsIfNeededWithBehavior:`, reached
+from `SwiftUI.Update.dispatchActions` inside `ViewGraphRootValueUpdater.render`; one sample sits in
+`_UITraitCollectionUserInterfaceRenderingModeDidChange` ← `-[UITraitCollection _setNSIntegerValue:forTraitToken:]`,
+one in `_UISplitViewControllerAdaptiveImpl _traitCollectionForChildEnvironment:`, one resolving a
+SwiftUI `Color` through `UIKitPlatformColorDefinition.resolvedHDRColor` from `PlatformViewChild.updateValue`,
+others in `AG::Graph::propagate_dirty` / `GraphHost.flushTransactions` / `setRootView`. Faults +21108
+against page-ins +930: the commit allocates roughly 80 MB of zero-filled pages. Reading: UIKit is
+re-propagating trait collections (the rendering-mode trait among them) down the hosting view
+hierarchy over and over, and SwiftUI re-resolves platform colours each time, with no Reel body in
+the loop. Next: the level-3 root test (`NavigationStack { HomeView() }`, no split view) is **armed**
+for the next launch; if it stalls the cost is in Home's UIKit-backed content, if not it is the
+split view / sidebar, and level 2 (split view with an empty detail) decides.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
