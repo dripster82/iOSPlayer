@@ -1021,6 +1021,21 @@ line now counts `poster card body` and `shelf row body` (thousands → every car
 RootView logs "root size W×H, size class …" at the first frame and on every change (a 0×0 or
 screen-sized first layout followed by the real window size would be the smoking gun).
 
+**16 Nov 12:43 — the sampler froze the app, and the size theory is weak.** Paul opened Reel 44 s
+after a reboot: root size **1366×967, regular, from the first frame** (no placeholder size), 3 card
+and 4 row bodies before activation, then the stall began at "scene active" with the spin at 0.8 s.
+At 10 s the log stops dead: no more samples, no end line, none of the scan/source lines that always
+follow a launch; the process was later relaunched by iOS in the background (12:47:42, root 1024×1309,
+portrait). The whole process had frozen, watch thread included. Cause: the sampler **allocated while
+the main thread was suspended** (`addresses.append` between `thread_suspend` and `thread_resume`); a
+main thread suspended inside malloc holds the allocator lock, the watch thread then waits for it
+forever, and nothing ever resumes the main thread. 4 Hz sampling made the race likely; it also
+explains the lines "lost to the kill" at 11:43. Fixed: frames go into a preallocated 64-slot buffer
+and nothing between suspend and resume allocates, logs or locks. So the first-frame size is correct
+and the "unbounded lazy shelf" reading has no support yet; the card-body counts at the end of a stall
+are still the thing to read, on the next (now safe) run. Paul described this startup as "much
+faster", which may be the 10 s before the freeze rather than a change in the stall itself.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

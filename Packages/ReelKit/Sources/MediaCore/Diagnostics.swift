@@ -270,36 +270,41 @@ enum MainThreadSampler {
         return "thermal \(thermal), low power \(p.isLowPowerModeEnabled ? "on" : "off"), \(p.activeProcessorCount) of \(p.processorCount) cores active"
     }
 
+    /// Frame addresses are written here while the main thread is suspended. Nothing between
+    /// `thread_suspend` and `thread_resume` may allocate, log or take a lock: the suspended thread may
+    /// hold the allocator's or the loader's lock, and waiting for it would freeze the whole process.
+    private static let scratch = UnsafeMutablePointer<UInt>.allocate(capacity: 64)
+
     static func sample(_ thread: thread_t) -> [Frame] {
         #if arch(arm64)
-        var addresses: [UInt] = []
-        guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
+        var count = 0
         var state = arm_thread_state64_t()
-        var count = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
-        let kr = withUnsafeMutablePointer(to: &state) { ptr -> kern_return_t in
-            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(count)) { thread_get_state(thread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &count) }
-        }
+        var stateCount = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
         let strip: (UInt64) -> UInt = { UInt($0 & 0x0000_007F_FFFF_FFFF) }   // pointer authentication bits off (arm64e)
+        guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
+        let kr = withUnsafeMutablePointer(to: &state) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(stateCount)) { thread_get_state(thread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &stateCount) }
+        }
         if kr == KERN_SUCCESS {
-            addresses.append(strip(state.__pc))
-            addresses.append(strip(state.__lr))
+            scratch[0] = strip(state.__pc); scratch[1] = strip(state.__lr); count = 2
             var fp = strip(state.__fp)
             let task = mach_task_self_
-            for _ in 0..<60 {
+            var pair: (UInt64, UInt64) = (0, 0)
+            while count < 64 {
                 guard fp > 0x1000, fp & 0xF == 0 else { break }
-                var pair: (UInt64, UInt64) = (0, 0)
                 var outsize: vm_size_t = 0
                 let read = withUnsafeMutablePointer(to: &pair) { vm_read_overwrite(task, vm_address_t(fp), 16, vm_address_t(UInt(bitPattern: $0)), &outsize) }
                 guard read == KERN_SUCCESS, outsize == 16 else { break }
                 let next = strip(pair.0), ret = strip(pair.1)
                 guard ret > 0x1000 else { break }
-                addresses.append(ret)
+                scratch[count] = ret; count += 1
                 guard next > fp else { break }   // stacks grow down: the caller's frame is higher
                 fp = next
             }
         }
         thread_resume(thread)
         guard kr == KERN_SUCCESS else { return [] }
+        let addresses = (0..<count).map { scratch[$0] }
         // Symbolicate only now, with the main thread running again (see above). System frameworks
         // on a device have their symbol names stripped ("<redacted>"): those frames keep their
         // offset from the image base for `atos` on the Mac.
