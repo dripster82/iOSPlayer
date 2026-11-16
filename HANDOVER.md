@@ -963,6 +963,17 @@ ours the whole time. Decisive next test: reboot, **touch nothing for three minut
 the normal tree as the first process. Stall → (a); clean → (b), and the fix is about what the user
 sees in that window, not about Reel's tree.
 
+**16 Nov 11:53, decided: it is the boot window.** Reboot 11:49:58, nothing touched, Reel launched as
+the first process at +3:03: ready 0.46 s, first frame 0.56 s, scene active, **no stall**. The
+per-boot-cost reading is dead, and `Library/Caches/com.apple.dyld/Reel.dyld4` kept its 11:43 time
+(that rewrite came from the 11:40 install, not the reboot). So: for roughly the first two minutes
+after an iPad reboot the device is slow, everything in it (SMB connect 16 s, Keychain, sqlite reads,
+VLC's library 20–33 s), and Reel's first full render, which is 0.5 s warm, costs 25–36 s of main
+thread CPU inside the window. A plain root costs nothing in the window (11:33), so the hit is
+proportional to what is drawn, and the open question is whether every view is ~50× slower or one
+thing (the sidebar `List`, SF Symbol labels, trait propagation through UIKit-hosted views) is
+pathological. Launches at +0:40 … +1:35 stalled; at +2:00, +3:03 and +3:05 they did not.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
