@@ -838,6 +838,40 @@ the Mac reads them. `reel://debug-stall?seconds=7` (debug builds) blocks the mai
 exercise it; on the simulator the samples show `Thread.sleep` under `ReelApp.open`. The next
 post-reboot launch's log says exactly what the main thread is doing for those 25 s.
 
+**16 Nov 07:43, the stacks (build 0b39b0b, iPad rebooted 07:42).** Reel opened at 07:43:05,
+Home ready in 0.5 s, "scene active" 07:43:06, then "main thread busy for 35.9s". The three
+samples were all **inside SwiftUI's own render pass**, each in a different phase of one CoreAnimation
+commit: 2 s in `ViewGraph.setRoot` under `GraphHost.flushTransactions`, 5 s in
+`GraphHost.updatePreferences` / `ViewGraph.updateOutputs`, 12 s in
+`ViewGraph.renderDisplayList` → `_UIHostingView` → `objc_loadWeakRetained`. No Reel frame, no
+blocking call (no `mach_msg`, `read`, lock or sleep): the main thread is *executing* framework
+code slowly, mid-instruction every time. None of the `timeMain` jobs fired, so Reel's own bodies
+were quick. A second stall the same minute, in the background (07:43:59–07:44:25, 25.5 s), was a
+**SwiftData fetch on the main thread** sitting in `sqlite3_step` → `memmove`/`memset` under
+`NSManagedObjectContext.performAndWait` (the caller was past the 40-frame cap). Alongside it an
+SMB connect took 16.0 s (0.2 s normally) and CloudKit cancelled an operation.
+
+Reading: every first-touch after a reboot is 50× slow — VLC's library start (20–33 s vs 0.5 s),
+SwiftUI's first big render, a sqlite read, an SMB connect — and the common factor is **cold
+storage and a busy system**, not a particular piece of Reel: code pages of SwiftUICore,
+AttributeGraph and Reel's own very large debug binary (VLC's modules are statically linked) are
+paged in from flash on first use while iPadOS runs its post-boot work. A page fault looks exactly
+like the samples above: the faulting instruction's frame, no syscall. To settle it rather than
+argue it, the sampler now records, with each sample and in the busy line, the **main thread's
+CPU time and scheduler state and the process's page-ins and faults since the stall was noticed**
+(`MainThreadSampler.stats`: `thread_info(THREAD_BASIC_INFO)` + `task_info(TASK_EVENTS_INFO)`),
+e.g. "(CPU 0.3s, waiting; process page-ins +826, faults +1116)". CPU close to the wall time means
+the thread is computing (a slow CPU or expensive work); little CPU with thousands of page-ins
+means it is waiting for pages from storage. Samples now also come at 25 s, walk 96 frames, and
+fold runs of `<redacted>` frames per image ("CoreData ×9") so the Reel frames at the bottom of a
+deep SwiftData stack are kept. On the simulator a forced `debug-stall` reads "CPU 0.0s, waiting".
+
+If the page-in reading is confirmed, the fixes are about touching less at first launch, not about
+finding a culprit: the SwiftData fetch must leave the main thread (find its caller in the folded
+stack), Home should draw from a small cached snapshot rather than the store, and a Release build
+(smaller, optimised; the TestFlight build) should be timed after a reboot against the Debug one,
+since every device run so far has been Debug.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

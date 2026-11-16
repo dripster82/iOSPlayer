@@ -107,6 +107,7 @@ public enum Diagnostics {
         let mainThread = pthread_mach_thread_np(pthread_self())   // called from the main thread at launch
         let thread = Thread {
             var blockedSince: Date?
+            var baseline: MainThreadSampler.Stats?
             var lastTick = Date()
             var sampled: Set<Int> = []
             while true {
@@ -117,13 +118,17 @@ public enum Diagnostics {
                 DispatchQueue.main.async { pongLock.withLock { lastPong = Date() } }
                 let pong = pongLock.withLock { lastPong }
                 let silent = now.timeIntervalSince(pong)
-                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = [] }
-                // While the main thread is silent, capture what it is doing at 2, 5 and 12 s in.
+                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = []; baseline = MainThreadSampler.stats(mainThread) }
+                // While the main thread is silent, capture what it is doing at 2, 5, 12 and 25 s in,
+                // with how much CPU it has used and how many pages the process has read from storage
+                // since the stall was noticed: computing shows as CPU close to the wall time, waiting on
+                // cold storage as little CPU and many page-ins.
                 if blockedSince != nil, tickLate < 1 {
-                    for mark in [2, 5, 12] where silent >= Double(mark) && !sampled.contains(mark) {
+                    for mark in [2, 5, 12, 25] where silent >= Double(mark) && !sampled.contains(mark) {
                         sampled.insert(mark)
+                        let stats = MainThreadSampler.stats(mainThread)
                         let frames = MainThreadSampler.sample(mainThread)
-                        log("main", "main thread at \(mark)s into the stall: \(frames.isEmpty ? "(no frames)" : frames.joined(separator: " < "))")
+                        log("main", "main thread at \(mark)s into the stall\(MainThreadSampler.describe(stats, since: baseline)): \(frames.isEmpty ? "(no frames)" : frames.joined(separator: " < "))")
                     }
                 }
                 if let since = blockedSince, pong > since {
@@ -135,7 +140,8 @@ public enum Diagnostics {
                     } else if busy >= 1 {
                         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
                         let during = backgroundStartInProgress?().map { "; \($0) was running" } ?? ""
-                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(during)")
+                        let used = MainThreadSampler.describe(MainThreadSampler.stats(mainThread), since: baseline)
+                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(used)\(during)")
                     }
                 }
             }
@@ -156,6 +162,48 @@ public enum Diagnostics {
 /// `dladdr` takes the dynamic loader's lock and the main thread may hold it. arm64 only; elsewhere
 /// it returns nothing.
 enum MainThreadSampler {
+    /// What the thread and the process have done so far: the thread's CPU time and scheduler state,
+    /// the process's page faults and page-ins (pages read back from storage).
+    struct Stats {
+        var cpu: Double
+        var state: String
+        var faults: Int
+        var pageins: Int
+    }
+
+    static func stats(_ thread: thread_t) -> Stats? {
+        var tinfo = thread_basic_info()
+        var tcount = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
+        let tk = withUnsafeMutablePointer(to: &tinfo) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(tcount)) { thread_info(thread, thread_flavor_t(THREAD_BASIC_INFO), $0, &tcount) }
+        }
+        var einfo = task_events_info()
+        var ecount = mach_msg_type_number_t(MemoryLayout<task_events_info>.size / MemoryLayout<integer_t>.size)
+        let ek = withUnsafeMutablePointer(to: &einfo) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(ecount)) { task_info(mach_task_self_, task_flavor_t(TASK_EVENTS_INFO), $0, &ecount) }
+        }
+        guard tk == KERN_SUCCESS, ek == KERN_SUCCESS else { return nil }
+        let cpu = Double(tinfo.user_time.seconds + tinfo.system_time.seconds)
+            + Double(tinfo.user_time.microseconds + tinfo.system_time.microseconds) / 1_000_000
+        let state: String
+        switch tinfo.run_state {
+        case TH_STATE_RUNNING: state = "running"
+        case TH_STATE_WAITING: state = "waiting"
+        case TH_STATE_UNINTERRUPTIBLE: state = "waiting uninterruptibly"
+        case TH_STATE_STOPPED: state = "stopped"
+        case TH_STATE_HALTED: state = "halted"
+        default: state = "state \(tinfo.run_state)"
+        }
+        return Stats(cpu: cpu, state: state, faults: Int(einfo.faults), pageins: Int(einfo.pageins))
+    }
+
+    /// " (CPU 0.3s, waiting; process page-ins +1234, faults +5678)", the deltas since `since`.
+    static func describe(_ now: Stats?, since: Stats?) -> String {
+        guard let now else { return "" }
+        guard let since else { return " (\(now.state))" }
+        return " (CPU \(String(format: "%.1f", now.cpu - since.cpu))s, \(now.state); process page-ins +\(now.pageins - since.pageins), faults +\(now.faults - since.faults))"
+    }
+
     static func sample(_ thread: thread_t) -> [String] {
         #if arch(arm64)
         var addresses: [UInt] = []
@@ -171,7 +219,7 @@ enum MainThreadSampler {
             addresses.append(strip(state.__lr))
             var fp = strip(state.__fp)
             let task = mach_task_self_
-            for _ in 0..<40 {
+            for _ in 0..<96 {
                 guard fp > 0x1000, fp & 0xF == 0 else { break }
                 var pair: (UInt64, UInt64) = (0, 0)
                 var outsize: vm_size_t = 0
@@ -186,17 +234,26 @@ enum MainThreadSampler {
         }
         thread_resume(thread)
         guard kr == KERN_SUCCESS else { return [] }
-        // Symbolicate only now, with the main thread running again (see above).
-        let names = addresses.map { addr -> String in
+        // Symbolicate only now, with the main thread running again (see above). System frameworks
+        // on a device have their symbol names stripped ("<redacted>"); a run of such frames from one
+        // image is folded to "CoreData ×9" so the named frames, Reel's among them, stay in view.
+        var names: [String] = []
+        var unnamedRun: (image: String, count: Int)?
+        func flush() { if let r = unnamedRun { names.append(r.count == 1 ? "\(r.image)" : "\(r.image) ×\(r.count)"); unnamedRun = nil } }
+        for addr in addresses {
             var info = Dl_info()
-            guard dladdr(UnsafeRawPointer(bitPattern: addr), &info) != 0 else { return String(format: "0x%lx", addr) }
+            guard dladdr(UnsafeRawPointer(bitPattern: addr), &info) != 0 else { flush(); names.append(String(format: "0x%lx", addr)); continue }
             let image = info.dli_fname.map { (String(cString: $0) as NSString).lastPathComponent } ?? "?"
-            if let sym = info.dli_sname {
-                let offset = addr - UInt(bitPattern: info.dli_saddr)
-                return "\(image)`\(String(cString: sym))+\(offset)"
+            if let sym = info.dli_sname.map({ String(cString: $0) }), sym != "<redacted>" {
+                flush()
+                names.append("\(image)`\(sym)+\(addr - UInt(bitPattern: info.dli_saddr))")
+            } else if let r = unnamedRun, r.image == image {
+                unnamedRun = (image, r.count + 1)
+            } else {
+                flush(); unnamedRun = (image, 1)
             }
-            return "\(image)+\(addr - UInt(bitPattern: info.dli_fbase))"
         }
+        flush()
         return names
         #else
         return []
