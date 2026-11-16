@@ -872,6 +872,33 @@ stack), Home should draw from a small cached snapshot rather than the store, and
 (smaller, optimised; the TestFlight build) should be timed after a reboot against the Debug one,
 since every device run so far has been Debug.
 
+**16 Nov 10:44, measured (build 954a90d).** Storage is **not** it. The same 35 s stall at
+activation read: "CPU 34.0s, waiting uninterruptibly; process page-ins +898, faults +20853" at the
+end, and at 2/5/12/25 s "CPU 1.0 / 4.0 / 11.0 / 24.0s, running" — the main thread was on a CPU
+for 34 of the 35 s, executing. The four stacks were again all in SwiftUI's render pass with **no
+Reel frame** in any of them (`updateOutputs` → UIKit → `memmove`; `flushTransactions` →
+`AGGraphSetOutputValue` → malloc; `AGGraphGetWeakValue`; `Update.dispatchActions` → UIKit ×18 →
+`CFString`). So it is roughly 70× the work of the warm 0.5 s render, done by the framework itself in
+a single CoreAnimation commit (the run loop never turned: no pong for 35 s). Reel's own bodies, if
+they ran thousands of times in a Debug build, would almost certainly have been caught by one of the
+four samples; they were not. Open question: what makes SwiftUI's graph do 70× more work only in the
+first minutes after a reboot. A second stall the same minute, in the background, was
+`scanForNewMediaIfDue` → `LibraryStore.sources()` sqlite fetch, then `AppSettings.tvmaze` lazy
+init → `TVmazeClient` → **a Keychain read (`SecItemCopyMatching`) on the main thread** waiting on
+securityd, then the process was suspended by iOS ("process starved or suspended for about 25.9s").
+That one is cheap to fix later (the TVmaze key read should leave the main thread) but is not the
+launch freeze.
+
+The instrument was sharpened again for the next reboot: samples **once a second from 2 s to 40 s**,
+CPU split into **user + kernel** (kernel-heavy means page-fault or VM work charged to the thread,
+user-heavy means real computation), and **event counters** — `Diagnostics.count(name)` is called
+from `RootView.body`, `HomeView.body` and Home's `library.objectWillChange` sink, and the busy line
+ends with "; during it: Home body ×N, Root body ×N, library change ×N". A body count in the
+thousands is an invalidation storm (then find the publisher); a count of one with 34 s of user CPU
+is a single pathological framework pass (then bisect Home's rows: a build with Home showing a plain
+label after a reboot would tell whether the content matters at all). Also worth one reboot each:
+does the **iPhone** show it, and does a **Release** build.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

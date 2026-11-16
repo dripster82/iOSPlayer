@@ -1,6 +1,7 @@
 import SwiftUI
 import Sync
 import Library
+import MediaCore
 
 enum AppSection: String, CaseIterable, Identifiable {
     case home, tv, films, audiobooks, downloads, files, favourites, history, collections, sources, search, settings
@@ -45,6 +46,7 @@ struct RootView: View {
     @EnvironmentObject private var sync: SyncEngine
 
     var body: some View {
+        let _ = Diagnostics.count("Root body")
         Group {
             if !settings.hasCompletedOnboarding && library.sources().isEmpty {
                 OnboardingView()

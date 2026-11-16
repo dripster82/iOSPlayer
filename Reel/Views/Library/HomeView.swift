@@ -29,6 +29,7 @@ struct HomeView: View {
     }
 
     var body: some View {
+        let _ = Diagnostics.count("Home body")
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 offlineBanner
@@ -82,7 +83,7 @@ struct HomeView: View {
         .itemNavigation()
         .sheet(item: $fixMatchTarget) { FixMatchView(item: $0) }
         .task { await refreshRowsInChunks() }
-        .onReceive(library.objectWillChange) { _ in scheduleRefresh() }
+        .onReceive(library.objectWillChange) { _ in Diagnostics.count("library change"); scheduleRefresh() }
     }
 
     /// The first pass, after the first frame: cheap rows first, so Continue Watching is up within a

@@ -93,6 +93,18 @@ public enum Diagnostics {
     nonisolated(unsafe) public static var backgroundStartInProgress: (() -> String?)?
     nonisolated(unsafe) private static var lastPong = Date()
     private static let pongLock = NSLock()
+    nonisolated(unsafe) private static var counters: [String: Int] = [:]
+    private static let counterLock = NSLock()
+
+    /// Counts an event (a view body run, a store change notice) so the busy line can say how many of
+    /// each happened during a stall: a storm of them is one cause, a single slow pass another.
+    public static func count(_ name: String) { counterLock.withLock { counters[name, default: 0] += 1 } }
+    static func counterSnapshot() -> [String: Int] { counterLock.withLock { counters } }
+    static func counterDeltas(since: [String: Int]) -> String {
+        let now = counterSnapshot()
+        let parts = now.keys.sorted().compactMap { k -> String? in let d = now[k]! - (since[k] ?? 0); return d > 0 ? "\(k) ×\(d)" : nil }
+        return parts.isEmpty ? "" : "; during it: " + parts.joined(separator: ", ")
+    }
 
     /// A thread of its own pings the main thread four times a second and logs every stretch of a
     /// second or more during which the main thread answered nothing: "main thread busy for Ns
@@ -108,6 +120,7 @@ public enum Diagnostics {
         let thread = Thread {
             var blockedSince: Date?
             var baseline: MainThreadSampler.Stats?
+            var baseCounts: [String: Int] = [:]
             var lastTick = Date()
             var sampled: Set<Int> = []
             while true {
@@ -118,13 +131,13 @@ public enum Diagnostics {
                 DispatchQueue.main.async { pongLock.withLock { lastPong = Date() } }
                 let pong = pongLock.withLock { lastPong }
                 let silent = now.timeIntervalSince(pong)
-                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = []; baseline = MainThreadSampler.stats(mainThread) }
-                // While the main thread is silent, capture what it is doing at 2, 5, 12 and 25 s in,
-                // with how much CPU it has used and how many pages the process has read from storage
-                // since the stall was noticed: computing shows as CPU close to the wall time, waiting on
-                // cold storage as little CPU and many page-ins.
+                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = []; baseline = MainThreadSampler.stats(mainThread); baseCounts = counterSnapshot() }
+                // While the main thread is silent, capture what it is doing once a second from 2 s in
+                // (for up to 40 s), with how much CPU it has used and how many pages the process has
+                // read from storage since the stall was noticed: computing shows as CPU close to the
+                // wall time, waiting on cold storage as little CPU and many page-ins.
                 if blockedSince != nil, tickLate < 1 {
-                    for mark in [2, 5, 12, 25] where silent >= Double(mark) && !sampled.contains(mark) {
+                    for mark in 2...40 where silent >= Double(mark) && !sampled.contains(mark) {
                         sampled.insert(mark)
                         let stats = MainThreadSampler.stats(mainThread)
                         let frames = MainThreadSampler.sample(mainThread)
@@ -141,7 +154,7 @@ public enum Diagnostics {
                         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
                         let during = backgroundStartInProgress?().map { "; \($0) was running" } ?? ""
                         let used = MainThreadSampler.describe(MainThreadSampler.stats(mainThread), since: baseline)
-                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(used)\(during)")
+                        log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(used)\(counterDeltas(since: baseCounts))\(during)")
                     }
                 }
             }
@@ -166,6 +179,8 @@ enum MainThreadSampler {
     /// the process's page faults and page-ins (pages read back from storage).
     struct Stats {
         var cpu: Double
+        var user: Double
+        var system: Double
         var state: String
         var faults: Int
         var pageins: Int
@@ -183,8 +198,9 @@ enum MainThreadSampler {
             ptr.withMemoryRebound(to: integer_t.self, capacity: Int(ecount)) { task_info(mach_task_self_, task_flavor_t(TASK_EVENTS_INFO), $0, &ecount) }
         }
         guard tk == KERN_SUCCESS, ek == KERN_SUCCESS else { return nil }
-        let cpu = Double(tinfo.user_time.seconds + tinfo.system_time.seconds)
-            + Double(tinfo.user_time.microseconds + tinfo.system_time.microseconds) / 1_000_000
+        let user = Double(tinfo.user_time.seconds) + Double(tinfo.user_time.microseconds) / 1_000_000
+        let system = Double(tinfo.system_time.seconds) + Double(tinfo.system_time.microseconds) / 1_000_000
+        let cpu = user + system
         let state: String
         switch tinfo.run_state {
         case TH_STATE_RUNNING: state = "running"
@@ -194,14 +210,14 @@ enum MainThreadSampler {
         case TH_STATE_HALTED: state = "halted"
         default: state = "state \(tinfo.run_state)"
         }
-        return Stats(cpu: cpu, state: state, faults: Int(einfo.faults), pageins: Int(einfo.pageins))
+        return Stats(cpu: cpu, user: user, system: system, state: state, faults: Int(einfo.faults), pageins: Int(einfo.pageins))
     }
 
     /// " (CPU 0.3s, waiting; process page-ins +1234, faults +5678)", the deltas since `since`.
     static func describe(_ now: Stats?, since: Stats?) -> String {
         guard let now else { return "" }
         guard let since else { return " (\(now.state))" }
-        return " (CPU \(String(format: "%.1f", now.cpu - since.cpu))s, \(now.state); process page-ins +\(now.pageins - since.pageins), faults +\(now.faults - since.faults))"
+        return " (CPU \(String(format: "%.1f", now.cpu - since.cpu))s = user \(String(format: "%.1f", now.user - since.user)) + kernel \(String(format: "%.1f", now.system - since.system)), \(now.state); process page-ins +\(now.pageins - since.pageins), faults +\(now.faults - since.faults))"
     }
 
     static func sample(_ thread: thread_t) -> [String] {
