@@ -156,6 +156,10 @@ public enum Diagnostics {
                         sampled.insert(mark)
                         let stats = MainThreadSampler.stats(mainThread)
                         log("main", "main thread at \(mark)s into the stall\(MainThreadSampler.describe(stats, since: baseline)): \(frames.isEmpty ? "(no frames)" : frames.map(MainThreadSampler.describe).joined(separator: " < "))")
+                        // Is the CPU itself slow? A fixed spin on this thread takes about 0.7 s on a warm
+                        // M-series iPad; a stall whose profile is flat (no hot frame) with this many
+                        // times slower is a slow processor, not slow code.
+                        log("main", "calibration at \(mark)s: fixed spin took \(MainThreadSampler.spinMilliseconds()) ms; \(MainThreadSampler.deviceState())")
                     }
                 }
                 if let since = blockedSince, pong > since {
@@ -247,6 +251,23 @@ enum MainThreadSampler {
     static func describe(_ f: Frame) -> String {
         if let sym = f.symbol { return "\(f.image)`\(sym)" }
         return "\(f.image)+0x\(String(f.offset, radix: 16))"
+    }
+
+    /// A fixed amount of integer work (about 0.7 s warm on the iPad in a Debug build), timed, to tell a slow processor from slow code.
+    static func spinMilliseconds() -> Int {
+        let start = DispatchTime.now().uptimeNanoseconds
+        var x: UInt64 = 0x9E37_79B9_7F4A_7C15
+        for _ in 0..<4_000_000 { x ^= x << 13; x ^= x >> 7; x ^= x << 17 }
+        spinSink = x
+        return Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+    }
+    nonisolated(unsafe) private static var spinSink: UInt64 = 0
+
+    static func deviceState() -> String {
+        let p = ProcessInfo.processInfo
+        let thermal: String
+        switch p.thermalState { case .nominal: thermal = "nominal"; case .fair: thermal = "fair"; case .serious: thermal = "serious"; case .critical: thermal = "critical"; @unknown default: thermal = "?" }
+        return "thermal \(thermal), low power \(p.isLowPowerModeEnabled ? "on" : "off"), \(p.activeProcessorCount) of \(p.processorCount) cores active"
     }
 
     static func sample(_ thread: thread_t) -> [Frame] {

@@ -985,6 +985,21 @@ every such frame in the log with `atos --offset` (checked: `UIKitCore+0x8c158` �
 more reboot with Reel launched at about +0:45, then `Scripts/symbolicate-stall.sh` on the pulled log
 says, by UIKit function name, what the main thread spends 25 s on inside the boot window.
 
+**16 Nov 12:06, the profile (launch at +1:28): flat.** 14.8 s stall, CPU 13.5 s user, 0.0 kernel,
+53 samples at 4 Hz, and the hottest leaf frame has **4 hits**: `AttributeGraph+0xc6bc` ×4,
+`CoreFoundation+0x15f8` ×3, `AttributeGraph+0x4740` ×2, then singletons across UIKitCore,
+QuartzCore, libswiftCore (`swift_isEscapingClosureAtFileLocation`, `swift_beginAccess`),
+`__CFStringHash`. Symbolicated callers are the ordinary render path (`_UIHostingView.layoutSubviews`,
+`CA::Layer::layout_and_display_if_needed`, `_UIUpdateSequenceRunNext`). No hot loop, no hot
+function: ordinary SwiftUI render code executing uniformly slowly, in user mode, on a core we held
+91 % of the time. That is the signature of a **slow processor**, not slow code. The watch thread now
+times a fixed spin loop at each stack sample ("calibration at Ns: fixed spin took N ms; thermal …,
+low power …, N of N cores active"); the same spin warm on this iPad (Debug build) is about 0.7 s (7.1 s measured with the first, ten-times-longer loop)
+in the log just before the next reboot. Spin 20–50× slower in the window → the CPU is the cause
+(frequency capped or an efficiency core while iPadOS does its post-boot work), and Reel's only
+lever is to draw less in those two minutes. Spin normal → the slowness is specific to our main
+thread and the next look is at its scheduling (QoS, core affinity) in the window.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
