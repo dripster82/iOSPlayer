@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 import Library
 
 /// Adaptive poster grid: 3 across on phone, more on iPad.
@@ -34,6 +35,7 @@ struct ItemRow: View {
     @Binding var fixMatchTarget: MediaItem?
 
     var body: some View {
+        let _ = Diagnostics.count("shelf row body")
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {

@@ -1000,6 +1000,27 @@ in the log just before the next reboot. Spin 20–50× slower in the window → 
 lever is to draw less in those two minutes. Spin normal → the slowness is specific to our main
 thread and the next look is at its scheduling (QoS, core affinity) in the window.
 
+**16 Nov 12:33, both stories fall.** Two reboots were lost (the iPad rejoins the other Wi-Fi at boot
+and the Mac cannot reach it), then Paul opened Reel by hand at **+3:27 after a reboot and it stalled
+20.6 s** (CPU 19.3 s user, 0.0 kernel) while the watch thread's spin ran at the warm **0.75 s** every
+time, thermal nominal, 8 of 8 cores. So: not a boot window, not a slow processor. Nor the first
+launch after an install (11:30, 11:40, 12:10 and 12:29 were first launches and clean). The five
+whole stacks, fully symbolicated (`Scripts/symbolicate-stall.sh`, or frame by frame with `atos
+--offset`), all sit under one `_UIHostingView.layoutSubviews` → `ViewGraphRootValueUpdater.render`
+and show SwiftUI doing a *lot* of ordinary work: `ForEachList.Init.updateValue()` (a `ForEach`
+being rebuilt), `RendererEffectDisplayList.value`, `GraphHost.startTransactionUpdate` →
+`propagate_dirty`, and twice `Update.dispatchActions` → `UIView _updateTraitsIfNeeded` →
+`_wrappedProcessTraitChanges` **recursing 10–13 levels** of UIKit views → `UITraitCollection
+isEqual` / `_createTraitTokenSetForChangesFromTraitCollection`. A UIKit hierarchy that deep and
+that wide inside Home's hosting view points at the lazy shelves having built **every card** as a
+live view (each `PosterCard` carries a `NavigationLink`/`Button` and a UIKit context-menu
+interaction), which a horizontal `LazyHStack` does when its `ScrollView` is laid out at an
+unbounded or placeholder width at the first frame — plausibly what differs between a launch that
+goes straight to a sized window and one whose scene is sized late. Instruments for that: the busy
+line now counts `poster card body` and `shelf row body` (thousands → every card was built), and
+RootView logs "root size W×H, size class …" at the first frame and on every change (a 0×0 or
+screen-sized first layout followed by the real window size would be the smoking gun).
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

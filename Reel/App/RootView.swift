@@ -110,6 +110,13 @@ struct RootView: View {
             }
         }
         .onAppear { LaunchTrace.firstFrame(state: UIApplication.shared.applicationState); nav.searchIsAPage = sizeClass == .compact }
+        // The root's size at the first frame and on every change: a lazy shelf laid out at an unbounded
+        // or placeholder width would build every card, and the post-reboot stall looks like that.
+        .background(GeometryReader { g in
+            Color.clear.onChange(of: g.size, initial: true) { _, size in
+                Diagnostics.log("app", "root size \(Int(size.width))×\(Int(size.height)), size class \(sizeClass == .compact ? "compact" : sizeClass == .regular ? "regular" : "none")")
+            }
+        })
         .onChange(of: sizeClass) { _, c in nav.searchIsAPage = c == .compact }
         .fullScreenCover(isPresented: $player.isPresented) {
             PlayerView()

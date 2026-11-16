@@ -11,6 +11,7 @@ struct PosterCard: View {
     var wide = false
 
     var body: some View {
+        let _ = Diagnostics.count("poster card body")
         VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topTrailing) {
                 ArtworkImage(url: wide ? (ArtworkURL.still(item.stillPath) ?? item.backdropURL(size: .small) ?? item.posterURL) : item.posterURL, title: item.title, aspect: wide ? 16 / 9 : 2 / 3)
