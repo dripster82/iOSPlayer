@@ -45,18 +45,35 @@ struct RootView: View {
     @EnvironmentObject private var nav: AppNavigation
     @EnvironmentObject private var sync: SyncEngine
 
-    /// One launch with a plain label instead of the whole tree (set by `reel://debug-plain-root`,
-    /// cleared on use): if the post-reboot freeze still happens, the app shell is the cost, not the
-    /// split view and its screens.
-    @State private var plainRoot = UserDefaults.standard.bool(forKey: RootView.plainRootKey)
-    static let plainRootKey = "reel.debugPlainRootOnce"
+    /// One launch with a cut-down tree, to bisect the post-reboot freeze (set by
+    /// `reel://debug-plain-root?level=N`, cleared on use). 1: a plain label (cleared the shell and
+    /// iPadOS on 16 Nov: no freeze). 2: the split view with the sidebar and an empty detail.
+    /// 3: a navigation stack holding Home, no split view. 4: the split view with a plain detail stack.
+    @State private var testLevel = UserDefaults.standard.integer(forKey: RootView.plainRootKey)
+    static let plainRootKey = "reel.debugPlainRootLevel"
+
+    @ViewBuilder private var sidebar: some View {
+        List(selection: $nav.section) {
+            ForEach([AppSection.home, .tv, .films, .downloads, .files, .favourites, .history, .collections, .sources, .search]) { s in
+                Label(s.title, systemImage: s.icon).tag(s)
+            }
+        }
+        .navigationTitle("Reel")
+    }
 
     var body: some View {
         let _ = Diagnostics.count("Root body")
         Group {
-            if plainRoot {
-                Text("Plain root test").font(.largeTitle)
-                    .task { UserDefaults.standard.removeObject(forKey: RootView.plainRootKey); Diagnostics.log("app", "plain root test launch (flag cleared)") }
+            if testLevel > 0 {
+                Group {
+                    switch testLevel {
+                    case 2: NavigationSplitView { sidebar } detail: { Text("Detail") }
+                    case 3: NavigationStack { HomeView() }
+                    case 4: NavigationSplitView { sidebar } detail: { NavigationStack { Text("Detail") } }
+                    default: Text("Plain root test").font(.largeTitle)
+                    }
+                }
+                .task { UserDefaults.standard.removeObject(forKey: RootView.plainRootKey); Diagnostics.log("app", "root test level \(testLevel) launch (flag cleared)") }
             } else if !settings.hasCompletedOnboarding && library.sources().isEmpty {
                 OnboardingView()
             } else if let progress = sync.restore, !sync.restoreHidden {

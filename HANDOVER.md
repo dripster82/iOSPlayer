@@ -935,6 +935,18 @@ label for that one launch ("plain root test launch (flag cleared)" in the log). 
 the shell (`ReelApp` scene, environment objects, `preferredColorScheme`, the launch overlay) or
 iPadOS itself; freeze gone → bisect the split view and its screens next.
 
+**16 Nov 11:33, plain root: no freeze at all** (ready 0.14 s, first frame 0.41 s, scene active, not
+one busy line). The shell (`ReelApp` scene, environment objects, launch overlay, `preferredColorScheme`)
+and iPadOS are cleared; the cost is in the split view and its screens. A relaunch of the **normal**
+tree three minutes after that reboot (11:35) was clean too, so either only the first launch after a
+reboot pays, or the window had closed by then; the next reboot separates them (plain launch first,
+normal tree straight after). The flag is now levelled, `reel://debug-plain-root?level=N`
+(`reel.debugPlainRootLevel`, one launch, then cleared; the log says "root test level N launch"):
+1 plain label · 2 split view + sidebar `List` + empty detail · 3 `NavigationStack { HomeView() }`
+alone · 4 split view + sidebar + `NavigationStack { Text }`. Levels 2 and 3 split the tree in half:
+2 freezing blames the sidebar list / split view (UIKit-hosted cells, SF Symbol labels); 3 freezing
+blames Home's content.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
