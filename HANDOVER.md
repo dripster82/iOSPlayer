@@ -899,6 +899,29 @@ is a single pathological framework pass (then bisect Home's rows: a build with H
 label after a reboot would tell whether the content matters at all). Also worth one reboot each:
 does the **iPhone** show it, and does a **Release** build.
 
+**16 Nov 11:19, counted (build 493aff2).** Activation stall 13.8 s, "CPU 12.5s = user 12.5 +
+kernel 0.0, running; page-ins +648" and **no counters at all: zero Root bodies, zero Home bodies,
+zero library changes during it.** Twelve one-second samples, all framework-internal, cycling through
+`ViewGraph.setRoot` (at 2 s and again at 9 s), `GraphHost.flushTransactions`,
+`Update.dispatchActions` → UIKit ×18 → `_UITraitTokenSetEnumerate`, and
+`ViewRendererHost.performExternalUpdate` → UIKit → `class_createInstance`. So: not an invalidation
+storm (no body ran), not storage (no kernel time, few page-ins), but SwiftUI's own layout and
+hosting machinery — the UIKit hosting views inside `NavigationSplitView` / `NavigationStack` being
+re-rooted and trait-updated, in pure user CPU, for 13 s, with Reel's bodies never consulted. Reel has
+no `UIHostingController` of its own; the representables are all in the player. Every device run so
+far was a **Debug** build with Xcode's debug dylib (`Reel.debug.dylib`,
+`__debug_main_executable_dylib_entry_point` at the bottom of every stack). The next test is a
+Release build after a reboot: if it launches cleanly, the freeze is a Debug-build artefact that the
+TestFlight build never shows. If it does not, the next bisection is a one-shot debug flag that makes
+`RootView` show a plain label, to see whether the split view itself is the cost.
+
+The background stall the same minute was different from 10:46 and is Reel's to fix later:
+`scanForNewMediaIfDue` → `LibraryStore.items(kind:includeHidden:)` → `playable(_:)` →
+`MediaItem.files` / `.episodes` / `.show` — SwiftData relationship loads **per item on the main
+thread**, each a sqlite `pread`, 25.6 s wall for 0.6 s CPU (waiting on storage, then suspended by
+iOS in the background). An N+1 that is harmless warm and long cold; it should prefetch or run off
+the main actor.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
