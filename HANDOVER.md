@@ -922,6 +922,19 @@ thread**, each a sqlite `pread`, 25.6 s wall for 0.6 s CPU (waiting on storage, 
 iOS in the background). An N+1 that is harmless warm and long cold; it should prefetch or run off
 the main actor.
 
+**16 Nov 11:26, Release build: the same.** 26.8 s at activation, "CPU 25.5s = user 25.5 + kernel
+0.0, running", no debug dylib anywhere, no Reel frame, no body count. Not a Debug artefact: TestFlight
+users get this too. Twenty-five one-second samples cycled through the same framework places, now with
+`_NSStringFromUIContentSizeCategory` under `_UITraitTokenSetEnumerate` ×19-deep in UIKit under
+`Update.dispatchActions`, `_UIHostingView.requestUpdate` / `beginTransaction`, `setRoot` three
+times in a row at 15–19 s. UIKit is walking trait collections (content size category among them) for
+SwiftUI's hosting views, for 25 s of CPU, with Reel's bodies never run. A web search found no report
+of it. The bisection is armed: `reel://debug-plain-root` (debug builds; also droppable into
+`Documents/command.txt`) sets `reel.debugPlainRootOnce`, and the next launch's `RootView` is a plain
+label for that one launch ("plain root test launch (flag cleared)" in the log). Freeze still there →
+the shell (`ReelApp` scene, environment objects, `preferredColorScheme`, the launch overlay) or
+iPadOS itself; freeze gone → bisect the split view and its screens next.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

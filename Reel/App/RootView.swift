@@ -45,10 +45,19 @@ struct RootView: View {
     @EnvironmentObject private var nav: AppNavigation
     @EnvironmentObject private var sync: SyncEngine
 
+    /// One launch with a plain label instead of the whole tree (set by `reel://debug-plain-root`,
+    /// cleared on use): if the post-reboot freeze still happens, the app shell is the cost, not the
+    /// split view and its screens.
+    @State private var plainRoot = UserDefaults.standard.bool(forKey: RootView.plainRootKey)
+    static let plainRootKey = "reel.debugPlainRootOnce"
+
     var body: some View {
         let _ = Diagnostics.count("Root body")
         Group {
-            if !settings.hasCompletedOnboarding && library.sources().isEmpty {
+            if plainRoot {
+                Text("Plain root test").font(.largeTitle)
+                    .task { UserDefaults.standard.removeObject(forKey: RootView.plainRootKey); Diagnostics.log("app", "plain root test launch (flag cleared)") }
+            } else if !settings.hasCompletedOnboarding && library.sources().isEmpty {
                 OnboardingView()
             } else if let progress = sync.restore, !sync.restoreHidden {
                 RestoreView(progress: progress)
