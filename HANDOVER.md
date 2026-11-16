@@ -974,6 +974,17 @@ proportional to what is drawn, and the open question is whether every view is ~5
 thing (the sidebar `List`, SF Symbol labels, trait propagation through UIKit-hosted views) is
 pathological. Launches at +0:40 … +1:35 stalled; at +2:00, +3:03 and +3:05 they did not.
 
+Instruments cannot reach the iPad from this Mac over Wi-Fi (`xctrace record --device … ` sits at
+"Waiting for device to boot" and times out; `devicectl` works fine), so the in-app sampler is now a
+**4 Hz profiler**: during a stall it samples every tick, keeps a histogram, and at the end logs
+"stall profile, N samples at 4 Hz — leaf frames: …" and "… leaf < caller: …"; whole stacks are
+written at 2 s and every 5 s. Stripped system frames appear as `UIKitCore+0x8c158`; the Mac has the
+iPad's exact system symbols (iPad8,11 26.6.2), and `Scripts/symbolicate-stall.sh <reel.log>` resolves
+every such frame in the log with `atos --offset` (checked: `UIKitCore+0x8c158` → `UIApplicationMain +
+332`). The log queue is now user-initiated QoS so lines survive a kill on a busy device. Next: one
+more reboot with Reel launched at about +0:45, then `Scripts/symbolicate-stall.sh` on the pulled log
+says, by UIKit function name, what the main thread spends 25 s on inside the boot window.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

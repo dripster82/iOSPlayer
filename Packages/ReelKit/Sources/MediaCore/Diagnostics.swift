@@ -8,7 +8,7 @@ import Foundation
 /// user info; `safe(_:)` strips them.
 public enum Diagnostics {
     public static let maxBytes = 1_000_000
-    private static let queue = DispatchQueue(label: "reel.diagnostics", qos: .utility)
+    private static let queue = DispatchQueue(label: "reel.diagnostics", qos: .userInitiated)   // lines must land before a kill on a busy device
     private static var recentLines: [String] = []
     private static let recentLimit = 1000
 
@@ -121,6 +121,9 @@ public enum Diagnostics {
             var blockedSince: Date?
             var baseline: MainThreadSampler.Stats?
             var baseCounts: [String: Int] = [:]
+            var leafCounts: [String: Int] = [:]
+            var pairCounts: [String: Int] = [:]
+            var sampleCount = 0
             var lastTick = Date()
             var sampled: Set<Int> = []
             while true {
@@ -131,17 +134,28 @@ public enum Diagnostics {
                 DispatchQueue.main.async { pongLock.withLock { lastPong = Date() } }
                 let pong = pongLock.withLock { lastPong }
                 let silent = now.timeIntervalSince(pong)
-                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = []; baseline = MainThreadSampler.stats(mainThread); baseCounts = counterSnapshot() }
-                // While the main thread is silent, capture what it is doing once a second from 2 s in
-                // (for up to 40 s), with how much CPU it has used and how many pages the process has
-                // read from storage since the stall was noticed: computing shows as CPU close to the
-                // wall time, waiting on cold storage as little CPU and many page-ins.
-                if blockedSince != nil, tickLate < 1 {
-                    for mark in 2...40 where silent >= Double(mark) && !sampled.contains(mark) {
+                if silent >= 1, blockedSince == nil { blockedSince = pong; sampled = []; baseline = MainThreadSampler.stats(mainThread); baseCounts = counterSnapshot(); leafCounts = [:]; pairCounts = [:]; sampleCount = 0 }
+                // While the main thread is silent, sample its stack on every tick (4 Hz) into a
+                // histogram of leaf frames and leaf–caller pairs, reported when the stall ends; and
+                // every 5 s write one whole stack with how much CPU the thread has used and how many
+                // pages the process has read from storage since the stall was noticed (computing
+                // shows as CPU close to the wall time, waiting on cold storage as little CPU and
+                // many page-ins). Stripped system frames are "Image+0xOFFSET"; on the Mac,
+                // `atos -arch arm64e -o "~/Library/Developer/Xcode/iOS DeviceSupport/<device os>/Symbols/<path to Image>" --offset 0xOFFSET`
+                // names them.
+                if blockedSince != nil, tickLate < 1, silent >= 1 {
+                    let frames = MainThreadSampler.sample(mainThread)
+                    if let leaf = frames.first {
+                        sampleCount += 1
+                        let leafName = MainThreadSampler.describe(leaf)
+                        leafCounts[leafName, default: 0] += 1
+                        if frames.count > 1 { pairCounts["\(leafName) < \(MainThreadSampler.describe(frames[1]))", default: 0] += 1 }
+                    }
+                    let mark = Int(silent)
+                    if mark >= 2, mark % 5 == 0 || mark == 2, !sampled.contains(mark) {
                         sampled.insert(mark)
                         let stats = MainThreadSampler.stats(mainThread)
-                        let frames = MainThreadSampler.sample(mainThread)
-                        log("main", "main thread at \(mark)s into the stall\(MainThreadSampler.describe(stats, since: baseline)): \(frames.isEmpty ? "(no frames)" : frames.joined(separator: " < "))")
+                        log("main", "main thread at \(mark)s into the stall\(MainThreadSampler.describe(stats, since: baseline)): \(frames.isEmpty ? "(no frames)" : frames.map(MainThreadSampler.describe).joined(separator: " < "))")
                     }
                 }
                 if let since = blockedSince, pong > since {
@@ -155,6 +169,11 @@ public enum Diagnostics {
                         let during = backgroundStartInProgress?().map { "; \($0) was running" } ?? ""
                         let used = MainThreadSampler.describe(MainThreadSampler.stats(mainThread), since: baseline)
                         log("main", "main thread busy for \(String(format: "%.1f", busy))s (from \(f.string(from: since)) until \(f.string(from: pong)) UTC)\(used)\(counterDeltas(since: baseCounts))\(during)")
+                        if sampleCount >= 4 {
+                            let top = { (d: [String: Int], n: Int) in d.sorted { $0.value > $1.value }.prefix(n).map { "\($0.key) ×\($0.value)" }.joined(separator: "; ") }
+                            log("main", "stall profile, \(sampleCount) samples at 4 Hz — leaf frames: \(top(leafCounts, 12))")
+                            log("main", "stall profile, leaf < caller: \(top(pairCounts, 8))")
+                        }
                     }
                 }
             }
@@ -220,7 +239,17 @@ enum MainThreadSampler {
         return " (CPU \(String(format: "%.1f", now.cpu - since.cpu))s = user \(String(format: "%.1f", now.user - since.user)) + kernel \(String(format: "%.1f", now.system - since.system)), \(now.state); process page-ins +\(now.pageins - since.pageins), faults +\(now.faults - since.faults))"
     }
 
-    static func sample(_ thread: thread_t) -> [String] {
+    /// One stack frame: its image, its symbol when the image has one (system frameworks on a device are
+    /// stripped), and its offset from the image's load address, which `atos --offset` resolves on a Mac
+    /// that has the device's symbols.
+    struct Frame { var image: String; var symbol: String?; var offset: UInt }
+
+    static func describe(_ f: Frame) -> String {
+        if let sym = f.symbol { return "\(f.image)`\(sym)" }
+        return "\(f.image)+0x\(String(f.offset, radix: 16))"
+    }
+
+    static func sample(_ thread: thread_t) -> [Frame] {
         #if arch(arm64)
         var addresses: [UInt] = []
         guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
@@ -235,7 +264,7 @@ enum MainThreadSampler {
             addresses.append(strip(state.__lr))
             var fp = strip(state.__fp)
             let task = mach_task_self_
-            for _ in 0..<96 {
+            for _ in 0..<60 {
                 guard fp > 0x1000, fp & 0xF == 0 else { break }
                 var pair: (UInt64, UInt64) = (0, 0)
                 var outsize: vm_size_t = 0
@@ -251,26 +280,18 @@ enum MainThreadSampler {
         thread_resume(thread)
         guard kr == KERN_SUCCESS else { return [] }
         // Symbolicate only now, with the main thread running again (see above). System frameworks
-        // on a device have their symbol names stripped ("<redacted>"); a run of such frames from one
-        // image is folded to "CoreData ×9" so the named frames, Reel's among them, stay in view.
-        var names: [String] = []
-        var unnamedRun: (image: String, count: Int)?
-        func flush() { if let r = unnamedRun { names.append(r.count == 1 ? "\(r.image)" : "\(r.image) ×\(r.count)"); unnamedRun = nil } }
-        for addr in addresses {
+        // on a device have their symbol names stripped ("<redacted>"): those frames keep their
+        // offset from the image base for `atos` on the Mac.
+        return addresses.map { addr -> Frame in
             var info = Dl_info()
-            guard dladdr(UnsafeRawPointer(bitPattern: addr), &info) != 0 else { flush(); names.append(String(format: "0x%lx", addr)); continue }
+            guard dladdr(UnsafeRawPointer(bitPattern: addr), &info) != 0 else { return Frame(image: String(format: "0x%lx", addr), symbol: nil, offset: 0) }
             let image = info.dli_fname.map { (String(cString: $0) as NSString).lastPathComponent } ?? "?"
+            let offset = addr - UInt(bitPattern: info.dli_fbase)
             if let sym = info.dli_sname.map({ String(cString: $0) }), sym != "<redacted>" {
-                flush()
-                names.append("\(image)`\(sym)+\(addr - UInt(bitPattern: info.dli_saddr))")
-            } else if let r = unnamedRun, r.image == image {
-                unnamedRun = (image, r.count + 1)
-            } else {
-                flush(); unnamedRun = (image, 1)
+                return Frame(image: image, symbol: "\(sym)+\(addr - UInt(bitPattern: info.dli_saddr))", offset: offset)
             }
+            return Frame(image: image, symbol: nil, offset: offset)
         }
-        flush()
-        return names
         #else
         return []
         #endif
