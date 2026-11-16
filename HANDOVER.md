@@ -947,6 +947,22 @@ alone · 4 split view + sidebar + `NavigationStack { Text }`. Levels 2 and 3 spl
 2 freezing blames the sidebar list / split view (UIKit-hosted cells, SF Symbol labels); 3 freezing
 blames Home's content.
 
+**16 Nov 11:44, two launches in one reboot.** Level 1 armed, reboot 11:42:10, launch at 11:43:56
+(+1:46), then `--terminate-existing` relaunch of the normal tree at 11:44:09. The first process left
+**no log lines at all** (the `Diagnostics.log` queue is utility QoS; its writes were lost to the kill
+on a busy system — don't kill a process whose lines you need), but the flag was consumed (the
+second launch drew the normal tree: Home body ran). The normal tree, first drawn at +2:00 after the
+reboot, had a **2.6 s** stall instead of 25–36 s. Together with 11:33/11:35 that is twice: a plain
+launch first, then a normal launch soon after is nearly clean. Two readings still fit every run:
+(a) a per-boot cost that the first Reel process pays and the next does not, whatever the first drew;
+(b) a slow window of roughly 90 s after boot (every stalling launch so far was drawn at +0:40 to
++1:35; the clean ones at +2:00 and +3:05), during which everything is slow — the first VLC library
+start (20–33 s), SMB connects (16 s), Keychain, sqlite `pread`s — and SwiftUI's first big render
+with it. (b) fits the other slow things; (a) fits the CPU-bound reading less well, since the CPU was
+ours the whole time. Decisive next test: reboot, **touch nothing for three minutes**, then launch
+the normal tree as the first process. Stall → (a); clean → (b), and the fix is about what the user
+sees in that window, not about Reel's tree.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
