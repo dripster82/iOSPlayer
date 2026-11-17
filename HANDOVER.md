@@ -1056,6 +1056,22 @@ the loop. Next: the level-3 root test (`NavigationStack { HomeView() }`, no spli
 for the next launch; if it stalls the cost is in Home's UIKit-backed content, if not it is the
 split view / sidebar, and level 2 (split view with an empty detail) decides.
 
+**16 Nov 22:16 — the level-3 launch (Home in a NavigationStack, no split view) was clean**: ready
+0.22 s, first frame 0.48 s, no stall lines at all. Whether a reboot preceded it is unconfirmed (the
+previous process logged until 22:10:21; a new one started at 22:16:06). If Paul did reboot, the
+split view / sidebar is where the 36 s goes and level 2 confirms it; if not, the run says nothing.
+
+**17 Nov 07:43 — Reel exited during playback with no crash report.** The log stops at 07:43:46
+mid-play (S05E15 at 32 s); `systemCrashLogs` holds no Reel `.ips`, no JetsamEvent and no stackshot
+for that time, ten minutes later. The two minutes before: three episode switches in 90 s (E15 → E14
+→ E15, each "rebuilt VLC player: previous input still stopping"), and **two intro searches running
+at once** (E15's started 07:41:53, E14's 07:41:58), each a software x265 1080p 10-bit grab player at
+6× over SMB whose passes "gave up" after 20–33 s and restarted "from there" (9 grabs in two minutes,
+700–840 frames delivered each). `ShowMarkers.locateIntro` never checks that its episode is still
+the one playing, so a search for a superseded episode runs its full budget (2 stretches × 4 passes)
+alongside the new one's. Fix to make regardless of the exit's cause: cancel the search (close its
+grab) when the player loads a different item, and allow one search at a time.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
