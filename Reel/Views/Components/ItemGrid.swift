@@ -7,7 +7,6 @@ struct ItemGrid: View {
     let items: [MediaItem]
     @Binding var fixMatchTarget: MediaItem?
     @State private var menuItem: MediaItem?
-    @State private var artworkTarget: MediaItem?
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)], spacing: 14) {
@@ -17,11 +16,10 @@ struct ItemGrid: View {
                 }
                 .buttonStyle(.plain)
                 .itemLongPress(item, opens: $menuItem)
-                .itemActionsDialog(item, selection: $menuItem, fixMatchTarget: $fixMatchTarget, artworkTarget: $artworkTarget)
             }
         }
         .padding(.horizontal)
-        .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
+        .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget)
     }
 }
 
@@ -38,7 +36,6 @@ struct ItemRow: View {
     var isContinueWatching = false
     @Binding var fixMatchTarget: MediaItem?
     @State private var menuItem: MediaItem?
-    @State private var artworkTarget: MediaItem?
 
     var body: some View {
         let _ = Diagnostics.count("shelf row body")
@@ -61,12 +58,11 @@ struct ItemRow: View {
                             }
                             .buttonStyle(.plain)
                             .itemLongPress(item, opens: $menuItem)
-                            .itemActionsDialog(item, selection: $menuItem, fixMatchTarget: $fixMatchTarget, artworkTarget: $artworkTarget, inContinueWatching: isContinueWatching)
                         }
                     }.padding(.horizontal)
                 }
             }
-            .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
+            .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
         }
     }
 }

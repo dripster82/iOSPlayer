@@ -1168,6 +1168,17 @@ a reboot: no stall at activation and none later (there is no menu commit any mor
 `confirmationDialog` modifier is assumed cheap, and if a stall remains it is the first suspect, then
 the 7.8 s of level 5 (the rest of Home's hierarchy).
 
+**17 Nov 15:09 — a per-card `confirmationDialog` costs the same as a per-card context menu.** With
+the dialog modifier on every card, the first launch after a reboot stalled 22.9 s (21.8 s user CPU,
+71 samples, no Reel body) at activation, the same frames. So presentation modifiers per element
+are UIKit-backed at launch too. **Now: one dialog per shelf or grid.** Each card publishes its
+bounds through `anchorPreference` (`ItemAnchorKey`, pure SwiftUI); the shelf's `ItemActionsDialog`
+reads them with `overlayPreferenceValue`, places an invisible, non-hit-testable stand-in over the
+pressed card and presents the `confirmationDialog` from that, so it anchors to the card. The only
+per-card addition is the high-priority `LongPressGesture`. Checked on the simulator: long press
+opens the dialog on the card, tap navigates. If the next post-reboot launch still stalls, the
+gesture is the last per-card suspect and would move to the shelf.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

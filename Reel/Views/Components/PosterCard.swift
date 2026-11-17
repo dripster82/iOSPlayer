@@ -63,28 +63,41 @@ struct PosterCard: View {
     }
 }
 
-/// The actions a long press on a poster offers, as a dialog anchored to the card. Nothing is made
-/// until the press: a `.contextMenu` on every card is a UIKit interaction on a nested hosting view
-/// each, and creating them held the main thread for 10–30 s after a reboot (HANDOVER, 17 Nov 2026).
+/// The actions a long press on a poster offers: one dialog per shelf or grid, anchored to the
+/// pressed card through its anchor preference. Nothing UIKit-backed exists per card: a `.contextMenu`
+/// on every card is a UIKit interaction on a nested hosting view each, and a `.confirmationDialog`
+/// per card costs the same way; creating either held the main thread for 10–30 s after a reboot
+/// (HANDOVER, 17 Nov 2026).
 struct ItemActionsDialog: ViewModifier {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
-    let item: MediaItem
-    /// The shelf's or grid's pressed item; this card's dialog shows while it is this item.
-    @Binding var selection: MediaItem?
+    /// The pressed card's item; nil closes the dialog.
+    @Binding var item: MediaItem?
     @Binding var fixMatchTarget: MediaItem?
-    @Binding var artworkTarget: MediaItem?
     /// In the Continue Watching row the destructive action is leaving that row, not hiding the
     /// title from the library: a long press there is about the list, not the film or show.
     var inContinueWatching = false
+    @State private var artworkTarget: MediaItem?
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(item.title, isPresented: Binding(get: { selection?.itemKey == item.itemKey }, set: { if !$0, selection?.itemKey == item.itemKey { selection = nil } }), titleVisibility: .visible) {
-            actions
-        }
+        content
+            .overlayPreferenceValue(ItemAnchorKey.self) { anchors in
+                // An invisible stand-in over the pressed card is the dialog's source.
+                GeometryReader { proxy in
+                    let r = item.flatMap { anchors[$0.itemKey] }.map { proxy[$0] } ?? .zero
+                    Color.clear
+                        .frame(width: max(r.width, 1), height: max(r.height, 1))
+                        .offset(x: r.minX, y: r.minY)
+                        .confirmationDialog(item?.title ?? "", isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } }), titleVisibility: .visible, presenting: item) { item in
+                            actions(for: item)
+                        }
+                }
+                .allowsHitTesting(false)
+            }
+            .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
     }
 
-    @ViewBuilder private var actions: some View {
+    @ViewBuilder private func actions(for item: MediaItem) -> some View {
         Button { library.toggleFavourite(item.itemKey) } label: {
             Label(library.isFavourite(item.itemKey) ? "Remove from Favourites" : "Add to Favourites", systemImage: library.isFavourite(item.itemKey) ? "heart.slash" : "heart")
         }
@@ -119,14 +132,22 @@ struct ItemActionsDialog: ViewModifier {
     }
 }
 
+/// Each card's bounds, by item key, for the shelf's dialog to anchor to.
+struct ItemAnchorKey: PreferenceKey {
+    static let defaultValue: [String: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) { value.merge(nextValue()) { $1 } }
+}
+
 extension View {
-    /// This card's dialog of item actions, shown while `selection` is its item (set by `itemLongPress`).
-    func itemActionsDialog(_ item: MediaItem, selection: Binding<MediaItem?>, fixMatchTarget: Binding<MediaItem?>, artworkTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
-        modifier(ItemActionsDialog(item: item, selection: selection, fixMatchTarget: fixMatchTarget, artworkTarget: artworkTarget, inContinueWatching: inContinueWatching))
+    /// The shelf's or grid's one dialog of item actions, opened by `itemLongPress` on a card.
+    func itemActionsDialog(for item: Binding<MediaItem?>, fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
+        modifier(ItemActionsDialog(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
     }
-    /// A long press on a card selects its item for the shelf's or grid's dialogs.
+    /// A long press on a card opens its shelf's or grid's `itemActionsDialog` for `item`, anchored
+    /// to this card.
     func itemLongPress(_ item: MediaItem, opens target: Binding<MediaItem?>) -> some View {
         // High priority: once the press is long the card's link or button must not fire on release.
         highPriorityGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in target.wrappedValue = item })
+            .anchorPreference(key: ItemAnchorKey.self, value: .bounds) { [item.itemKey: $0] }
     }
 }
