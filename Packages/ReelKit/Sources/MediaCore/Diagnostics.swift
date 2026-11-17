@@ -1,4 +1,5 @@
 import Foundation
+import ReelStackSample
 
 /// A small on-device log of what the app did: player state changes, reconnects, source connections,
 /// sync results and app lifecycle. Settings → Diagnostics shows it and can share the file.
@@ -276,34 +277,11 @@ enum MainThreadSampler {
     private static let scratch = UnsafeMutablePointer<UInt>.allocate(capacity: 64)
 
     static func sample(_ thread: thread_t) -> [Frame] {
-        #if arch(arm64)
-        var count = 0
-        var state = arm_thread_state64_t()
-        var stateCount = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
-        let strip: (UInt64) -> UInt = { UInt($0 & 0x0000_007F_FFFF_FFFF) }   // pointer authentication bits off (arm64e)
-        guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
-        let kr = withUnsafeMutablePointer(to: &state) { ptr -> kern_return_t in
-            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(stateCount)) { thread_get_state(thread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &stateCount) }
-        }
-        if kr == KERN_SUCCESS {
-            scratch[0] = strip(state.__pc); scratch[1] = strip(state.__lr); count = 2
-            var fp = strip(state.__fp)
-            let task = mach_task_self_
-            var pair: (UInt64, UInt64) = (0, 0)
-            while count < 64 {
-                guard fp > 0x1000, fp & 0xF == 0 else { break }
-                var outsize: vm_size_t = 0
-                let read = withUnsafeMutablePointer(to: &pair) { vm_read_overwrite(task, vm_address_t(fp), 16, vm_address_t(UInt(bitPattern: $0)), &outsize) }
-                guard read == KERN_SUCCESS, outsize == 16 else { break }
-                let next = strip(pair.0), ret = strip(pair.1)
-                guard ret > 0x1000 else { break }
-                scratch[count] = ret; count += 1
-                guard next > fp else { break }   // stacks grow down: the caller's frame is higher
-                fp = next
-            }
-        }
-        thread_resume(thread)
-        guard kr == KERN_SUCCESS else { return [] }
+        // The suspend, the frame-pointer walk and the resume are C (`reel_sample_thread`): between
+        // suspending the main thread and resuming it nothing may take a lock that thread could
+        // hold, and Swift's own generic code takes the runtime's metadata lock (see the header).
+        let count = Int(reel_sample_thread(thread, scratch, 64))
+        guard count > 0 else { return [] }
         let addresses = (0..<count).map { scratch[$0] }
         // Symbolicate only now, with the main thread running again (see above). System frameworks
         // on a device have their symbol names stripped ("<redacted>"): those frames keep their
@@ -318,8 +296,5 @@ enum MainThreadSampler {
             }
             return Frame(image: image, symbol: nil, offset: offset)
         }
-        #else
-        return []
-        #endif
     }
 }

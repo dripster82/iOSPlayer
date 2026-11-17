@@ -31,7 +31,8 @@ let package = Package(
     ],
     targets: [
         // Pure Swift: models, filename parser, classifier, item keys. No Apple-only imports.
-        .target(name: "MediaCore"),
+        .target(name: "ReelStackSample"),
+        .target(name: "MediaCore", dependencies: ["ReelStackSample"]),
 
         // TMDb client, response cache, artwork URL builder. Foundation only.
         .target(name: "Metadata", dependencies: ["MediaCore"]),

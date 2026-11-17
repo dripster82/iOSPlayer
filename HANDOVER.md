@@ -1127,6 +1127,18 @@ attaches the menus should be short; if that second commit is the 20 s instead, t
 menus' creation, not the activation walk, and the per-card menu has to go (one shared presentation
 from a long press).
 
+**17 Nov 13:31 — the deferred-menu build after a confirmed reboot: the app froze again at the
+10 s sample** and iOS relaunched it in the background at 13:36:50, exactly the 12:43 pattern. The
+stall was under way (8.4 s CPU at 10 s, the same frames), so the deferral has not been measured. The
+freeze is the sampler once more: the suspend-to-resume stretch was still Swift, and in a Debug
+build `withUnsafeMutablePointer(to: &pair)` on a `(UInt64, UInt64)` and the `arm_thread_state64_t`
+rebinding go through unspecialised generic entry points that fetch type metadata, which takes the
+Swift runtime's metadata lock, the very lock the main thread holds in `swift_getGenericMetadata`
+throughout these stalls. **Fixed: the walk is now C** (`Packages/ReelKit/Sources/ReelStackSample`,
+`reel_sample_thread`), with no Swift between `thread_suspend` and `thread_resume`. Both freezes
+were Debug builds; Release specialises those calls, which is why the 11:26 Release run sampled
+without freezing.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
