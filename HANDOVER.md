@@ -1158,12 +1158,15 @@ shelf), then measure the menu commit again; and the ×30 post-reboot factor on t
 unexplained.
 
 **Fix (17 Nov, afternoon): no per-card context menu.** A long press on a poster
-(`itemLongPress`) sets the shelf's or grid's one `menuItem`, and a single `itemActionsDialog`
-(a `confirmationDialog` with the same actions as the old menu, collections flattened to one line
-each) presents it; nothing per card exists until someone asks. The 2.5 s deferral, the
-`interactionsReady` environment value and root test level 5 are gone. To verify after a reboot: no
-stall at activation and no later one either (there is no menu commit any more); the remaining
-per-launch cost to watch is the 7.8 s level 5 showed, which is the rest of Home's hierarchy.
+(`itemLongPress`, a high-priority `LongPressGesture` so the card's link does not fire on release)
+sets the shelf's or grid's `menuItem`, and the card's `itemActionsDialog` (a `confirmationDialog`
+anchored to the card, with the old menu's actions, collections flattened to one line each) shows
+while `menuItem` is its item; the artwork sheet is one per shelf. No UIKit interaction exists per
+card. Checked on the simulator: tap navigates, long press opens the dialog on the card. The 2.5 s
+deferral, the `interactionsReady` environment value and root test level 5 are gone. To verify after
+a reboot: no stall at activation and none later (there is no menu commit any more); the per-card
+`confirmationDialog` modifier is assumed cheap, and if a stall remains it is the first suspect, then
+the 7.8 s of level 5 (the rest of Home's hierarchy).
 
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
