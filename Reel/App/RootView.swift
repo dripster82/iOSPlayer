@@ -49,8 +49,17 @@ struct RootView: View {
     /// `reel://debug-plain-root?level=N`, cleared on use). 1: a plain label (cleared the shell and
     /// iPadOS on 16 Nov: no freeze). 2: the split view with the sidebar and an empty detail.
     /// 3: a navigation stack holding Home, no split view. 4: the split view with a plain detail stack.
-    @State private var testLevel = UserDefaults.standard.integer(forKey: RootView.plainRootKey)
+    /// 5: the normal root with the poster cards' context menus left off (`noContextMenus`).
+    @State private var testLevel: Int = { _ = RootView.noContextMenus; return UserDefaults.standard.integer(forKey: RootView.plainRootKey) }()
     static let plainRootKey = "reel.debugPlainRootLevel"
+    /// Level 5, read and cleared on the first use: the full tree minus one UIKit interaction per card,
+    /// to see whether the context menus are what the activation trait change walks for 30 s.
+    static let noContextMenus: Bool = {
+        guard UserDefaults.standard.integer(forKey: plainRootKey) == 5 else { return false }
+        UserDefaults.standard.removeObject(forKey: plainRootKey)
+        Diagnostics.log("app", "root test level 5 launch: card context menus off (flag cleared)")
+        return true
+    }()
 
     @ViewBuilder private var sidebar: some View {
         List(selection: $nav.section) {

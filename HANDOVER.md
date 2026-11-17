@@ -1084,6 +1084,22 @@ sidebar, empty detail) is armed for the next launch: a stall there puts the cost
 and its sidebar (the stacks' `_vibrancy` and "rendering mode did change" traits fit the sidebar's
 glass material); a clean one, with level 3 clean too, leaves the pairing of split view and Home.
 
+**17 Nov 12:58 — level 2 after a confirmed reboot (12:57) was clean**: ready 0.19 s, first frame
+0.48 s, no stall (the 20 s "stall" at 12:59 has 0.1 s CPU and a 21 s spin: the process suspended in
+the background, not a stall). So the sidebar and split view alone cost nothing; the detail's
+hierarchy is what the work walks. Symbolicated leaf frames across the profiles: `AG::Graph::UpdateStack::update/push`,
+`AG::Graph::propagate_dirty`, `swift_getGenericMetadata` cache lookups, `-[UITraitCollection _valueForTraitWithMetadata:]`,
+`_createTraitTokenSetForChangesFromTraitCollection:` — SwiftUI graph work plus UIKit trait reads,
+nothing of Reel's. The stall starts in the same second as "scene active" and nothing Reel logs
+falls inside it: the commit it sits in is the one activation causes, when UIKit flips the
+active-appearance trait on every view under the hosting view and SwiftUI re-resolves platform
+colours (`PlatformViewChild.updateValue` → `Color.resolve`) — exactly the frames seen. The same
+flip on a warm launch or an app-switcher round trip costs 1–2 s, so a per-boot factor of ~30
+remains unexplained. Two one-shot tests queued: **level 3 armed** (Home in a NavigationStack, no
+split view; the 22:16 run of it was clean but its reboot is unconfirmed) and **level 5** added
+(`RootView.noContextMenus`: the normal root with the poster cards' `.contextMenu` left off, one
+UIKit interaction view fewer per card; arm with `reel://debug-plain-root?level=5`).
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

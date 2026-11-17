@@ -74,7 +74,10 @@ struct ItemContextMenu: ViewModifier {
     var inContinueWatching = false
     @State private var artworkTarget: MediaItem?
 
-    func body(content: Content) -> some View {
+    @ViewBuilder func body(content: Content) -> some View {
+        if RootView.noContextMenus { content } else { menu(content) }
+    }
+    private func menu(_ content: Content) -> some View {
         content.contextMenu {
             Button { library.toggleFavourite(item.itemKey) } label: {
                 Label(library.isFavourite(item.itemKey) ? "Remove from Favourites" : "Add to Favourites", systemImage: library.isFavourite(item.itemKey) ? "heart.slash" : "heart")
