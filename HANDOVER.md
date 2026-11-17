@@ -1179,6 +1179,17 @@ per-card addition is the high-priority `LongPressGesture`. Checked on the simula
 opens the dialog on the card, tap navigates. If the next post-reboot launch still stalls, the
 gesture is the last per-card suspect and would move to the shelf.
 
+**17 Nov 15:3x — the gesture cannot move to the shelf.** A press-then-drag sequence
+(`LongPressGesture.sequenced(before: DragGesture(minimumDistance: 0))`) on the shelf, whether high
+priority or simultaneous, held the scroll view's pan for every drag that began on a card (checked on
+the iPhone simulator against a build with the gesture switched off, which scrolled). A plain
+`LongPressGesture` per card, high priority, scrolls fine (it fails within ten points of movement),
+opens the shelf's one dialog anchored to the card, and keeps the card's link from firing on
+release. That is the shipped shape: per card one `LongPressGesture` + an `anchorPreference`, per
+shelf one `confirmationDialog` + one artwork sheet. Whether a plain gesture per card costs anything
+at launch is the open question for the next post-reboot measurement (level 5, with nothing per
+card, was 7.8 s).
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

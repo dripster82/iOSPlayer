@@ -64,10 +64,10 @@ struct PosterCard: View {
 }
 
 /// The actions a long press on a poster offers: one dialog per shelf or grid, anchored to the
-/// pressed card through its anchor preference. Nothing UIKit-backed exists per card: a `.contextMenu`
-/// on every card is a UIKit interaction on a nested hosting view each, and a `.confirmationDialog`
-/// per card costs the same way; creating either held the main thread for 10–30 s after a reboot
-/// (HANDOVER, 17 Nov 2026).
+/// pressed card. Per card there is only a `LongPressGesture`: a `.contextMenu` or a
+/// `.confirmationDialog` on every card is a UIKit object per card at launch, and creating them held
+/// the main thread for 10–30 s after a reboot (HANDOVER, 17 Nov 2026). A press-then-drag sequence on
+/// the shelf was tried instead and held the scroll view's pan for every drag that began on a card.
 struct ItemActionsDialog: ViewModifier {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
@@ -132,7 +132,7 @@ struct ItemActionsDialog: ViewModifier {
     }
 }
 
-/// Each card's bounds, by item key, for the shelf's dialog to anchor to.
+/// Each card's bounds, by item key, for the shelf's dialog to find the pressed card and anchor to it.
 struct ItemAnchorKey: PreferenceKey {
     static let defaultValue: [String: Anchor<CGRect>] = [:]
     static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) { value.merge(nextValue()) { $1 } }
@@ -144,9 +144,9 @@ extension View {
         modifier(ItemActionsDialog(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
     }
     /// A long press on a card opens its shelf's or grid's `itemActionsDialog` for `item`, anchored
-    /// to this card.
+    /// to this card. High priority, so the card's link does not fire on release; a moving finger
+    /// fails the press within ten points and scrolls.
     func itemLongPress(_ item: MediaItem, opens target: Binding<MediaItem?>) -> some View {
-        // High priority: once the press is long the card's link or button must not fire on release.
         highPriorityGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in target.wrappedValue = item })
             .anchorPreference(key: ItemAnchorKey.self, value: .bounds) { [item.itemKey: $0] }
     }

@@ -59,7 +59,8 @@ struct ItemRow: View {
                             .buttonStyle(.plain)
                             .itemLongPress(item, opens: $menuItem)
                         }
-                    }.padding(.horizontal)
+                    }
+                    .padding(.horizontal)
                 }
             }
             .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
