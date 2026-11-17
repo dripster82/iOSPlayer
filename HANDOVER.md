@@ -1206,6 +1206,16 @@ is true for 1.5 s after a press, `AppNavigation.binding(for:)` ignores a push in
 the shelf's `onTap` button does nothing. Checked on the iPhone simulator: drag from a card scrolls,
 long press opens the dialog on the card with no navigation or playback, tap opens the title.
 
+**17 Nov 16:17 — fixed.** Reboot at 16:15:47, Reel opened at 16:17:18: ready 0.56 s, first frame
+0.65 s, scene active at +0.75 s, then one 1.8 s busy spell (0.6 s CPU: Home body, two shelf rows)
+and nothing else. No activation stall at all, against 30–36 s at the start of the day. The whole
+post-reboot cost was UIKit objects created per poster card inside the activation commit (context
+menu interactions, then dialogs, then plain gestures); with nothing per card the commit is cheap
+even cold. Why those objects cost ~30× more in the first launch after a reboot than warm was never
+explained; it no longer matters for Home, but any future per-element UIKit-backed modifier on a
+shelf (`.contextMenu`, `.sheet`, `.confirmationDialog`, `.popover`, any gesture) will bring it back,
+and the first launch after a reboot is the test.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
