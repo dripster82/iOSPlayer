@@ -1077,6 +1077,13 @@ before `engine.load`. A cancelled episode is not marked searched, so its search 
 plays. Whether this was the 07:43 exit's cause is unproven (no report exists); the next such exit
 should be checked the same way (`devicectl device copy from --domain-type systemCrashLogs`).
 
+**17 Nov 12:53 — the normal root stalled again: 30.3 s (29.1 s user CPU), 97 samples**, the same
+flat AttributeGraph profile, during it Home body ×2, Root body ×1, shelf row body ×4 and no card.
+Build 301a069 (intro-search cancel) changes nothing here, as expected. Level 2 (split view and
+sidebar, empty detail) is armed for the next launch: a stall there puts the cost in the split view
+and its sidebar (the stacks' `_vibrancy` and "rendering mode did change" traits fit the sidebar's
+glass material); a clean one, with level 3 clean too, leaves the pairing of split view and Home.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
