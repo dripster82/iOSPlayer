@@ -253,6 +253,9 @@ enum ShowMarkers {
 
         /// libvlc's teardown blocks, so it runs off the main thread.
         func close() async { guard let grabber else { return }; await Task.detached(priority: .utility) { grabber.close() }.value }
+        /// Ends the run in flight now and closes the player; see `FrameGrabber.cancel`.
+        func cancel() { grabber?.cancel() }
+        var isCancelled: Bool { grabber?.isCancelled ?? false }
     }
     static let printsVersion = 6   // 6: taken after a 20 s run-up, past the decoder's grey placeholder
 
@@ -433,6 +436,20 @@ enum ShowMarkers {
     }
 
     private static var searching: Set<String> = []
+    /// The grab of each search in flight, by episode, so a load of another episode can end it.
+    private static var activeSearches: [String: Grab] = [:]
+
+    /// Ends every intro search except the one for `itemKey`. Two searches at once are two software
+    /// 1080p decoders at speed over the share on top of the player, and a search for an episode no
+    /// longer playing has nothing to tell anyone until that episode plays again (it is not marked
+    /// searched, so it runs then).
+    @MainActor
+    static func cancelIntroSearches(except itemKey: String?) {
+        for (key, grab) in activeSearches where key != itemKey {
+            grab.cancel()
+            Diagnostics.log("player", "intro search in \(key.prefix(40)) cancelled: another episode is playing")
+        }
+    }
     /// What the continuous pass has seen so far: the last three matching frames and the start they imply.
     private final class Found: @unchecked Sendable {
         var recent: [(time: TimeInterval, start: TimeInterval, similarity: Double, pattern: Int, print: Int)] = []
@@ -469,12 +486,14 @@ enum ShowMarkers {
         var assertion = UIBackgroundTaskIdentifier.invalid
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Reel intro search") { UIApplication.shared.endBackgroundTask(assertion); assertion = .invalid }
         Diagnostics.log("player", "looking for the intro in \(itemKey.prefix(40)): a frame a second from \(Int(firstFrom))s to \(Int(limit))s, then from the top, against \(patterns.count) pattern(s) (\(patterns.map(\.label).joined(separator: ", ")))")
+        let grab = Grab(url: url, softwareDecoding: softwareDecoding)
+        activeSearches[itemKey] = grab
         Task {
             defer {
                 searching.remove(itemKey)
+                activeSearches[itemKey] = nil
                 if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) }
             }
-            let grab = Grab(url: url, softwareDecoding: softwareDecoding)
             #if DEBUG
             let dump = Diagnostics.fileURL.deletingLastPathComponent().appendingPathComponent("intro-search", isDirectory: true).appendingPathComponent(String(itemKey.suffix(8)), isDirectory: true)
             try? FileManager.default.removeItem(at: dump)
@@ -514,6 +533,8 @@ enum ShowMarkers {
                     return false
                     }
                     looked = seen.looked
+                    // Cancelled by a load of another episode: leave the episode unsearched for next time.
+                    if grab.isCancelled { found(nil); return }
                     guard let last else { Diagnostics.log("player", "intro pass \(Int(from))–\(Int(to))s gave no frames"); break }
                     if last >= to - 2 || seen.start != nil { break }
                     Diagnostics.log("player", "intro pass stalled at \(Int(last))s of \(Int(to))s; going on from there")

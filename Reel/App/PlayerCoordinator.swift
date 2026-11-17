@@ -473,6 +473,8 @@ final class PlayerCoordinator: ObservableObject {
                 creditsStart = nil; creditsGrace = 0
                 resetUpNext()
                 if !VLCPlaybackEngine.libraryIsReady { loadingMessage = "Preparing the player…" }
+                // A search still looking for the intro of the last episode would decode alongside this one.
+                ShowMarkers.cancelIntroSearches(except: item.itemKey)
                 engine.load(playbackItem, options: opts)
                 scheduleScrubThumbnails(key: item.itemKey, url: url)
                 if let show = item.show, show.kind == .show, resume < 600 { scheduleIntroSearch(showKey: show.itemKey, key: item.itemKey, url: url) }

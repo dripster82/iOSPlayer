@@ -1069,8 +1069,13 @@ at once** (E15's started 07:41:53, E14's 07:41:58), each a software x265 1080p 1
 6× over SMB whose passes "gave up" after 20–33 s and restarted "from there" (9 grabs in two minutes,
 700–840 frames delivered each). `ShowMarkers.locateIntro` never checks that its episode is still
 the one playing, so a search for a superseded episode runs its full budget (2 stretches × 4 passes)
-alongside the new one's. Fix to make regardless of the exit's cause: cancel the search (close its
-grab) when the player loads a different item, and allow one search at a time.
+alongside the new one's. **Fixed (17 Nov):** `FrameGrabber.cancel()` ends the run in flight at once
+(its `frames` call returns what it has) and closes the player; `ShowMarkers` keeps the grab of each
+search in `activeSearches` and `cancelIntroSearches(except:)` cancels every other episode's, logged
+as "intro search in … cancelled: another episode is playing"; `PlayerCoordinator` calls it just
+before `engine.load`. A cancelled episode is not marked searched, so its search runs when it next
+plays. Whether this was the 07:43 exit's cause is unproven (no report exists); the next such exit
+should be checked the same way (`devicectl device copy from --domain-type systemCrashLogs`).
 
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is

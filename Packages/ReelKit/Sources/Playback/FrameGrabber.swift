@@ -95,6 +95,18 @@ public final class FrameGrabber: @unchecked Sendable {
 
     /// How many of the last run's delivered frames were the same picture over again (see `frames`).
     public private(set) var lastRunRepeats = 0
+    /// The run in flight, so `cancel` can end it at once rather than at the stale timeout.
+    private var current: RunState?
+    private var cancelled = false
+    public var isCancelled: Bool { lock.withLock { cancelled } }
+
+    /// Ends the run in flight now (its `frames` call returns what it has) and tears the player down;
+    /// later runs return nothing. For a search whose episode is no longer the one playing.
+    public func cancel() {
+        lock.lock(); cancelled = true; let state = current; current = nil; lock.unlock()
+        if let state { state.lock.withLock { state.finish() } }
+        closeSession()
+    }
 
     /// VLC's output while the decoder has nothing yet (after a seek, until the next keyframe): a
     /// uniform mid-grey. Not a picture from the file, so never kept.
@@ -114,15 +126,17 @@ public final class FrameGrabber: @unchecked Sendable {
     /// picture. Returns what arrived once the run is covered, or when nothing more comes for a while.
     @discardableResult
     public func frames(from: TimeInterval, count: Int, spacing: TimeInterval, rate: Float = 8, each: (@Sendable (TimeInterval, CGImage) -> Bool)? = nil) async -> [(time: TimeInterval, image: CGImage)] {
+        guard !isCancelled else { return [] }
         // The previous run's player is torn down off the main thread (libvlc blocks for it).
         let opened: Bool = await Task.detached(priority: .utility) { [self] in openSession() }.value
-        guard opened, let session = lock.withLock({ session }) else { return [] }
+        guard opened, !isCancelled, let session = lock.withLock({ session }) else { return [] }
         let targets = (0..<count).map { from + TimeInterval($0) * spacing }
         let end = targets.last ?? from
         let begin = max(0, from - Self.leadIn)
         return await withCheckedContinuation { (continuation: CheckedContinuation<[(TimeInterval, CGImage)], Never>) in
             let state = RunState(continuation: continuation)
             lock.lock()
+            current = state
             onFrame = { [weak self] image, time in
                 guard let self else { return }
                 var stop = false
@@ -189,7 +203,7 @@ public final class FrameGrabber: @unchecked Sendable {
     public func frame(at seconds: TimeInterval) async -> (time: TimeInterval, image: CGImage)? {
         await frames(from: seconds, count: 1, spacing: 1).first
     }
-    private func clearHandler() { lock.lock(); onFrame = nil; lock.unlock() }
+    private func clearHandler() { lock.lock(); onFrame = nil; current = nil; lock.unlock() }
 
     /// Stops and releases the stream; the teardown runs on its own thread and returns at once.
     public func close() { closeSession() }
