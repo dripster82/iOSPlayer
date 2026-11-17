@@ -64,20 +64,22 @@ struct PosterCard: View {
 }
 
 /// The actions a long press on a poster offers: one dialog per shelf or grid, anchored to the
-/// pressed card. Per card there is only a `LongPressGesture`: a `.contextMenu` or a
-/// `.confirmationDialog` on every card is a UIKit object per card at launch, and creating them held
-/// the main thread for 10–30 s after a reboot (HANDOVER, 17 Nov 2026). A press-then-drag sequence on
-/// the shelf was tried instead and held the scroll view's pan for every drag that began on a card.
+/// pressed card. Per card there is only an anchor preference: a `.contextMenu`, a
+/// `.confirmationDialog` or even a plain `LongPressGesture` on every card is a UIKit object per
+/// card at launch, and creating them held the main thread for 15–30 s after a reboot (HANDOVER,
+/// 17 Nov 2026). The press itself comes from `LongPressRelay`, one recogniser on the window.
 struct ItemActionsDialog: ViewModifier {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
-    /// The pressed card's item; nil closes the dialog.
-    @Binding var item: MediaItem?
+    @ObservedObject private var relay = LongPressRelay.shared
+    let items: [MediaItem]
     @Binding var fixMatchTarget: MediaItem?
     /// In the Continue Watching row the destructive action is leaving that row, not hiding the
     /// title from the library: a long press there is about the list, not the film or show.
     var inContinueWatching = false
+    @State private var item: MediaItem?
     @State private var artworkTarget: MediaItem?
+    @State private var handled: UUID?
 
     func body(content: Content) -> some View {
         content
@@ -90,6 +92,16 @@ struct ItemActionsDialog: ViewModifier {
                         .offset(x: r.minX, y: r.minY)
                         .confirmationDialog(item?.title ?? "", isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } }), titleVisibility: .visible, presenting: item) { item in
                             actions(for: item)
+                        }
+                        .onChange(of: relay.press?.id) { _, id in
+                            guard let press = relay.press, id != handled else { return }
+                            handled = id
+                            // Window point into this shelf's space, then the card under it.
+                            let origin = proxy.frame(in: .global).origin
+                            let p = CGPoint(x: press.point.x - origin.x, y: press.point.y - origin.y)
+                            if let key = anchors.first(where: { proxy[$0.value].contains(p) })?.key {
+                                item = items.first { $0.itemKey == key }
+                            }
                         }
                 }
                 .allowsHitTesting(false)
@@ -139,15 +151,12 @@ struct ItemAnchorKey: PreferenceKey {
 }
 
 extension View {
-    /// The shelf's or grid's one dialog of item actions, opened by `itemLongPress` on a card.
-    func itemActionsDialog(for item: Binding<MediaItem?>, fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
-        modifier(ItemActionsDialog(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
+    /// The shelf's or grid's one dialog of item actions for `items`, opened by a long press on a card.
+    func itemActionsDialog(items: [MediaItem], fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
+        modifier(ItemActionsDialog(items: items, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
     }
-    /// A long press on a card opens its shelf's or grid's `itemActionsDialog` for `item`, anchored
-    /// to this card. High priority, so the card's link does not fire on release; a moving finger
-    /// fails the press within ten points and scrolls.
-    func itemLongPress(_ item: MediaItem, opens target: Binding<MediaItem?>) -> some View {
-        highPriorityGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in target.wrappedValue = item })
-            .anchorPreference(key: ItemAnchorKey.self, value: .bounds) { [item.itemKey: $0] }
+    /// Publishes a card's bounds for its shelf's `itemActionsDialog`; adds nothing UIKit-backed.
+    func itemCard(_ item: MediaItem) -> some View {
+        anchorPreference(key: ItemAnchorKey.self, value: .bounds) { [item.itemKey: $0] }
     }
 }

@@ -12,7 +12,11 @@ final class AppNavigation: ObservableObject {
     @Published var paths: [AppSection: NavigationPath] = [:]
 
     func binding(for s: AppSection) -> Binding<NavigationPath> {
-        Binding(get: { self.paths[s] ?? NavigationPath() }, set: { self.paths[s] = $0 })
+        Binding(get: { self.paths[s] ?? NavigationPath() }, set: { new in
+            // A push right after a long press is the pressed card's tap firing on release: dropped.
+            if LongPressRelay.shared.swallowsTap, new.count > (self.paths[s]?.count ?? 0) { return }
+            self.paths[s] = new
+        })
     }
 
     /// True on the phone, where Search is a page pushed in the current tab rather than a tab.

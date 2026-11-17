@@ -6,7 +6,6 @@ import Library
 struct ItemGrid: View {
     let items: [MediaItem]
     @Binding var fixMatchTarget: MediaItem?
-    @State private var menuItem: MediaItem?
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)], spacing: 14) {
@@ -15,11 +14,11 @@ struct ItemGrid: View {
                     PosterCard(item: item)
                 }
                 .buttonStyle(.plain)
-                .itemLongPress(item, opens: $menuItem)
+                .itemCard(item)
             }
         }
         .padding(.horizontal)
-        .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget)
+        .itemActionsDialog(items: items, fixMatchTarget: $fixMatchTarget)
     }
 }
 
@@ -35,7 +34,6 @@ struct ItemRow: View {
     /// The Continue Watching row: its long-press menu removes from the row rather than hiding the title.
     var isContinueWatching = false
     @Binding var fixMatchTarget: MediaItem?
-    @State private var menuItem: MediaItem?
 
     var body: some View {
         let _ = Diagnostics.count("shelf row body")
@@ -51,19 +49,19 @@ struct ItemRow: View {
                         ForEach(items.filter { !$0.isDeleted }, id: \.itemKey) { item in
                             Group {
                                 if let onTap {
-                                    Button { onTap(item) } label: { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
+                                    Button { if !LongPressRelay.shared.swallowsTap { onTap(item) } } label: { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
                                 } else {
                                     NavigationLink(value: item.itemKey) { PosterCard(item: item, subtitle: subtitle?(item), wide: wide).frame(width: wide ? 200 : 118) }
                                 }
                             }
                             .buttonStyle(.plain)
-                            .itemLongPress(item, opens: $menuItem)
+                            .itemCard(item)
                         }
                     }
                     .padding(.horizontal)
                 }
             }
-            .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
+            .itemActionsDialog(items: items, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
         }
     }
 }

@@ -1190,6 +1190,22 @@ shelf one `confirmationDialog` + one artwork sheet. Whether a plain gesture per 
 at launch is the open question for the next post-reboot measurement (level 5, with nothing per
 card, was 7.8 s).
 
+**17 Nov 15:50 — a plain `LongPressGesture` per card costs the same.** Reboot at 15:37, Reel
+opened at 15:50: first frame 0.60 s, then the activation commit stalled past 20 s (18.8 s CPU at the
+20 s sample, the same trait-propagation frames), against 7.8 s with nothing per card. So every
+per-card SwiftUI gesture, menu or presentation is a UIKit object per card at launch. **Now: no
+per-card gesture at all.** `LongPressRelay` installs one `UILongPressGestureRecognizer` on the
+window (`LongPressRelayInstaller`, one UIKit view in `RootView`), `cancelsTouchesInView` so the
+pressed card's link does not fire; it publishes the press point in window coordinates, and each
+shelf's `ItemActionsDialog` converts it into its own space with `proxy.frame(in: .global)` and
+finds the card from the anchor preferences. Per card: only `itemCard`, an `anchorPreference`.
+The press's release still reaches SwiftUI as the card's tap (neither `cancelsTouchesInView`,
+toggling the hit chain's recognisers, nor switching the hit view's interaction off cancels the
+hosting view's own touch handling), so the tap's effect is dropped instead: `LongPressRelay.swallowsTap`
+is true for 1.5 s after a press, `AppNavigation.binding(for:)` ignores a push in that window and
+the shelf's `onTap` button does nothing. Checked on the iPhone simulator: drag from a card scrolls,
+long press opens the dialog on the card with no navigation or playback, tap opens the title.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next

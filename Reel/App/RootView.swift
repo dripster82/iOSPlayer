@@ -110,6 +110,8 @@ struct RootView: View {
             }
         }
         .onAppear { LaunchTrace.firstFrame(state: UIApplication.shared.applicationState); nav.searchIsAPage = sizeClass == .compact }
+        // The one long-press recogniser for every poster shelf (see LongPressRelay).
+        .background(LongPressRelayInstaller().frame(width: 0, height: 0))
         // The root's size at the first frame and on every change: a lazy shelf laid out at an unbounded
         // or placeholder width would build every card, and the post-reboot stall looks like that.
         .background(GeometryReader { g in
