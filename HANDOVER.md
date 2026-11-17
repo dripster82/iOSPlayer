@@ -1100,6 +1100,15 @@ split view; the 22:16 run of it was clean but its reboot is unconfirmed) and **l
 (`RootView.noContextMenus`: the normal root with the poster cards' `.contextMenu` left off, one
 UIKit interaction view fewer per card; arm with `reel://debug-plain-root?level=5`).
 
+**17 Nov 13:11 — level 3 after a confirmed reboot (13:10) was clean**: ready 0.21 s, first frame
+0.49 s, scene active at +0.7 s, no stall before Paul put it in the background 6 s later. The bisect
+now reads: a plain label (1), the split view with its sidebar and an empty detail (2) and Home in a
+NavigationStack without the split view (3) all launch instantly after a reboot; Home inside the
+split view's detail stack (the normal root) takes 30–36 s. The pairing is the fault, not either
+half. Level 5 (normal root, cards without `.contextMenu`) is armed for the next launch; if it is
+also slow, level 4 (split view with `NavigationStack { Text }`) tells whether the detail stack
+itself is enough.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
