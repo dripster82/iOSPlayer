@@ -63,63 +63,70 @@ struct PosterCard: View {
     }
 }
 
-/// Long-press / context menu shared by every poster.
-struct ItemContextMenu: ViewModifier {
+/// The actions a long press on a poster offers. One dialog per shelf or grid, made only when a card
+/// is pressed: a `.contextMenu` on every card is a UIKit interaction on a nested hosting view each,
+/// and creating them held the main thread for 10–30 s after a reboot (HANDOVER, 17 Nov 2026).
+struct ItemActionsDialog: ViewModifier {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var settings: AppSettings
-    let item: MediaItem
+    /// The pressed card's item; nil closes the dialog.
+    @Binding var item: MediaItem?
     @Binding var fixMatchTarget: MediaItem?
     /// In the Continue Watching row the destructive action is leaving that row, not hiding the
     /// title from the library: a long press there is about the list, not the film or show.
     var inContinueWatching = false
     @State private var artworkTarget: MediaItem?
-    @Environment(\.interactionsReady) private var interactionsReady
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if RootView.noContextMenus || !interactionsReady { content } else { menu(content) }
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(item?.title ?? "", isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } }), titleVisibility: .visible, presenting: item) { item in
+                actions(for: item)
+            }
+            .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
     }
-    private func menu(_ content: Content) -> some View {
-        content.contextMenu {
-            Button { library.toggleFavourite(item.itemKey) } label: {
-                Label(library.isFavourite(item.itemKey) ? "Remove from Favourites" : "Add to Favourites", systemImage: library.isFavourite(item.itemKey) ? "heart.slash" : "heart")
+
+    @ViewBuilder private func actions(for item: MediaItem) -> some View {
+        Button { library.toggleFavourite(item.itemKey) } label: {
+            Label(library.isFavourite(item.itemKey) ? "Remove from Favourites" : "Add to Favourites", systemImage: library.isFavourite(item.itemKey) ? "heart.slash" : "heart")
+        }
+        if item.kind != .show {
+            let state = library.watchState(item.itemKey)
+            let watched = state?.watched == true
+            Button { library.setWatched(!watched, itemKey: item.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "checkmark.circle") }
+            if state?.isInProgress == true, !inContinueWatching {
+                Button { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
             }
-            if item.kind != .show {
-                let state = library.watchState(item.itemKey)
-                let watched = state?.watched == true
-                Button { library.setWatched(!watched, itemKey: item.itemKey) } label: { Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "checkmark.circle") }
-                if state?.isInProgress == true, !inContinueWatching {
-                    Button { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
-                }
-            } else {
-                Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
-            }
-            if settings.tmdb != nil {
-                Button { fixMatchTarget = item } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") }
-            }
-            let collections = library.collections()
-            if !collections.isEmpty, item.kind != .episode {
-                Menu("Add to collection") {
-                    ForEach(collections, id: \.id) { c in
-                        Button { library.toggle(item.itemKey, in: c) } label: { Label(c.name, systemImage: c.itemKeys.contains(item.itemKey) ? "checkmark" : "rectangle.stack") }
-                    }
-                }
-            }
-            if item.kind != .episode, settings.tmdb != nil {
-                Button { artworkTarget = item } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
-            }
-            Divider()
-            if inContinueWatching {
-                Button(role: .destructive) { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
-            } else {
-                Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
+        } else {
+            Button { item.episodes.forEach { library.setWatched(true, itemKey: $0.itemKey) } } label: { Label("Mark all watched", systemImage: "checkmark.circle") }
+        }
+        if settings.tmdb != nil {
+            Button { fixMatchTarget = item } label: { Label("Fix match", systemImage: "wrench.and.screwdriver") }
+        }
+        // A dialog has no submenus: one line per collection.
+        if item.kind != .episode {
+            ForEach(library.collections(), id: \.id) { c in
+                let member = c.itemKeys.contains(item.itemKey)
+                Button { library.toggle(item.itemKey, in: c) } label: { Label(member ? "Remove from “\(c.name)”" : "Add to “\(c.name)”", systemImage: member ? "checkmark" : "rectangle.stack") }
             }
         }
-        .sheet(item: $artworkTarget) { ArtworkPickerView(target: .item($0)) }
+        if item.kind != .episode, settings.tmdb != nil {
+            Button { artworkTarget = item } label: { Label("Edit artwork…", systemImage: "photo.on.rectangle") }
+        }
+        if inContinueWatching {
+            Button(role: .destructive) { library.clearProgress(itemKey: item.itemKey) } label: { Label("Remove from Continue Watching", systemImage: "xmark.circle") }
+        } else {
+            Button(role: .destructive) { try? library.hide(item) } label: { Label("Hide from library", systemImage: "eye.slash") }
+        }
     }
 }
 
 extension View {
-    func itemContextMenu(_ item: MediaItem, fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
-        modifier(ItemContextMenu(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
+    /// The shelf's or grid's one dialog of item actions, opened by `itemLongPress`.
+    func itemActionsDialog(for item: Binding<MediaItem?>, fixMatchTarget: Binding<MediaItem?>, inContinueWatching: Bool = false) -> some View {
+        modifier(ItemActionsDialog(item: item, fixMatchTarget: fixMatchTarget, inContinueWatching: inContinueWatching))
+    }
+    /// A long press on a card opens its shelf's or grid's `itemActionsDialog` for `item`.
+    func itemLongPress(_ item: MediaItem, opens target: Binding<MediaItem?>) -> some View {
+        onLongPressGesture { target.wrappedValue = item }
     }
 }

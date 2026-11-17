@@ -6,6 +6,7 @@ import Library
 struct ItemGrid: View {
     let items: [MediaItem]
     @Binding var fixMatchTarget: MediaItem?
+    @State private var menuItem: MediaItem?
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 105, maximum: 160), spacing: 10)], spacing: 14) {
@@ -14,10 +15,11 @@ struct ItemGrid: View {
                     PosterCard(item: item)
                 }
                 .buttonStyle(.plain)
-                .itemContextMenu(item, fixMatchTarget: $fixMatchTarget)
+                .itemLongPress(item, opens: $menuItem)
             }
         }
         .padding(.horizontal)
+        .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget)
     }
 }
 
@@ -33,6 +35,7 @@ struct ItemRow: View {
     /// The Continue Watching row: its long-press menu removes from the row rather than hiding the title.
     var isContinueWatching = false
     @Binding var fixMatchTarget: MediaItem?
+    @State private var menuItem: MediaItem?
 
     var body: some View {
         let _ = Diagnostics.count("shelf row body")
@@ -54,11 +57,12 @@ struct ItemRow: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .itemContextMenu(item, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
+                            .itemLongPress(item, opens: $menuItem)
                         }
                     }.padding(.horizontal)
                 }
             }
+            .itemActionsDialog(for: $menuItem, fixMatchTarget: $fixMatchTarget, inContinueWatching: isContinueWatching)
         }
     }
 }

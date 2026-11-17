@@ -49,22 +49,8 @@ struct RootView: View {
     /// `reel://debug-plain-root?level=N`, cleared on use). 1: a plain label (cleared the shell and
     /// iPadOS on 16 Nov: no freeze). 2: the split view with the sidebar and an empty detail.
     /// 3: a navigation stack holding Home, no split view. 4: the split view with a plain detail stack.
-    /// 5: the normal root with the poster cards' context menus left off (`noContextMenus`).
-    @State private var testLevel: Int = { _ = RootView.noContextMenus; return UserDefaults.standard.integer(forKey: RootView.plainRootKey) }()
+    @State private var testLevel = UserDefaults.standard.integer(forKey: RootView.plainRootKey)
     static let plainRootKey = "reel.debugPlainRootLevel"
-    /// False for the first moments of a launch. Each poster's context menu is a UIKit interaction
-    /// on a nested hosting view, and the commit that activates the scene walks every one of them;
-    /// after a reboot that walk took 30 s against 8 s without the menus (HANDOVER, 17 Nov). The
-    /// menus join once the activation commit is behind us.
-    @State private var interactionsReady = false
-    /// Level 5, read and cleared on the first use: the full tree minus one UIKit interaction per card,
-    /// to see whether the context menus are what the activation trait change walks for 30 s.
-    static let noContextMenus: Bool = {
-        guard UserDefaults.standard.integer(forKey: plainRootKey) == 5 else { return false }
-        UserDefaults.standard.removeObject(forKey: plainRootKey)
-        Diagnostics.log("app", "root test level 5 launch: card context menus off (flag cleared)")
-        return true
-    }()
 
     @ViewBuilder private var sidebar: some View {
         List(selection: $nav.section) {
@@ -124,13 +110,6 @@ struct RootView: View {
             }
         }
         .onAppear { LaunchTrace.firstFrame(state: UIApplication.shared.applicationState); nav.searchIsAPage = sizeClass == .compact }
-        .environment(\.interactionsReady, interactionsReady)
-        .task {
-            // Launch to "scene active" is about 1.3 s; the menus attach about a second after it.
-            try? await Task.sleep(for: .seconds(2.5))
-            interactionsReady = true
-            Diagnostics.log("app", "launch: card context menus attached")
-        }
         // The root's size at the first frame and on every change: a lazy shelf laid out at an unbounded
         // or placeholder width would build every card, and the post-reboot stall looks like that.
         .background(GeometryReader { g in
@@ -148,8 +127,3 @@ struct RootView: View {
     }
 }
 
-/// Whether per-item UIKit interactions (context menus) may be attached yet; see `RootView.interactionsReady`.
-private struct InteractionsReadyKey: EnvironmentKey { static let defaultValue = true }
-extension EnvironmentValues {
-    var interactionsReady: Bool { get { self[InteractionsReadyKey.self] } set { self[InteractionsReadyKey.self] = newValue } }
-}

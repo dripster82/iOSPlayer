@@ -1157,6 +1157,14 @@ presentation from a long press (`onLongPressGesture` + a single `confirmationDia
 shelf), then measure the menu commit again; and the ×30 post-reboot factor on this commit is still
 unexplained.
 
+**Fix (17 Nov, afternoon): no per-card context menu.** A long press on a poster
+(`itemLongPress`) sets the shelf's or grid's one `menuItem`, and a single `itemActionsDialog`
+(a `confirmationDialog` with the same actions as the old menu, collections flattened to one line
+each) presents it; nothing per card exists until someone asks. The 2.5 s deferral, the
+`interactionsReady` environment value and root test level 5 are gone. To verify after a reboot: no
+stall at activation and no later one either (there is no menu commit any more); the remaining
+per-launch cost to watch is the 7.8 s level 5 showed, which is the rest of Home's hierarchy.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
