@@ -73,9 +73,10 @@ struct ItemContextMenu: ViewModifier {
     /// title from the library: a long press there is about the list, not the film or show.
     var inContinueWatching = false
     @State private var artworkTarget: MediaItem?
+    @Environment(\.interactionsReady) private var interactionsReady
 
     @ViewBuilder func body(content: Content) -> some View {
-        if RootView.noContextMenus { content } else { menu(content) }
+        if RootView.noContextMenus || !interactionsReady { content } else { menu(content) }
     }
     private func menu(_ content: Content) -> some View {
         content.contextMenu {

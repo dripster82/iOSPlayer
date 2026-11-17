@@ -1119,6 +1119,14 @@ shelf is the rest. Product direction: keep UIKit interaction views out of the ac
 (attach the menus a moment after activation, or replace the per-card menu with one shared
 presentation), then measure the remainder the same way.
 
+**Fix in hand (13:26): the poster context menus attach 2.5 s after RootView appears** (`RootView.interactionsReady`
+→ environment `\.interactionsReady`; `ItemContextMenu` is a no-op until then; the log says "launch:
+card context menus attached"). Warm launch: active at +0.7 s, menus at +2.5 s, no stall. To verify
+after a reboot: the activation commit should be the 8 s of level 5 or less, and the commit that
+attaches the menus should be short; if that second commit is the 20 s instead, the cost is the
+menus' creation, not the activation walk, and the per-card menu has to go (one shared presentation
+from a long press).
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
