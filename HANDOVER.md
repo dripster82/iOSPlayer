@@ -1139,6 +1139,24 @@ throughout these stalls. **Fixed: the walk is now C** (`Packages/ReelKit/Sources
 were Debug builds; Release specialises those calls, which is why the 11:26 Release run sampled
 without freezing.
 
+**17 Nov 14:11 — deferred menus after a confirmed reboot: the activation commit is clean, the menu
+commit is the stall; the "freezes" were suspensions.** First frame 0.48 s, no stall at activation
+(the first post-reboot launch ever to activate cleanly), "card context menus attached" at +2.6 s,
+and *that* commit stalled: 8.8 s CPU by its 10 s sample, the same `_UIHostingView`, AttributeGraph
+and `swift_getGenericMetadata` frames. So the cost is **creating** the per-card context-menu hosting
+views, not the activation walk over them. Paul saw white, the splash, then Home "quickly" and
+called it good: Home is on screen while the menu commit runs, so the visible symptom is gone, but
+the main thread is still blocked for 10 s or more about three seconds into every post-reboot launch.
+The log again stopped at the 10 s sample, with the process alive (pid 441), no report, a command
+file unconsumed and a foreground-launch request having no effect: Paul had left Reel (and the iPad
+was likely locked), so iOS suspended the process mid-stall. The same explains 12:43 and 13:31 (both
+followed by a background relaunch for a push); the two sampler rewrites were not the cause, though
+the C walk stays as the safer design. When Reel next comes to the foreground the stall finishes and
+the busy line appears with the full duration. Next: no per-card UIKit interaction at all, one shared
+presentation from a long press (`onLongPressGesture` + a single `confirmationDialog`/menu at the
+shelf), then measure the menu commit again; and the ×30 post-reboot factor on this commit is still
+unexplained.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
