@@ -1109,6 +1109,16 @@ half. Level 5 (normal root, cards without `.contextMenu`) is armed for the next 
 also slow, level 4 (split view with `NavigationStack { Text }`) tells whether the detail stack
 itself is enough.
 
+**17 Nov 13:21 — level 5 after a confirmed reboot (13:19): 7.8 s instead of 30–36 s.** The normal
+root with the poster cards' `.contextMenu` (and the modifier's `.sheet`) left off: ready 0.47 s,
+first frame 0.57 s, then a 7.8 s stall (6.5 s user CPU, spin 1.05–1.1 s, 16 samples; during it
+Home body ×1, Root body ×1, poster card body ×15, shelf row ×2) in the activation commit, the
+same AttributeGraph / `ViewRendererHost.performExternalUpdate` frames. So each card's context-menu
+interaction is roughly three quarters of the post-reboot cost and something else per card or per
+shelf is the rest. Product direction: keep UIKit interaction views out of the activation commit
+(attach the menus a moment after activation, or replace the per-card menu with one shared
+presentation), then measure the remainder the same way.
+
 If it happens again: the splash names the step, and the log's "launch:" lines say how long it
 sat there and whether the process was starved. If the screen is white with no splash and no "launch:" lines at all, the block is
 before `ReelApp.init` (dyld loading VLCKit's frameworks is the remaining candidate) and the next
