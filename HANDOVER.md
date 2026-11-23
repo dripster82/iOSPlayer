@@ -662,6 +662,37 @@ on the simulator (the test clip is too short to get a pause, a background and a 
   on `.inactive` fails on the iPad and the simulator every time; the automatic start from inline
   half a second later is what opens the window.
 
+## A lost server, noticed before the buffer runs out (23 Nov 2026)
+
+**Was:** VLC plays on from its buffer after the socket under it dies, so the engine only learned
+of a drop when output stopped, then waited out the 8 s stall watchdog, then reconnected with fixed
+10 s and 20 s waits between tries. The viewer saw the picture freeze at the end of the buffer and
+the "Reconnecting" pill some seconds later.
+
+**Now** (`VLCPlaybackEngine.watchNetworkRead`, called from the stall watchdog every 2 s while
+playing): VLC's `statistics.readBytes` (bytes read from the server, below the prefetch buffer) is
+compared with `demuxReadBytes` (bytes the demuxer ate). The read standing still for more than 5 s
+while more than 1 MB has been eaten is a dead socket: a live one refills the buffer as it drains.
+Not judged for sound-only streams (their reads come in bursts), within 15 s of a load or seek, or in
+the last 180 s of a file (everything has been read by then). On that signal the server is asked
+whether it answers (`SourceDiscovery.tcpOpen` on `StreamHost.target(for:)`, 1.5 s; nil for local
+files and the loopback bridge, which are left to the old path):
+- **It answers:** the session alone died (Wi-Fi moved access point, the NAS dropped it). The stream
+  is reopened at once at the current position: a second or two of spinner, not a freeze.
+- **It does not:** `connectionLost` is published, the player shows "Lost <source> · playing what's
+  buffered", the buffer plays on and the question is asked again every pass; the stream is reopened
+  the moment the server answers. If the buffer ends first, the stall watchdog's silent wait is 3 s
+  instead of 8.
+- `reconnectAgainLater`'s 10 s and 20 s waits now end as soon as the server answers.
+
+**Not verified against a real drop** (23 Nov): it compiles for iOS and `StreamHostTests` pass, but
+the simulator's corpus is served from loopback, which the watch skips, and both devices were off the
+Mac's network. To test: play from the NAS on the iPad, then (a) switch the iPad's Wi-Fi off and on
+within ten seconds, (b) pull the NAS's network cable for a minute. Read `[player]` lines "network
+read stood still …" in reel.log. Risks to watch: both counters are 32-bit in VLCKit and wrap past
+2 GB (the code compares for change and subtracts with wraparound, so a wrap reads as a change); a
+NAS that pauses reads for over 5 s while staying reachable would cause a needless reopen.
+
 ## White screen at launch after a power-off (15 Nov 2026)
 
 The iPad's battery ran flat (a LowBatteryLog at 16:28 in the system crash logs); after the

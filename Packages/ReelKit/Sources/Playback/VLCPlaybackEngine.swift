@@ -2,6 +2,7 @@
 import Foundation
 import Combine
 import MediaCore
+import MediaSources
 import VLCKit
 #if canImport(UIKit)
 import UIKit
@@ -361,6 +362,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         }
         recoveries += 1
         reconnecting = recoveries
+        connectionLost = false
         current.startAt = max(0, position ?? clock.time)
         log("reconnect \(recoveries)/\(Self.reconnectTries) at \(Int(current.startAt))s: \(Diagnostics.safe(current.url))")
         performLoad(current, options: options)
@@ -378,7 +380,12 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         log("reconnect \(recoveries)/\(Self.reconnectTries) could not open; trying again in \(Int(delay))s")
         setStatus(.buffering)
         reconnectTimer = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
+            // The wait ends early once the server answers again: no point sitting out the rest.
+            let until = Date().addingTimeInterval(delay)
+            while Date() < until, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                if let t = StreamHost.target(for: item.url), await SourceDiscovery.tcpOpen(t.host, t.port, timeout: 1.5) { break }
+            }
             guard let self, !Task.isCancelled, self.loadedAt == opened, self.status == .buffering else { return }
             self.reconnect(at: item.startAt)
         }
@@ -607,6 +614,57 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     /// Whether an audio track is playing, so sound is expected along with the picture.
     private var hasSelectedAudio: Bool { guard let player = playerIfMade else { return false }; return !player.audioTracks.isEmpty && player.audioTracks.contains { $0.isSelected } }
 
+    // MARK: - A lost connection, noticed while the buffer still plays
+
+    /// True while the network read behind a playing stream has stopped and its server does not
+    /// answer: what plays is the buffer. The player says so; the engine keeps asking and reopens
+    /// the stream the moment the server answers.
+    @Published public private(set) var connectionLost = false
+    private var lastReadBytes: Int32 = 0
+    private var lastReadAt = Date.distantPast
+    private var demuxAtLastRead: Int32 = 0
+    private var probingServer = false
+
+    /// VLC plays on from its buffer after the socket under it dies, so the picture is the last
+    /// thing to know: by the time output stops the viewer has lost the buffer's worth of warning,
+    /// then waited out the stall watchdog. The network side knows at once: the bytes read from
+    /// the server stand still while the demuxer goes on eating. Five seconds of that with more
+    /// than a megabyte eaten is a dead socket (a full buffer is refilled as it drains, so a live
+    /// one never shows it), except in the file's last minutes, when everything has been read.
+    /// Then the server is asked whether it still answers: if it does the session alone died
+    /// (Wi-Fi moved to another access point, the NAS dropped it) and the stream is reopened now,
+    /// a second or two of spinner instead of a freeze; if not, the buffer plays on under a notice
+    /// and the question is asked again every pass.
+    private func watchNetworkRead(read: Int32, demux: Int32) {
+        if read != lastReadBytes {
+            lastReadBytes = read; lastReadAt = Date(); demuxAtLastRead = demux
+            if connectionLost { connectionLost = false; log("network read resumed") }
+            return
+        }
+        let idle = Date().timeIntervalSince(lastReadAt)
+        let eaten = Int(demux &- demuxAtLastRead)
+        guard !probingServer, let target = item.flatMap({ StreamHost.target(for: $0.url) }), !player.videoTracks.isEmpty,
+              idle > 5, eaten > 1_000_000 || connectionLost,
+              duration <= 0 || duration - time > 180,
+              Date().timeIntervalSince(lastSeekAt) > 15, Date().timeIntervalSince(loadedAt) > 15 else { return }
+        probingServer = true
+        let opened = loadedAt
+        Task { @MainActor [weak self] in
+            let answers = await SourceDiscovery.tcpOpen(target.host, target.port, timeout: 1.5)
+            guard let self else { return }
+            self.probingServer = false
+            guard self.loadedAt == opened, self.status == .playing, self.player.media?.statistics.readBytes == self.lastReadBytes else { return }
+            if answers {
+                log("network read stood still for \(Int(idle))s with \(eaten / 1_000_000) MB of buffer played; \(target.host) answers, so the session is dead: reopening before the buffer runs out")
+                self.connectionLost = false
+                self.reconnect(at: self.clock.time)
+            } else if !self.connectionLost {
+                log("network read stood still for \(Int(idle))s with \(eaten / 1_000_000) MB of buffer played; \(target.host) does not answer: playing the buffer and waiting for it")
+                self.connectionLost = true
+            }
+        }
+    }
+
     /// If nothing has been shown or played for 8 s while VLC still claims to be playing, the connection
     /// has died underneath it (VLC itself waits forever): reopen at the last position that played.
     /// Checked every 2 s so a dead share costs the viewer seconds, not a quarter of a minute.
@@ -619,6 +677,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
         lastPicturesAt = Date()
         lastAudio = 0
         lastAudioAt = Date()
+        lastReadBytes = 0; lastReadAt = Date(); demuxAtLastRead = 0; connectionLost = false
         stallWatchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 // Reading VLC's statistics is cheap, but a hot device gets left alone as much as possible.
@@ -628,9 +687,10 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 guard self.status == .playing, let stats = self.player.media?.statistics else {
                     // Paused, opening or buffering: no output is expected, so the stall clock starts again
                     // from here. Otherwise a long pause reads as "no output for 400s" the moment play resumes.
-                    self.lastProgressAt = Date(); self.lastPicturesAt = Date(); self.lastAudioAt = Date()
+                    self.lastProgressAt = Date(); self.lastPicturesAt = Date(); self.lastAudioAt = Date(); self.lastReadAt = Date()
                     continue
                 }
+                self.watchNetworkRead(read: stats.readBytes, demux: stats.demuxReadBytes)
                 let pictures = Int(stats.displayedPictures)
                 let audio = Int(stats.playedAudioBuffers)
                 // Sound alone (an audiobook): the output takes buffers in bursts seconds apart and the
@@ -642,7 +702,8 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
                 let clockNow = Int(self.clock.time)
                 let count = pictures + audio + (audioOnly ? Int(stats.decodedAudio) + Int(stats.demuxReadBytes / 1024) + (clockNow != self.lastClock ? 1 + self.lastProgressCount : 0) : 0)
                 self.lastClock = clockNow
-                let stallAfter: TimeInterval = audioOnly ? 20 : 8
+                // With the connection already known to be lost, the end of the buffer needs no long wait.
+                let stallAfter: TimeInterval = audioOnly ? 20 : (self.connectionLost ? 3 : 8)
                 if audio != self.lastAudio {
                     self.lastAudio = audio; self.lastAudioAt = Date()
                 } else if self.hasSelectedAudio, self.lastAudio > 0, pictures != self.lastPictures,
@@ -787,7 +848,7 @@ public final class VLCPlaybackEngine: NSObject, PlaybackEngine, VLCMediaPlayerDe
     }
     private func stop(forReload: Bool) {
         seekWatchdog?.cancel(); seekWatchdog = nil
-        if !forReload { reconnectTimer?.cancel(); reconnectTimer = nil; reconnecting = nil }
+        if !forReload { reconnectTimer?.cancel(); reconnectTimer = nil; reconnecting = nil; connectionLost = false }
         guard let player = playerIfMade else { setStatus(.idle); return }   // nothing was ever made
         openWatchdog?.cancel()
         stallWatchdog?.cancel()

@@ -121,10 +121,13 @@ public final class SourceDiscovery: ObservableObject {
         return found
     }
 
-    nonisolated private static func tcpOpen(_ ip: String, _ port: UInt16) async -> Bool {
-        let c = NWConnection(host: NWEndpoint.Host(ip), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    /// Whether a TCP connection to the port opens within `timeout`. Also the playback engine's
+    /// test of whether a stream's server still answers.
+    nonisolated public static func tcpOpen(_ ip: String, _ port: UInt16, timeout: TimeInterval = 1.2) async -> Bool {
+        guard let p = NWEndpoint.Port(rawValue: port) else { return false }
+        let c = NWConnection(host: NWEndpoint.Host(ip), port: p, using: .tcp)
         defer { c.cancel() }
-        return (try? await FTPControl.ready(c, timeout: 1.2)) != nil
+        return (try? await FTPControl.ready(c, timeout: timeout)) != nil
     }
 
     /// LOCATION and friendlyName of a media server answering a unicast M-SEARCH on this address.

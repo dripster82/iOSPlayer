@@ -91,6 +91,13 @@ struct PlayerContentView: View {
                     .foregroundStyle(.white).allowsHitTesting(false)
                     .position(x: geo.size.width / 2, y: geo.size.height - 150)
                 }
+                // The server has stopped answering but the buffer still plays: said early, in the same place.
+                if engine.connectionLost, engine.reconnecting == nil {
+                    Label("Lost \(player.sourceLabel) · playing what's buffered", systemImage: "wifi.slash").font(.footnote)
+                        .padding(.horizontal, 14).padding(.vertical, 8).background(.black.opacity(0.6), in: Capsule())
+                        .foregroundStyle(.white).allowsHitTesting(false)
+                        .position(x: geo.size.width / 2, y: geo.size.height - 150)
+                }
                 if let f = skipFlash { skipFlashView(left: f.left, size: geo.size).id(f.id) }
                 if holdingSpeed { flag("2×") }
                 if let v = volumeOverlay { verticalMeter(v, icon: "speaker.wave.2.fill").position(x: geo.size.width * 0.86, y: geo.size.height / 2) }
